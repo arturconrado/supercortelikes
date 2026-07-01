@@ -1,0 +1,57 @@
+{
+  "name": "supercortelikes",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@11.12.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @clipbr/api && npm run build --workspace @clipbr/web",
+    "lint": "eslint apps scripts",
+    "typecheck": "npm run typecheck --workspace @clipbr/api && npm run typecheck --workspace @clipbr/web",
+    "dev:api": "npm run start:dev --workspace @clipbr/api",
+    "dev:web": "npm run dev --workspace @clipbr/web",
+    "start:api": "npm run start --workspace @clipbr/api",
+    "start:worker": "npm run start:worker --workspace @clipbr/api",
+    "start:web": "npm run start --workspace @clipbr/web",
+    "test": "npm run test --workspace @clipbr/api && npm run test --workspace @clipbr/web",
+    "test:e2e:web": "npm run test:e2e --workspace @clipbr/web",
+    "test:coverage": "npm run test:coverage --workspace @clipbr/api",
+    "acceptance:epic1": "node scripts/acceptance/epic1-upload.mjs",
+    "acceptance:direct": "ACCEPTANCE_UPLOAD_MODE=direct node scripts/acceptance/release-recovery.mjs",
+    "acceptance:product": "node scripts/acceptance/product-e2e.mjs",
+    "acceptance:direct:5g": "node scripts/acceptance/direct-upload-5g.mjs",
+    "gate:local-full-ai": "bash scripts/acceptance/local-full-ai-gate.sh",
+    "acceptance:ga-soak": "node scripts/acceptance/ga-soak.mjs",
+    "vps:preflight": "bash scripts/vps/preflight.sh",
+    "vps:deploy": "bash scripts/vps/deploy.sh",
+    "vps:smoke": "bash scripts/vps/smoke.sh",
+    "vps:backup": "bash scripts/vps/backup.sh",
+    "vps:rollback": "bash scripts/vps/rollback.sh",
+    "infra:r2": "node scripts/infra/configure-r2.mjs",
+    "support:inspect": "node scripts/support/inspect-customer.mjs",
+    "support:redrive-dlq": "node scripts/support/redrive-dlq.mjs",
+    "support:cancel-pipeline": "node scripts/support/cancel-pipeline.mjs",
+    "support:cleanup-uploads": "node scripts/support/cleanup-orphan-uploads.mjs",
+    "db:generate": "npm run db:generate --workspace @clipbr/api",
+    "db:migrate": "dotenv -e .env -- npm run db:migrate --workspace @clipbr/api",
+    "db:migrate:deploy": "npm run db:migrate:deploy --workspace @clipbr/api",
+    "db:validate": "npm run db:validate --workspace @clipbr/api"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "dotenv-cli": "11.0.0",
+    "eslint": "^9.39.2",
+    "globals": "^16.5.0",
+    "typescript-eslint": "^8.56.0"
+  },
+  "overrides": {
+    "ajv@^8.0.0": "$ajv",
+    "postcss": "8.5.15"
+  }
+}

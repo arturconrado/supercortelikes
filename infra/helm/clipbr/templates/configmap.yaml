@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clipbr.fullname" . }}
+  labels:
+    {{- include "clipbr.labels" . | nindent 4 }}
+data:
+  NODE_ENV: production
+  PORT: {{ .Values.config.port | quote }}
+  QUEUE_PREFIX: {{ .Values.config.queuePrefix | quote }}
+  OUTBOX_POLL_INTERVAL_MS: {{ .Values.config.outboxPollIntervalMs | quote }}
+  OUTBOX_BATCH_SIZE: {{ .Values.config.outboxBatchSize | quote }}
+  UPLOAD_MAX_BYTES: {{ .Values.config.uploadMaxBytes | quote }}
+  UPLOAD_PART_SIZE_BYTES: {{ .Values.config.uploadPartSizeBytes | quote }}
+  UPLOAD_QUEUE_SIZE: {{ .Values.config.uploadQueueSize | quote }}
+  S3_ENDPOINT: {{ required "config.s3Endpoint is required" .Values.config.s3Endpoint | quote }}
+  S3_PUBLIC_ENDPOINT: {{ default .Values.config.s3Endpoint .Values.config.s3PublicEndpoint | quote }}
+  S3_REGION: {{ .Values.config.s3Region | quote }}
+  S3_BUCKET: {{ required "config.s3Bucket is required" .Values.config.s3Bucket | quote }}
+  S3_FORCE_PATH_STYLE: {{ .Values.config.s3ForcePathStyle | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterOtlpEndpoint | quote }}
+  OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=production
+  MEDIA_WORKER_URL: {{ required "config.mediaWorkerUrl is required" .Values.config.mediaWorkerUrl | quote }}
+  MEDIA_DIARIZATION_ENABLED: {{ .Values.config.mediaDiarizationEnabled | quote }}
+  MEDIA_TRANSCRIPTION_BATCH_SIZE: {{ .Values.config.mediaTranscriptionBatchSize | quote }}

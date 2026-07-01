@@ -1,0 +1,659 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum VideoStatus {
+  UPLOADING
+  UPLOADED
+  FAILED
+}
+
+enum UploadStatus {
+  STARTED
+  COMPLETED
+  FAILED
+}
+
+enum PipelineStage {
+  INGESTION
+  TRANSCRIPTION
+  SEGMENTATION
+  SCORING
+  CLIPS
+  CAPTIONS
+  RENDERING
+  EXPORTS
+}
+
+enum PipelineRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum StageExecutionStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  RETRYING
+  SUCCEEDED
+  FAILED
+  DEAD_LETTERED
+}
+
+enum DeadLetterStatus {
+  OPEN
+  REDRIVEN
+  DISCARDED
+}
+
+enum Plan {
+  FREE
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  EDITOR
+  REVIEWER
+  PUBLISHER
+  VIEWER
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum ClipStatus {
+  SUGGESTED
+  APPROVED
+  RENDERING
+  READY
+  FAILED
+}
+
+enum ExportStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model User {
+  id                      String               @id @default(uuid()) @db.Uuid
+  email                   String               @unique
+  passwordHash            String
+  displayName             String
+  emailVerifiedAt         DateTime?
+  acceptedTermsVersion    String?
+  acceptedPrivacyVersion  String?
+  termsAcceptedAt         DateTime?
+  privacyAcceptedAt       DateTime?
+  notificationPreferences Json?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  ownedWorkspaces         Workspace[]          @relation("WorkspaceOwner")
+  memberships             WorkspaceMember[]
+  projects                Project[]
+  videos                  Video[]
+  refreshSessions         RefreshSession[]
+  passwordResets          PasswordResetToken[]
+  emailVerifications      EmailVerificationToken[]
+  auditLogs               AuditLog[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id            String            @id @default(uuid()) @db.Uuid
+  ownerId       String            @db.Uuid
+  name          String
+  slug          String            @unique
+  plan          Plan              @default(FREE)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  owner         User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members       WorkspaceMember[]
+  projects      Project[]
+  videos        Video[]
+  brandKits     BrandKit[]
+  subscriptions Subscription[]
+  billingCheckouts BillingCheckout[]
+  creditTopUps  CreditTopUp[]
+  publications  Publication[]
+  socialConnections SocialConnection[]
+  usageEvents   UsageEvent[]
+  auditLogs     AuditLog[]
+
+  @@index([ownerId])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  workspaceId String        @db.Uuid
+  userId      String        @db.Uuid
+  role        WorkspaceRole @default(EDITOR)
+  createdAt   DateTime      @default(now())
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model RefreshSession {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("refresh_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model Project {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  createdById String    @db.Uuid
+  name        String
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  videos      Video[]
+
+  @@index([workspaceId, updatedAt])
+  @@map("projects")
+}
+
+model Video {
+  id               String          @id @default(uuid()) @db.Uuid
+  originalFilename String
+  title            String?
+  storageKey       String          @unique
+  sourceUrl        String?
+  storageBucket    String
+  mimeType         String
+  container        String
+  sizeBytes        BigInt?
+  checksumSha256   String?
+  storageEtag      String?
+  thumbnailKey     String?
+  burnedInSubtitlesDetected Boolean @default(false)
+  burnedInSubtitlesConfidence Float?
+  durationMs       BigInt?
+  processingOptions Json?
+  width            Int?
+  height           Int?
+  frameRate        Float?
+  videoCodec       String?
+  audioCodec       String?
+  status           VideoStatus     @default(UPLOADING)
+  failureCode      String?
+  failureMessage   String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  workspaceId      String?         @db.Uuid
+  ownerId          String?         @db.Uuid
+  projectId        String?         @db.Uuid
+  uploads          UploadAttempt[]
+  pipelineRuns     PipelineRun[]
+  workspace        Workspace?      @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  owner            User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  project          Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  transcript       Transcript?
+  segments         Segment[]
+  clips            Clip[]
+  usageEvents      UsageEvent[]
+
+  @@index([status, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([projectId, createdAt])
+  @@map("videos")
+}
+
+model UploadAttempt {
+  id                String       @id @default(uuid()) @db.Uuid
+  videoId           String       @db.Uuid
+  idempotencyKey    String       @unique @db.VarChar(128)
+  providerUploadId  String?      @unique
+  expectedSizeBytes BigInt?
+  expectedMimeType  String?
+  expiresAt         DateTime?
+  status            UploadStatus @default(STARTED)
+  bytesReceived     BigInt       @default(0)
+  failureCode       String?
+  startedAt         DateTime     @default(now())
+  completedAt       DateTime?
+  video             Video        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([status, startedAt])
+  @@map("upload_attempts")
+}
+
+model OutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  aggregateId String    @db.Uuid
+  type        String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now())
+  lockedAt    DateTime?
+  lockedBy    String?
+  lastError   String?
+
+  @@index([publishedAt, availableAt, createdAt])
+  @@map("outbox_events")
+}
+
+model PipelineRun {
+  id             String            @id @default(uuid()) @db.Uuid
+  videoId        String            @db.Uuid
+  sourceEventId  String            @unique @db.Uuid
+  status         PipelineRunStatus @default(PENDING)
+  currentStage   PipelineStage?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  failureCode    String?
+  failureMessage String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  video          Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stages         StageExecution[]
+  deadLetters    DeadLetterJob[]
+
+  @@index([status, createdAt])
+  @@index([videoId, createdAt])
+  @@map("pipeline_runs")
+}
+
+model StageExecution {
+  id            String               @id @default(uuid()) @db.Uuid
+  pipelineRunId String               @db.Uuid
+  stage         PipelineStage
+  status        StageExecutionStatus @default(PENDING)
+  jobId         String               @unique
+  attempts      Int                  @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  errorCode     String?
+  errorMessage  String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  pipelineRun   PipelineRun          @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  deadLetters   DeadLetterJob[]
+
+  @@unique([pipelineRunId, stage])
+  @@index([status, updatedAt])
+  @@map("stage_executions")
+}
+
+model DeadLetterJob {
+  id               String           @id @default(uuid()) @db.Uuid
+  pipelineRunId    String?          @db.Uuid
+  stageExecutionId String?          @db.Uuid
+  originalQueue    String
+  originalJobId    String
+  safePayload      Json
+  errorCode        String
+  errorMessage     String
+  attempts         Int
+  status           DeadLetterStatus @default(OPEN)
+  redriveCount     Int              @default(0)
+  createdAt        DateTime         @default(now())
+  resolvedAt       DateTime?
+  pipelineRun      PipelineRun?     @relation(fields: [pipelineRunId], references: [id], onDelete: SetNull)
+  stageExecution   StageExecution?  @relation(fields: [stageExecutionId], references: [id], onDelete: SetNull)
+
+  @@unique([originalQueue, originalJobId])
+  @@index([status, createdAt])
+  @@map("dead_letter_jobs")
+}
+
+model Transcript {
+  id         String   @id @default(uuid()) @db.Uuid
+  videoId    String   @unique @db.Uuid
+  language   String
+  confidence Float
+  fullText   String
+  words      Json
+  speakers   Json
+  durationMs BigInt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@map("transcripts")
+}
+
+model Segment {
+  id         String      @id @default(uuid()) @db.Uuid
+  videoId    String      @db.Uuid
+  startMs    BigInt
+  endMs      BigInt
+  text       String
+  speaker    String?
+  topic      String?
+  emotion    String?
+  confidence Float
+  createdAt  DateTime    @default(now())
+  video      Video       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  viralScore ViralScore?
+  clips      Clip[]
+
+  @@index([videoId, startMs])
+  @@map("segments")
+}
+
+model ViralScore {
+  id            String   @id @default(uuid()) @db.Uuid
+  segmentId     String   @unique @db.Uuid
+  curiosity     Float
+  authority     Float
+  controversy   Float
+  emotion       Float
+  business      Float
+  entertainment Float
+  educational   Float
+  financial     Float
+  finalScore    Float
+  explanation   String
+  createdAt     DateTime @default(now())
+  segment       Segment  @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+
+  @@index([finalScore])
+  @@map("viral_scores")
+}
+
+model Clip {
+  id               String         @id @default(uuid()) @db.Uuid
+  videoId          String         @db.Uuid
+  segmentId        String?        @db.Uuid
+  startMs          BigInt
+  endMs            BigInt
+  score            Float
+  title            String?
+  titleSuggestions Json
+  reason           String
+  genre            String?
+  hook             String?
+  sourceText       String?
+  aspectRatio      String         @default("9:16")
+  thumbnailKey     String?
+  status           ClipStatus     @default(SUGGESTED)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  video            Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  segment          Segment?       @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  captions         CaptionTrack[]
+  exports          Export[]
+  publications     Publication[]
+  seo              SeoMetadata?
+
+  @@index([videoId, score])
+  @@map("clips")
+}
+
+model CaptionTrack {
+  id        String   @id @default(uuid()) @db.Uuid
+  clipId    String   @db.Uuid
+  template  String
+  language  String
+  srtKey    String?
+  assKey    String?
+  cues      Json
+  editedCues Json?
+  style     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clip      Clip     @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([clipId])
+  @@map("caption_tracks")
+}
+
+model Export {
+  id          String       @id @default(uuid()) @db.Uuid
+  clipId      String       @db.Uuid
+  format      String
+  aspectRatio String
+  storageKey  String?
+  sizeBytes   BigInt?
+  status      ExportStatus @default(QUEUED)
+  errorCode   String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  clip        Clip         @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([clipId, status])
+  @@map("exports")
+}
+
+model SeoMetadata {
+  id          String   @id @default(uuid()) @db.Uuid
+  clipId      String   @unique @db.Uuid
+  titles      Json
+  ctrScores   Json
+  description String
+  hashtags    Json
+  keywords    Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  clip        Clip     @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@map("seo_metadata")
+}
+
+model BrandKit {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @db.Uuid
+  name         String
+  logoKey      String?
+  fontFamily   String?
+  primaryColor String
+  accentColor  String
+  watermark    Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("brand_kits")
+}
+
+model Subscription {
+  id                     String             @id @default(uuid()) @db.Uuid
+  workspaceId            String             @db.Uuid
+  plan                   Plan
+  status                 SubscriptionStatus @default(PENDING)
+  provider               String             @default("mercado_pago")
+  providerSubscriptionId String?            @unique
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  workspace              Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@map("subscriptions")
+}
+
+model BillingCheckout {
+  id                 String   @id @default(uuid()) @db.Uuid
+  workspaceId        String   @db.Uuid
+  idempotencyKey     String   @unique @db.VarChar(128)
+  plan               Plan
+  method             String
+  provider           String   @default("mercado_pago")
+  providerResourceId String?
+  status             String
+  response           Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("billing_checkouts")
+}
+
+model CreditTopUp {
+  id                 String    @id @default(uuid()) @db.Uuid
+  workspaceId        String    @db.Uuid
+  idempotencyKey     String    @unique @db.VarChar(128)
+  minutes            Int
+  amountCents        Int
+  currency           String    @default("BRL")
+  provider           String    @default("mercado_pago")
+  providerResourceId String?   @unique
+  status             String
+  response           Json
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([status, createdAt])
+  @@map("credit_top_ups")
+}
+
+model BillingWebhookEvent {
+  id                 String    @id @default(uuid()) @db.Uuid
+  provider           String    @default("mercado_pago")
+  providerEventId    String    @unique
+  providerResourceId String
+  eventType          String
+  status             String
+  processedAt        DateTime?
+  receivedAt         DateTime  @default(now())
+  payload            Json?
+  lastError          String?
+
+  @@index([status, receivedAt])
+  @@map("billing_webhook_events")
+}
+
+model UsageEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  videoId     String?   @db.Uuid
+  idempotencyKey String? @unique @db.VarChar(160)
+  type        String
+  quantity    Decimal   @db.Decimal(18, 4)
+  unit        String
+  costCents   Int       @default(0)
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  video       Video?    @relation(fields: [videoId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([type, createdAt])
+  @@map("usage_events")
+}
+
+model Publication {
+  id             String     @id @default(uuid()) @db.Uuid
+  workspaceId    String     @db.Uuid
+  clipId         String?    @db.Uuid
+  provider       String
+  status         String     @default("DRAFT")
+  scheduledAt    DateTime?
+  title          String
+  description    String?
+  hashtags       Json?
+  providerPostId String?
+  errorMessage   String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  workspace      Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  clip           Clip?      @relation(fields: [clipId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, scheduledAt])
+  @@index([provider, status])
+  @@map("publications")
+}
+
+model SocialConnection {
+  id               String    @id @default(uuid()) @db.Uuid
+  workspaceId      String    @db.Uuid
+  provider         String
+  status           String    @default("PENDING")
+  accessTokenHash  String?
+  refreshTokenHash String?
+  scopes           Json?
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, provider])
+  @@index([workspaceId, status])
+  @@map("social_connections")
+}
+
+model AuditLog {
+  id          String     @id @default(uuid()) @db.Uuid
+  userId      String?    @db.Uuid
+  workspaceId String?    @db.Uuid
+  action      String
+  resource    String
+  resourceId  String?
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime   @default(now())
+  user        User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}

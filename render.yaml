@@ -1,0 +1,158 @@
+services:
+  - type: keyvalue
+    name: clipbr-demo-redis
+    region: virginia
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+
+  - type: web
+    runtime: docker
+    name: clipbr-demo-api
+    region: virginia
+    plan: starter
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: 'off'
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 60
+    preDeployCommand: sh -ec 'DATABASE_URL="$DIRECT_DATABASE_URL" node_modules/.bin/prisma migrate deploy --schema=apps/api/prisma/schema.prisma'
+    envVars:
+      - fromGroup: clipbr-demo-secrets
+      - key: NODE_ENV
+        value: production
+      - key: APP_ENV
+        value: production
+      - key: UPLOAD_MODE
+        value: direct
+      - key: ENABLE_AI
+        value: "true"
+      - key: ENABLE_WHISPERX
+        value: "true"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: clipbr-demo-redis
+          property: connectionString
+
+  - type: worker
+    runtime: docker
+    name: clipbr-demo-worker
+    region: virginia
+    plan: standard
+    dockerfilePath: ./infra/render/worker.Dockerfile
+    dockerContext: .
+    autoDeployTrigger: 'off'
+    maxShutdownDelaySeconds: 300
+    disk:
+      name: clipbr-worker-data
+      mountPath: /data
+      sizeGB: 25
+    envVars:
+      - fromGroup: clipbr-demo-secrets
+      - key: NODE_ENV
+        value: production
+      - key: APP_ENV
+        value: production
+      - key: UPLOAD_MODE
+        value: direct
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: clipbr-demo-redis
+          property: connectionString
+      - key: MEDIA_WORKER_URL
+        value: http://127.0.0.1:8090
+      - key: MEDIA_WORKER_DATA_DIR
+        value: /data/pipelines
+      - key: ENABLE_AI
+        value: "true"
+      - key: ENABLE_WHISPERX
+        value: "true"
+      - key: ENABLE_OPENCV
+        value: "true"
+      - key: ENABLE_MEDIAPIPE
+        value: "true"
+      - key: ENABLE_YOLO
+        value: "true"
+      - key: MEDIA_DIARIZATION_ENABLED
+        value: "false"
+      - key: MEDIA_TRANSCRIPTION_BATCH_SIZE
+        value: "1"
+      - key: MEDIA_MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: RETAIN_SOURCE_DOWNLOADS
+        value: "false"
+      - key: WHISPERX_MODEL
+        value: tiny
+      - key: WHISPERX_DEVICE
+        value: cpu
+      - key: WHISPERX_COMPUTE_TYPE
+        value: int8
+      - key: HF_HOME
+        value: /data/models/huggingface
+      - key: TORCH_HOME
+        value: /data/models/torch
+      - key: XDG_CACHE_HOME
+        value: /data/models/cache
+      - key: MPLCONFIGDIR
+        value: /data/models/matplotlib
+      - key: YOLO_CONFIG_DIR
+        value: /data/models
+
+envVarGroups:
+  - name: clipbr-demo-secrets
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: REFRESH_TOKEN_SECRET
+        generateValue: true
+      - key: MEDIA_WORKER_TOKEN
+        generateValue: true
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_FORCE_PATH_STYLE
+        value: "false"
+      - key: CORS_ORIGIN
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: TERMS_VERSION
+        value: terms-2026-06
+      - key: PRIVACY_VERSION
+        value: privacy-2026-06
+      - key: EMAIL_VERIFICATION_REQUIRED
+        value: "true"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: TURNSTILE_REQUIRED
+        value: "true"
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: MAX_UPLOAD_SIZE_BYTES
+        value: "5368709120"
+      - key: UPLOAD_PART_SIZE_BYTES
+        value: "67108864"
+      - key: UPLOAD_ALLOWED_MIME_TYPES
+        value: video/mp4,video/quicktime,video/x-matroska,video/x-msvideo
+      - key: QUEUE_PREFIX
+        value: clipbr-demo
+      - key: LOG_LEVEL
+        value: info

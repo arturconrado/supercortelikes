@@ -1,0 +1,209 @@
+name: clipbr-demo-local
+
+x-api-environment: &api-environment
+  NODE_ENV: production
+  APP_ENV: local
+  PORT: 3001
+  DATABASE_URL: postgresql://${POSTGRES_USER:-clipbr_local}:${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}@postgres:5432/${POSTGRES_DB:-clipbr}?schema=public
+  DIRECT_DATABASE_URL: postgresql://${POSTGRES_USER:-clipbr_local}:${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}@postgres:5432/${POSTGRES_DB:-clipbr}?schema=public
+  REDIS_URL: redis://:${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}@redis:6379
+  JWT_SECRET: ${JWT_SECRET:-clipbr_local_jwt_secret_replace_in_production_8Hq2m}
+  REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-clipbr_local_refresh_secret_replace_7Wm4kP2s}
+  CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3001}
+  S3_ENDPOINT: http://minio:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+  S3_REGION: us-east-1
+  S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-clipbr_local_admin}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+  S3_FORCE_PATH_STYLE: "true"
+  UPLOAD_MODE: direct
+  MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-5368709120}
+  UPLOAD_PART_SIZE_BYTES: ${UPLOAD_PART_SIZE_BYTES:-67108864}
+  UPLOAD_ALLOWED_MIME_TYPES: video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo
+  QUEUE_PREFIX: clipbr-demo
+  MEDIA_WORKER_URL: http://media-worker:8090
+  MEDIA_WORKER_TOKEN: ${MEDIA_WORKER_TOKEN:-clipbr_local_media_token_4Fq9wK2m}
+  MEDIA_WORKER_DATA_DIR: /data/pipelines
+  MEDIA_DIARIZATION_ENABLED: "false"
+  MEDIA_TRANSCRIPTION_BATCH_SIZE: "1"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-worker-environment: &worker-environment
+  APP_ENV: local
+  REDIS_URL: redis://:${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}@redis:6379
+  MEDIA_WORKER_DATA_DIR: /data/pipelines
+  MEDIA_WORKER_INTERNAL_TOKEN: ${MEDIA_WORKER_TOKEN:-clipbr_local_media_token_4Fq9wK2m}
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-clipbr_local_admin}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+  S3_FORCE_PATH_STYLE: "true"
+  MEDIA_DIARIZATION_ENABLED: "false"
+  MEDIA_MAX_CONCURRENT_JOBS: "1"
+  RETAIN_SOURCE_DOWNLOADS: "false"
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  postgres:
+    profiles: [local-lite, local-full]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clipbr}
+      POSTGRES_USER: ${POSTGRES_USER:-clipbr_local}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    profiles: [local-lite, local-full]
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}
+    command: [sh, -ec, 'exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"']
+    ports: ["${REDIS_PORT:-6379}:6379"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli --no-auth-warning -a "$${REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    profiles: [local-lite, local-full]
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-clipbr_local_admin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+    ports: ["${MINIO_API_PORT:-9000}:9000", "${MINIO_CONSOLE_PORT:-9001}:9001"]
+    volumes: [minio_data:/data]
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:9000/minio/health/live]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    profiles: [local-lite, local-full]
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: [sh, -ec]
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-clipbr_local_admin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+      S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+    command:
+      - mc alias set local http://minio:9000 "$${S3_ACCESS_KEY_ID}" "$${S3_SECRET_ACCESS_KEY}" && mc mb --ignore-existing "local/$${S3_BUCKET}"
+
+  migrate:
+    profiles: [local-lite, local-full]
+    build: { context: ., dockerfile: apps/api/Dockerfile, target: migration }
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-clipbr_local}:${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}@postgres:5432/${POSTGRES_DB:-clipbr}?schema=public
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    profiles: [local-lite, local-full]
+    build: { context: ., dockerfile: apps/api/Dockerfile, target: runtime }
+    environment: *api-environment
+    ports: ["${PORT:-3001}:3001"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  web:
+    profiles: [local-lite, local-full]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args: { NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:3001}" }
+    ports: ["${WEB_PORT:-3000}:3000"]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok&&!String(r.status).startsWith('3'))process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  media-worker-lite:
+    profiles: [local-lite]
+    build: { context: services/media-worker, target: lite }
+    environment:
+      <<: *worker-environment
+      ENABLE_AI: "false"
+      ENABLE_WHISPERX: "false"
+      ENABLE_OPENCV: "false"
+      ENABLE_MEDIAPIPE: "false"
+      ENABLE_YOLO: "false"
+    depends_on:
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+
+  media-worker:
+    profiles: [local-full]
+    build: { context: services/media-worker, target: ai }
+    environment:
+      <<: *worker-environment
+      ENABLE_AI: "true"
+      ENABLE_WHISPERX: "true"
+      ENABLE_OPENCV: "true"
+      ENABLE_MEDIAPIPE: "true"
+      ENABLE_YOLO: "true"
+      WHISPERX_MODEL: tiny
+      WHISPERX_DEVICE: cpu
+      WHISPERX_COMPUTE_TYPE: int8
+      HF_HOME: /data/models/huggingface
+      TORCH_HOME: /data/models/torch
+      XDG_CACHE_HOME: /data/models/cache
+      MPLCONFIGDIR: /data/models/matplotlib
+      YOLO_CONFIG_DIR: /data/models
+    volumes: [media_data:/data]
+    depends_on:
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=8)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  worker:
+    profiles: [local-full]
+    build: { context: ., dockerfile: apps/api/Dockerfile, target: runtime }
+    command: [node, apps/api/dist/worker.js]
+    environment: *api-environment
+    volumes: [media_data:/data]
+    depends_on:
+      media-worker: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, apps/api/dist/worker-health.js]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  media_data:

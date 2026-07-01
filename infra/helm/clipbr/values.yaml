@@ -1,0 +1,181 @@
+replicaCount: 2
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+migrationImage:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+mediaWorkerImage:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3001
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelector:
+    kubernetes.io/metadata.name: ingress-nginx
+  ingressPodSelector:
+    app.kubernetes.io/name: ingress-nginx
+  dnsNamespaceSelector:
+    kubernetes.io/metadata.name: kube-system
+  databaseCidrs: []
+  redisCidrs: []
+  objectStorageCidrs: []
+
+config:
+  port: "3001"
+  queuePrefix: clipbr
+  outboxPollIntervalMs: "1000"
+  outboxBatchSize: "20"
+  uploadMaxBytes: "5368709120"
+  uploadPartSizeBytes: "67108864"
+  uploadQueueSize: "2"
+  s3Endpoint: ""
+  s3PublicEndpoint: ""
+  s3Region: auto
+  s3Bucket: ""
+  s3ForcePathStyle: "false"
+  otelExporterOtlpEndpoint: http://otel-collector.monitoring.svc.cluster.local:4318
+  otelServiceName: clipbr-api
+  mediaWorkerUrl: ""
+  mediaDiarizationEnabled: "true"
+  mediaTranscriptionBatchSize: "16"
+
+existingSecret: ""
+secretKeys:
+  databaseUrl: DATABASE_URL
+  redisUrl: REDIS_URL
+  s3AccessKey: S3_ACCESS_KEY
+  s3SecretKey: S3_SECRET_KEY
+  mediaWorkerToken: MEDIA_WORKER_TOKEN
+  hfToken: HF_TOKEN
+
+migrations:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+
+probes:
+  startup:
+    failureThreshold: 30
+    periodSeconds: 5
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+terminationGracePeriodSeconds: 60
+worker:
+  enabled: true
+  replicaCount: 2
+  terminationGracePeriodSeconds: 120
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      ephemeral-storage: 2Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+      ephemeral-storage: 10Gi
+  tmpSizeLimit: 8Gi
+mediaWorker:
+  enabled: true
+  replicaCount: 1
+  port: 8090
+  aiRequired: "true"
+  diarizationEnabled: "true"
+  whisperModel: large-v3
+  whisperDevice: cuda
+  whisperComputeType: float16
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+  tmpSizeLimit: 4Gi
+mediaData:
+  existingClaim: ""
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - clipbr
+          topologyKey: kubernetes.io/hostname

@@ -1,0 +1,87 @@
+name: CI and demo deployment
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    uses: ./.github/workflows/release-gate.yml
+
+  deploy-render:
+    name: Deploy Render at approved SHA
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DEMO_DEPLOY_ENABLED == 'true'
+    needs: gate
+    runs-on: ubuntu-24.04
+    environment: demo-production
+    outputs:
+      api_url: ${{ steps.urls.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trigger API and worker deploy hooks at this SHA
+        env:
+          API_HOOK: ${{ secrets.RENDER_API_DEPLOY_HOOK_URL }}
+          WORKER_HOOK: ${{ secrets.RENDER_WORKER_DEPLOY_HOOK_URL }}
+          SHA: ${{ github.sha }}
+        run: |
+          curl --fail --silent --show-error --request POST "${API_HOOK}&ref=${SHA}"
+          curl --fail --silent --show-error --request POST "${WORKER_HOOK}&ref=${SHA}"
+      - name: Wait for both immutable deploys
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_IDS: ${{ secrets.RENDER_API_SERVICE_ID }},${{ secrets.RENDER_WORKER_SERVICE_ID }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: node scripts/deploy/wait-render.mjs
+      - id: urls
+        env:
+          API_URL: ${{ vars.RENDER_API_URL }}
+        run: echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+
+  deploy-vercel:
+    name: Build and deploy Vercel
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DEMO_DEPLOY_ENABLED == 'true'
+    needs: deploy-render
+    runs-on: ubuntu-24.04
+    environment: demo-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+      - run: npm install --global vercel@latest
+      - name: Pull production configuration
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - name: Build and deploy prebuilt output
+        run: vercel build --prod --token="$VERCEL_TOKEN" && vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+  smoke:
+    name: External smoke
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DEMO_DEPLOY_ENABLED == 'true'
+    needs: [deploy-render, deploy-vercel]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate API build, health and public web
+        env:
+          PUBLIC_API_URL: ${{ vars.RENDER_API_URL }}
+          PUBLIC_APP_URL: ${{ vars.VERCEL_APP_URL }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: node scripts/acceptance/external-smoke.mjs

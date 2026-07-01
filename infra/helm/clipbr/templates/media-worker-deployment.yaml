@@ -1,0 +1,119 @@
+{{- if .Values.mediaWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clipbr.fullname" . }}-media-worker
+  labels:
+    {{- include "clipbr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: media-worker
+spec:
+  replicas: {{ .Values.mediaWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "clipbr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: media-worker
+  template:
+    metadata:
+      labels:
+        {{- include "clipbr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: media-worker
+    spec:
+      serviceAccountName: {{ include "clipbr.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: media-worker
+          image: "{{ required "mediaWorkerImage.repository is required" .Values.mediaWorkerImage.repository }}:{{ required "mediaWorkerImage.tag is required" .Values.mediaWorkerImage.tag }}"
+          imagePullPolicy: {{ .Values.mediaWorkerImage.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mediaWorker.port }}
+          env:
+            - name: MEDIA_WORKER_DATA_DIR
+              value: /data
+            - name: AI_REQUIRED
+              value: {{ .Values.mediaWorker.aiRequired | quote }}
+            - name: MEDIA_DIARIZATION_ENABLED
+              value: {{ .Values.mediaWorker.diarizationEnabled | quote }}
+            - name: WHISPERX_MODEL
+              value: {{ .Values.mediaWorker.whisperModel | quote }}
+            - name: WHISPERX_DEVICE
+              value: {{ .Values.mediaWorker.whisperDevice | quote }}
+            - name: WHISPERX_COMPUTE_TYPE
+              value: {{ .Values.mediaWorker.whisperComputeType | quote }}
+            - name: HF_HOME
+              value: /data/models/huggingface
+            - name: TORCH_HOME
+              value: /data/models/torch
+            - name: XDG_CACHE_HOME
+              value: /data/models/cache
+            - name: MPLCONFIGDIR
+              value: /data/models/matplotlib
+            - name: YOLO_CONFIG_DIR
+              value: /data/models/ultralytics
+            - name: S3_ENDPOINT
+              value: {{ required "config.s3Endpoint is required" .Values.config.s3Endpoint | quote }}
+            - name: S3_REGION
+              value: {{ .Values.config.s3Region | quote }}
+            - name: S3_BUCKET
+              value: {{ required "config.s3Bucket is required" .Values.config.s3Bucket | quote }}
+            - name: S3_FORCE_PATH_STYLE
+              value: {{ .Values.config.s3ForcePathStyle | quote }}
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "existingSecret is required" .Values.existingSecret }}
+                  key: {{ .Values.secretKeys.s3AccessKey }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: {{ .Values.secretKeys.s3SecretKey }}
+            - name: MEDIA_WORKER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: {{ .Values.secretKeys.mediaWorkerToken }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: {{ .Values.secretKeys.hfToken }}
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.mediaWorker.resources | nindent 12 }}
+          volumeMounts:
+            - name: media-data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: media-data
+          persistentVolumeClaim:
+            claimName: {{ required "mediaData.existingClaim is required" .Values.mediaData.existingClaim }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.mediaWorker.tmpSizeLimit }}
+{{- end }}

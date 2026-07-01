@@ -1,0 +1,59 @@
+{
+	email {$CADDY_EMAIL}
+}
+
+(secure_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+}
+
+www.{$APP_DOMAIN} {
+	redir https://{$APP_DOMAIN}{uri} permanent
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+	import secure_headers
+	reverse_proxy web:3000 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 120s
+			read_timeout 2h
+			write_timeout 2h
+		}
+	}
+}
+
+api.{$APP_DOMAIN} {
+	encode zstd gzip
+	import secure_headers
+	@metrics path /metrics /metrics/*
+	respond @metrics 404
+	reverse_proxy api:3001 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 120s
+			read_timeout 2h
+			write_timeout 2h
+		}
+	}
+}
+
+storage.{$APP_DOMAIN} {
+	import secure_headers
+	reverse_proxy minio:9000 {
+		header_up Host {host}
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 5m
+			read_timeout 2h
+			write_timeout 2h
+		}
+	}
+}

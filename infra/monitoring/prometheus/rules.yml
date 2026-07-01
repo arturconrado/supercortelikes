@@ -1,0 +1,74 @@
+groups:
+  - name: clipbr-availability
+    rules:
+      - alert: ClipbrApiUnavailable
+        expr: up{job="clipbr-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: ClipBR API is unavailable
+          description: Prometheus has failed to scrape the ClipBR API for two minutes.
+
+      - alert: ClipbrOtelCollectorUnavailable
+        expr: up{job="otel-collector"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenTelemetry Collector is unavailable
+          description: Telemetry ingestion or export has been unavailable for five minutes.
+
+      - alert: ClipbrHighServerErrorRate
+        expr: |
+          (
+            sum(rate(clipbr_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(clipbr_http_requests_total[5m])), 0.001)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: ClipBR API server error rate is above 5%
+          description: More than 5% of HTTP requests have returned a 5xx response for ten minutes.
+
+      - alert: ClipbrHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(clipbr_http_request_duration_seconds_bucket[5m]))
+          ) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ClipBR API p95 latency is above 800ms
+          description: The p95 non-media API latency has exceeded the GA v1 SLO for ten minutes.
+
+      - alert: ClipbrOpenDeadLetters
+        expr: clipbr_dead_letters_open > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: ClipBR has open dead-letter jobs
+          description: At least one pipeline job is in DLQ and needs support triage.
+
+      - alert: ClipbrOutboxBacklog
+        expr: clipbr_outbox_unpublished > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: ClipBR outbox is delayed
+          description: Unpublished outbox events have been present for more than five minutes.
+
+      - alert: ClipbrQueueFailures
+        expr: sum(clipbr_queue_jobs{state="failed"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: ClipBR queue has failed jobs
+          description: BullMQ reports failed jobs in at least one pipeline queue.

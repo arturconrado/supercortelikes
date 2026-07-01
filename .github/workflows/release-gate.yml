@@ -1,0 +1,186 @@
+name: Release gate
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, tests, coverage and builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: gate
+          POSTGRES_PASSWORD: gate-password
+          POSTGRES_DB: clipbr_gate
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U gate -d clipbr_gate"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://gate:gate-password@localhost:5432/clipbr_gate?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: npm install --global npm@11.12.1 && npm ci
+      - name: Lint and typecheck
+        run: npm run lint && npm run typecheck
+      - name: Validate Prisma and migrate an empty database
+        run: npm run db:validate && npm run db:generate && npm run db:migrate:deploy
+      - name: Test TypeScript with coverage gates
+        run: npm run test:coverage && npm run test --workspace @clipbr/web
+      - name: Test Python with independent coverage gates
+        run: |
+          pip install -r services/media-worker/requirements.txt
+          pip install -e 'services/media-worker[test]'
+          pytest services/media-worker/tests --cov=media_worker --cov-branch \
+            --cov-report=json:/tmp/media-coverage.json --cov-fail-under=60
+          python services/media-worker/scripts/check_coverage.py /tmp/media-coverage.json 60
+      - name: Build API and web
+        run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  containers:
+    name: Build and scan four runtimes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build API, web, media and Render bundle
+        run: |
+          docker build -f apps/api/Dockerfile --target runtime -t clipbr-api:gate .
+          docker build -f apps/web/Dockerfile -t clipbr-web:gate .
+          docker build -f services/media-worker/Dockerfile --target ai -t clipbr-media:gate services/media-worker
+          docker build -f infra/render/worker.Dockerfile -t clipbr-bundle:gate .
+      - name: Smoke runtime imports and entrypoints
+        run: |
+          docker run --rm --entrypoint node clipbr-api:gate -e "require('ioredis');require('bullmq')"
+          docker run --rm --entrypoint python clipbr-media:gate -c "import whisperx,cv2,mediapipe,ultralytics,redis"
+          docker run --rm --entrypoint node clipbr-bundle:gate -e "const {createRequire}=require('module');const r=createRequire('/workspace/apps/api/dist/worker.js');r('ioredis');r('bullmq');r('@prisma/client')"
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: clipbr-api:gate
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Scan web image
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: clipbr-web:gate
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Scan media image
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: clipbr-media:gate
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Scan bundle image
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: clipbr-bundle:gate
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+  integration:
+    name: Real PostgreSQL, Redis, MinIO and AI pipeline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+          cache: npm
+      - run: npm ci
+      - name: Run 5 GiB direct-upload regression without a processing worker
+        run: |
+          docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite up --build --detach --wait
+          node scripts/acceptance/direct-upload-5g.mjs
+          docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite down --volumes --remove-orphans
+      - name: Start isolated full stack
+        run: docker compose -f docker-compose.local.yml -p clipbr-option-a-gate --profile local-full up --build --detach --wait
+      - name: Generate deterministic media fixture
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=25 \
+            -f lavfi -i "flite=text='A tecnologia muda rapidamente. Este corte demonstra uma ideia forte e compartilhavel.'" \
+            -t 16 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /tmp/clipbr-option-a.mp4
+      - name: Run complete product E2E flow
+        env:
+          PRODUCT_E2E_VIDEO_PATH: /tmp/clipbr-option-a.mp4
+          PRODUCT_E2E_COMPOSE_FILE: docker-compose.local.yml
+          PRODUCT_E2E_MEDIA_PROFILE: local-full
+          PRODUCT_E2E_WEB_URL: http://localhost:3000
+          COMPOSE_PROJECT_NAME: clipbr-option-a-gate
+        run: npm run acceptance:product
+      - name: Observe stability for ten minutes
+        run: |
+          sleep 600
+          ids=$(docker compose -f docker-compose.local.yml -p clipbr-option-a-gate --profile local-full ps -q)
+          test -n "$ids"
+          for id in $ids; do
+            test "$(docker inspect -f '{{.RestartCount}}' "$id")" = "0"
+            test "$(docker inspect -f '{{.State.Status}}' "$id")" = "running" || \
+              test "$(docker inspect -f '{{.State.ExitCode}}' "$id")" = "0"
+          done
+      - name: Print diagnostics
+        if: always()
+        run: docker compose -f docker-compose.local.yml -p clipbr-option-a-gate --profile local-full ps && docker compose -f docker-compose.local.yml -p clipbr-option-a-gate logs --tail=200
+      - name: Remove isolated gate volumes
+        if: always()
+        run: |
+          docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite down --volumes --remove-orphans || true
+          docker compose -f docker-compose.local.yml -p clipbr-option-a-gate --profile local-full down --volumes --remove-orphans
+
+  infrastructure:
+    name: Validate deployment manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate local Compose profiles
+        run: |
+          docker compose -f docker-compose.local.yml --profile local-lite config --quiet
+          docker compose -f docker-compose.local.yml --profile local-full config --quiet
+      - name: Validate external release Compose
+        env:
+          DATABASE_URL: postgresql://demo:demo@db.example.com/demo
+          DIRECT_DATABASE_URL: postgresql://demo:demo@db.example.com/demo
+          REDIS_URL: rediss://default:secret@redis.example.com:6379
+          JWT_SECRET: 12345678901234567890123456789012
+          REFRESH_TOKEN_SECRET: 12345678901234567890123456789012
+          CORS_ORIGIN: https://demo.example.com
+          PUBLIC_APP_URL: https://demo.example.com
+          PUBLIC_API_URL: https://api.example.com
+          S3_ENDPOINT: https://account.r2.cloudflarestorage.com
+          S3_BUCKET: clipbr-demo
+          S3_ACCESS_KEY_ID: example
+          S3_SECRET_ACCESS_KEY: example-secret
+          MEDIA_WORKER_TOKEN: 12345678901234567890123456789012
+        run: docker compose -f docker-compose.release.yml config --quiet
+      - name: Parse Render and Vercel manifests
+        run: |
+          ruby -e "require 'yaml'; YAML.safe_load(File.read('render.yaml'), aliases: true)"
+          node -e "JSON.parse(require('fs').readFileSync('apps/web/vercel.json'))"

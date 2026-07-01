@@ -1,0 +1,442 @@
+name: clipbr-local
+
+services:
+  web:
+    profiles: ["local-lite", "release"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok&&!String(r.status).startsWith('3'))process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  migrate:
+    profiles: ["local-lite", "release"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: migration
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-clipbr_local}:${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}@postgres:5432/${POSTGRES_DB:-clipbr}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    profiles: ["local-lite", "release"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment: &api-environment
+      NODE_ENV: ${NODE_ENV:-production}
+      APP_ENV: local
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-clipbr_local}:${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}@postgres:5432/${POSTGRES_DB:-clipbr}?schema=public
+      DIRECT_DATABASE_URL: postgresql://${POSTGRES_USER:-clipbr_local}:${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}@postgres:5432/${POSTGRES_DB:-clipbr}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-clipbr_local_jwt_secret_replace_in_production_8Hq2m}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-clipbr_local_refresh_secret_replace_in_production_7Kr4p}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      JWT_REFRESH_DAYS: ${JWT_REFRESH_DAYS:-30}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}@redis:6379
+      QUEUE_PREFIX: ${QUEUE_PREFIX:-clipbr}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-1000}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-clipbr_local_admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+      S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+      S3_FORCE_PATH_STYLE: "true"
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5368709120}
+      UPLOAD_PART_SIZE_BYTES: ${UPLOAD_PART_SIZE_BYTES:-67108864}
+      UPLOAD_QUEUE_SIZE: ${UPLOAD_QUEUE_SIZE:-2}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3001}
+      MERCADO_PAGO_ACCESS_TOKEN: ${MERCADO_PAGO_ACCESS_TOKEN:-}
+      MERCADO_PAGO_WEBHOOK_SECRET: ${MERCADO_PAGO_WEBHOOK_SECRET:-}
+      MEDIA_WORKER_URL: http://media-worker:8090
+      MEDIA_WORKER_TOKEN: ${MEDIA_WORKER_TOKEN:-clipbr_local_media_token_4Fq9wK2m}
+      MEDIA_WORKER_DATA_DIR: /data
+      MEDIA_WORKER_TIMEOUT_MS: ${MEDIA_WORKER_TIMEOUT_MS:-7200000}
+      MEDIA_DIARIZATION_ENABLED: "false"
+      MEDIA_TRANSCRIPTION_BATCH_SIZE: "1"
+      ENABLE_AI: "true"
+      ENABLE_WHISPERX: "true"
+      ENABLE_OPENCV: "true"
+      ENABLE_MEDIAPIPE: "true"
+      ENABLE_YOLO: "true"
+      UPLOAD_MODE: stream
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: clipbr-api
+    ports:
+      - "${PORT:-3001}:3001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  worker:
+    profiles: ["release"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    command: ["node", "apps/api/dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      OTEL_SERVICE_NAME: clipbr-worker
+    volumes:
+      - media_data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      media-worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "apps/api/dist/worker-health.js"]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+      start_period: 30s
+
+  media-worker:
+    profiles: ["release"]
+    build:
+      context: services/media-worker
+      target: ai
+    restart: unless-stopped
+    environment:
+      APP_ENV: local
+      MEDIA_WORKER_DATA_DIR: /data
+      MEDIA_WORKER_INTERNAL_TOKEN: ${MEDIA_WORKER_TOKEN:-clipbr_local_media_token_4Fq9wK2m}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-clipbr_local_admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+      S3_FORCE_PATH_STYLE: "true"
+      S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+      HF_TOKEN: ${HF_TOKEN:-}
+      AI_REQUIRED: "true"
+      ENABLE_AI: "true"
+      ENABLE_WHISPERX: "true"
+      ENABLE_OPENCV: "true"
+      ENABLE_MEDIAPIPE: "true"
+      ENABLE_YOLO: "true"
+      REDIS_URL: redis://:${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}@redis:6379
+      MEDIA_DIARIZATION_ENABLED: "false"
+      WHISPERX_MODEL: ${WHISPERX_MODEL:-tiny}
+      WHISPERX_DEVICE: ${WHISPERX_DEVICE:-cpu}
+      WHISPERX_COMPUTE_TYPE: ${WHISPERX_COMPUTE_TYPE:-int8}
+      HF_HOME: /data/models/huggingface
+      TORCH_HOME: /data/models/torch
+      XDG_CACHE_HOME: /data/models/cache
+      MPLCONFIGDIR: /data/models/matplotlib
+      YOLO_CONFIG_DIR: /data/models/ultralytics
+    volumes:
+      - media_data:/data
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=8)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  postgres:
+    profiles: ["local-lite", "release"]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clipbr}
+      POSTGRES_USER: ${POSTGRES_USER:-clipbr_local}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    profiles: ["local-lite", "release"]
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}
+    command:
+      - /bin/sh
+      - -ec
+      - exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli --no-auth-warning -a "$${REDIS_PASSWORD}" ping | grep -q PONG
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    profiles: ["local-lite", "release"]
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-clipbr_local_admin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - http://localhost:9000/minio/health/live
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  minio-init:
+    profiles: ["local-lite", "release"]
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-clipbr_local_admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+      S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        mc alias set local http://minio:9000 "$${S3_ACCESS_KEY}" "$${S3_SECRET_KEY}"
+        mc mb --ignore-existing "local/$${S3_BUCKET}"
+
+  migrate-production:
+    profiles: ["production"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: migration
+    restart: "no"
+    environment:
+      DATABASE_URL: ${PRODUCTION_DATABASE_URL:-}
+
+  api-production:
+    profiles: ["production"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment: &production-api-environment
+      NODE_ENV: production
+      APP_ENV: production
+      PORT: 3001
+      DATABASE_URL: ${PRODUCTION_DATABASE_URL:-}
+      DIRECT_DATABASE_URL: ${PRODUCTION_DIRECT_DATABASE_URL:-}
+      JWT_SECRET: ${PRODUCTION_JWT_SECRET:-}
+      REFRESH_TOKEN_SECRET: ${PRODUCTION_REFRESH_TOKEN_SECRET:-}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      JWT_REFRESH_DAYS: ${JWT_REFRESH_DAYS:-30}
+      REDIS_URL: ${PRODUCTION_REDIS_URL:-}
+      QUEUE_PREFIX: ${QUEUE_PREFIX:-clipbr}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-1000}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
+      S3_ENDPOINT: ${PRODUCTION_S3_ENDPOINT:-}
+      S3_PUBLIC_ENDPOINT: ${PRODUCTION_S3_PUBLIC_ENDPOINT:-}
+      S3_REGION: ${PRODUCTION_S3_REGION:-auto}
+      S3_ACCESS_KEY: ${PRODUCTION_S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${PRODUCTION_S3_SECRET_KEY:-}
+      S3_BUCKET: ${PRODUCTION_S3_BUCKET:-}
+      S3_FORCE_PATH_STYLE: "false"
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5368709120}
+      UPLOAD_PART_SIZE_BYTES: ${UPLOAD_PART_SIZE_BYTES:-67108864}
+      UPLOAD_QUEUE_SIZE: ${UPLOAD_QUEUE_SIZE:-2}
+      CORS_ORIGINS: ${PRODUCTION_CORS_ORIGINS:-}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      PUBLIC_APP_URL: ${PRODUCTION_PUBLIC_APP_URL:-}
+      PUBLIC_API_URL: ${PRODUCTION_PUBLIC_API_URL:-}
+      MEDIA_WORKER_URL: http://media-worker-production:8090
+      MEDIA_WORKER_TOKEN: ${PRODUCTION_MEDIA_WORKER_TOKEN:-}
+      MEDIA_WORKER_DATA_DIR: /data
+      MEDIA_WORKER_TIMEOUT_MS: ${MEDIA_WORKER_TIMEOUT_MS:-7200000}
+      MEDIA_DIARIZATION_ENABLED: "true"
+      MEDIA_TRANSCRIPTION_BATCH_SIZE: ${MEDIA_TRANSCRIPTION_BATCH_SIZE:-16}
+      ENABLE_AI: "true"
+      ENABLE_WHISPERX: "true"
+      ENABLE_OPENCV: "true"
+      ENABLE_MEDIAPIPE: "true"
+      ENABLE_YOLO: "true"
+      UPLOAD_MODE: direct
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: clipbr-api
+    ports:
+      - "${PRODUCTION_API_PORT:-3001}:3001"
+    depends_on:
+      migrate-production:
+        condition: service_completed_successfully
+    volumes:
+      - media_data_production:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  worker-production:
+    profiles: ["production"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    command: ["node", "apps/api/dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      <<: *production-api-environment
+      OTEL_SERVICE_NAME: clipbr-worker
+    volumes:
+      - media_data_production:/data
+    depends_on:
+      migrate-production:
+        condition: service_completed_successfully
+      media-worker-production:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "apps/api/dist/worker-health.js"]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+      start_period: 30s
+
+  media-worker-production:
+    profiles: ["production"]
+    build:
+      context: services/media-worker
+      target: ai
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      MEDIA_WORKER_DATA_DIR: /data
+      MEDIA_WORKER_INTERNAL_TOKEN: ${PRODUCTION_MEDIA_WORKER_TOKEN:-}
+      AI_REQUIRED: "true"
+      ENABLE_AI: "true"
+      ENABLE_WHISPERX: "true"
+      ENABLE_OPENCV: "true"
+      ENABLE_MEDIAPIPE: "true"
+      ENABLE_YOLO: "true"
+      REDIS_URL: ${PRODUCTION_REDIS_URL:-}
+      MEDIA_DIARIZATION_ENABLED: "true"
+      S3_ENDPOINT: ${PRODUCTION_S3_ENDPOINT:-}
+      S3_REGION: ${PRODUCTION_S3_REGION:-auto}
+      S3_ACCESS_KEY: ${PRODUCTION_S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${PRODUCTION_S3_SECRET_KEY:-}
+      S3_BUCKET: ${PRODUCTION_S3_BUCKET:-}
+      S3_FORCE_PATH_STYLE: "false"
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /data/models/huggingface
+      TORCH_HOME: /data/models/torch
+      XDG_CACHE_HOME: /data/models/cache
+      MPLCONFIGDIR: /data/models/matplotlib
+      YOLO_CONFIG_DIR: /data/models/ultralytics
+      WHISPERX_MODEL: ${WHISPERX_MODEL:-large-v3}
+      WHISPERX_DEVICE: ${WHISPERX_DEVICE:-cuda}
+      WHISPERX_COMPUTE_TYPE: ${WHISPERX_COMPUTE_TYPE:-float16}
+    volumes:
+      - media_data_production:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=8)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  web-production:
+    profiles: ["production"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${PRODUCTION_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${PRODUCTION_WEB_PORT:-3000}:3000"
+    depends_on:
+      api-production:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok&&!String(r.status).startsWith('3'))process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  media_data:
+  media_data_production:

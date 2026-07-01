@@ -1,0 +1,75 @@
+name: clipbr-local-prod-one
+
+services:
+  clipbr:
+    build:
+      context: .
+      dockerfile: infra/local-prod-one/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${ONE_API_PORT:-3331}
+        NEXT_PUBLIC_TERMS_VERSION: ${TERMS_VERSION:-terms-2026-06}
+        NEXT_PUBLIC_PRIVACY_VERSION: ${PRIVACY_VERSION:-privacy-2026-06}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+    restart: unless-stopped
+    stop_grace_period: 300s
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      PUBLIC_APP_URL: http://localhost:${ONE_WEB_PORT:-3330}
+      PUBLIC_API_URL: http://localhost:${ONE_API_PORT:-3331}
+      CORS_ORIGIN: http://localhost:${ONE_WEB_PORT:-3330}
+      CORS_ORIGINS: http://localhost:${ONE_WEB_PORT:-3330}
+      S3_PUBLIC_ENDPOINT: http://localhost:${ONE_STORAGE_PORT:-3332}
+      POSTGRES_DB: ${POSTGRES_DB:-clipbr}
+      POSTGRES_USER: ${POSTGRES_USER:-clipbr_local}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipbr_local_9Tq4xV7mK2pR8sW6}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-clipbr_local_5Hs8nR2qW7mK4vP9}
+      JWT_SECRET: ${JWT_SECRET:-clipbr_one_local_jwt_secret_replace_48_chars_2026}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-clipbr_one_local_refresh_secret_replace_48_chars_2026}
+      MEDIA_WORKER_TOKEN: ${MEDIA_WORKER_TOKEN:-clipbr_one_media_token_replace_48_chars_2026}
+      S3_BUCKET: ${S3_BUCKET:-clipbr-videos}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-clipbr_local_admin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-clipbr_local_7Zp9mQ4vN8xK2rT6wF3s}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_FORCE_PATH_STYLE: "true"
+      UPLOAD_MODE: direct
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-5368709120}
+      UPLOAD_PART_SIZE_BYTES: ${UPLOAD_PART_SIZE_BYTES:-67108864}
+      UPLOAD_QUEUE_SIZE: ${UPLOAD_QUEUE_SIZE:-2}
+      AI_REQUIRED: "true"
+      ENABLE_AI: "true"
+      ENABLE_WHISPERX: "true"
+      ENABLE_OPENCV: "true"
+      ENABLE_MEDIAPIPE: "true"
+      ENABLE_YOLO: "true"
+      WHISPERX_MODEL: tiny
+      WHISPERX_DEVICE: cpu
+      WHISPERX_COMPUTE_TYPE: int8
+      MEDIA_DIARIZATION_ENABLED: "false"
+      MEDIA_TRANSCRIPTION_BATCH_SIZE: "1"
+      MEDIA_MAX_CONCURRENT_JOBS: "1"
+      LLM_PROVIDER: ${LLM_PROVIDER:-none}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-4o-mini}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
+      EMAIL_VERIFICATION_REQUIRED: "false"
+      TURNSTILE_REQUIRED: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HEARTBEAT_INTERVAL_SECONDS: ${HEARTBEAT_INTERVAL_SECONDS:-10}
+      BUILD_SHA: local-prod-one
+    ports:
+      - "${ONE_WEB_PORT:-3330}:3000"
+      - "${ONE_API_PORT:-3331}:3001"
+      - "${ONE_STORAGE_PORT:-3332}:9000"
+      - "${ONE_MINIO_CONSOLE_PORT:-3333}:9001"
+    volumes:
+      - clipbr_one_data:/data
+    healthcheck:
+      test: [CMD-SHELL, "curl -fsS http://127.0.0.1:3001/health/ready >/dev/null && curl -fsS http://127.0.0.1:3000 >/dev/null"]
+      interval: 15s
+      timeout: 8s
+      retries: 12
+      start_period: 180s
+
+volumes:
+  clipbr_one_data:

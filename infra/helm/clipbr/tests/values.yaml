@@ -1,0 +1,24 @@
+image:
+  repository: ghcr.io/clipbr/clipbr-api
+  tag: 0123456789abcdef0123456789abcdef01234567
+migrationImage:
+  repository: ghcr.io/clipbr/clipbr-api-migrations
+  tag: 0123456789abcdef0123456789abcdef01234567
+mediaWorkerImage:
+  repository: ghcr.io/clipbr/clipbr-media-worker
+  tag: 0123456789abcdef0123456789abcdef01234567
+existingSecret: clipbr-ci
+mediaData:
+  existingClaim: clipbr-ci-media-rwx
+config:
+  s3Endpoint: https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com
+  s3PublicEndpoint: https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com
+  s3Bucket: clipbr-ci-videos
+  mediaWorkerUrl: http://clipbr-clipbr-media-worker:8090
+networkPolicy:
+  databaseCidrs:
+    - 192.0.2.10/32
+  redisCidrs:
+    - 192.0.2.11/32
+  objectStorageCidrs:
+    - 192.0.2.12/32
