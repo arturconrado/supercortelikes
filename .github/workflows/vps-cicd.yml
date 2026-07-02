@@ -189,6 +189,16 @@ jobs:
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
+      - name: Resize existing DigitalOcean Droplet
+        if: env.DIGITALOCEAN_MODE != 'off' && vars.DIGITALOCEAN_RESIZE_ENABLED == 'true'
+        shell: bash
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          DIGITALOCEAN_DROPLET_ID: ${{ vars.DIGITALOCEAN_DROPLET_ID }}
+          DIGITALOCEAN_DROPLET_SIZE: ${{ vars.DIGITALOCEAN_DROPLET_SIZE }}
+          DIGITALOCEAN_RESIZE_DISK: ${{ vars.DIGITALOCEAN_RESIZE_DISK || 'true' }}
+        run: bash scripts/vps/digitalocean-resize.sh
+
       - name: Prepare DigitalOcean Droplet
         id: digitalocean
         if: env.DIGITALOCEAN_MODE != 'off'
