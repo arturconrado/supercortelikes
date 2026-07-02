@@ -1,0 +1,372 @@
+name: VPS CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to the configured VPS after the gate and image build
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      digitalocean_mode:
+        description: DigitalOcean infra mode before SSH deploy
+        required: true
+        default: "validate"
+        type: choice
+        options: ["off", "validate", "adopt", "provision"]
+      image_tag:
+        description: Optional image tag override; defaults to the commit SHA
+        required: false
+        type: string
+      run_product_e2e:
+        description: Run full product E2E on the VPS after deploy
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      run_5g:
+        description: Run the 5 GiB multipart regression on the VPS after deploy
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      observe_seconds:
+        description: Seconds to observe containers during VPS smoke
+        required: false
+        default: "120"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: vps-cicd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Release gate
+    uses: ./.github/workflows/release-gate.yml
+
+  build-images:
+    name: Build and publish VPS images
+    if: github.event_name != 'pull_request'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      migration_image: ${{ steps.images.outputs.migration_image }}
+      api_image: ${{ steps.images.outputs.api_image }}
+      web_image: ${{ steps.images.outputs.web_image }}
+      media_image: ${{ steps.images.outputs.media_image }}
+      image_tag: ${{ steps.images.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image names
+        id: images
+        shell: bash
+        run: |
+          namespace="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          tag="${{ inputs.image_tag }}"
+          if [[ -z "${tag}" ]]; then
+            tag="${GITHUB_SHA}"
+          fi
+          echo "image_tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "migration_image=ghcr.io/${namespace}/migration:${tag}" >> "${GITHUB_OUTPUT}"
+          echo "api_image=ghcr.io/${namespace}/api:${tag}" >> "${GITHUB_OUTPUT}"
+          echo "web_image=ghcr.io/${namespace}/web:${tag}" >> "${GITHUB_OUTPUT}"
+          echo "media_image=ghcr.io/${namespace}/media-worker:${tag}" >> "${GITHUB_OUTPUT}"
+          echo "namespace=${namespace}" >> "${GITHUB_OUTPUT}"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Validate VPS deploy build variables
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
+          (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
+        shell: bash
+        env:
+          VPS_PUBLIC_API_URL: ${{ vars.VPS_PUBLIC_API_URL }}
+          VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+        run: |
+          : "${VPS_PUBLIC_API_URL:?VPS_PUBLIC_API_URL repository variable is required for VPS deploy}"
+          : "${VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY:?VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY repository variable is required for VPS deploy}"
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.images.outputs.api_image }}
+            ghcr.io/${{ steps.images.outputs.namespace }}/api:main
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          target: migration
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.images.outputs.migration_image }}
+            ghcr.io/${{ steps.images.outputs.namespace }}/migration:main
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.VPS_PUBLIC_API_URL || 'http://localhost:3001' }}
+            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ vars.VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY || '' }}
+            NEXT_PUBLIC_TERMS_VERSION=${{ vars.NEXT_PUBLIC_TERMS_VERSION || 'terms-2026-06' }}
+            NEXT_PUBLIC_PRIVACY_VERSION=${{ vars.NEXT_PUBLIC_PRIVACY_VERSION || 'privacy-2026-06' }}
+          tags: |
+            ${{ steps.images.outputs.web_image }}
+            ghcr.io/${{ steps.images.outputs.namespace }}/web:main
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Build and push media-worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/media-worker
+          file: services/media-worker/Dockerfile
+          target: ai
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.images.outputs.media_image }}
+            ghcr.io/${{ steps.images.outputs.namespace }}/media-worker:main
+          cache-from: type=gha,scope=media-worker
+          cache-to: type=gha,mode=max,scope=media-worker
+
+  deploy-vps:
+    name: Deploy to generic VPS
+    if: |
+      github.event_name != 'pull_request' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
+      )
+    needs: build-images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: vps-production
+    env:
+      HAS_VPS_ENV_PRODUCTION_B64: ${{ secrets.VPS_ENV_PRODUCTION_B64 != '' }}
+      DIGITALOCEAN_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.digitalocean_mode || vars.DIGITALOCEAN_MODE || 'off' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doctl
+        if: env.DIGITALOCEAN_MODE != 'off'
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Prepare DigitalOcean Droplet
+        id: digitalocean
+        if: env.DIGITALOCEAN_MODE != 'off'
+        shell: bash
+        env:
+          DIGITALOCEAN_MODE: ${{ env.DIGITALOCEAN_MODE }}
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          DIGITALOCEAN_DROPLET_ID: ${{ vars.DIGITALOCEAN_DROPLET_ID }}
+          DIGITALOCEAN_DROPLET_NAME: ${{ vars.DIGITALOCEAN_DROPLET_NAME }}
+          DIGITALOCEAN_DROPLET_REGION: ${{ vars.DIGITALOCEAN_DROPLET_REGION || 'nyc3' }}
+          DIGITALOCEAN_DROPLET_SIZE: ${{ vars.DIGITALOCEAN_DROPLET_SIZE }}
+          DIGITALOCEAN_DROPLET_IMAGE: ${{ vars.DIGITALOCEAN_DROPLET_IMAGE || 'ubuntu-24-04-x64' }}
+          DIGITALOCEAN_SSH_KEY_IDS: ${{ vars.DIGITALOCEAN_SSH_KEY_IDS }}
+          DIGITALOCEAN_TAG: ${{ vars.DIGITALOCEAN_TAG || 'clipbr' }}
+          DIGITALOCEAN_FIREWALL_NAME: ${{ vars.DIGITALOCEAN_FIREWALL_NAME }}
+          DIGITALOCEAN_DOMAIN: ${{ vars.DIGITALOCEAN_DOMAIN }}
+          DIGITALOCEAN_MANAGE_DNS: ${{ vars.DIGITALOCEAN_MANAGE_DNS || 'false' }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          if [[ "${DIGITALOCEAN_MODE}" == "provision" ]]; then
+            bash scripts/vps/digitalocean-provision.sh
+          elif [[ "${DIGITALOCEAN_MODE}" != "validate" && "${DIGITALOCEAN_MODE}" != "adopt" ]]; then
+            echo "Unsupported DIGITALOCEAN_MODE=${DIGITALOCEAN_MODE}" >&2
+            exit 1
+          fi
+          bash scripts/vps/digitalocean-validate.sh
+
+      - name: Install SSH key
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+        run: |
+          test -n "${VPS_SSH_KEY}"
+          test -n "${VPS_HOST}"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${VPS_SSH_KEY}" > ~/.ssh/id_vps
+          chmod 600 ~/.ssh/id_vps
+          for attempt in $(seq 1 60); do
+            if ssh-keyscan -p "${VPS_SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" == "60" ]]; then
+              echo "Could not read SSH host key from ${VPS_HOST}:${VPS_SSH_PORT}" >&2
+              exit 1
+            fi
+            echo "Waiting for SSH host key... attempt ${attempt}/60"
+            sleep 5
+          done
+
+      - name: Bootstrap DigitalOcean VPS OS
+        if: env.DIGITALOCEAN_MODE == 'provision' || env.DIGITALOCEAN_MODE == 'adopt'
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+        run: |
+          deploy_public_key="$(ssh-keygen -y -f ~/.ssh/id_vps)"
+          deploy_public_key_quoted="$(printf '%q' "${deploy_public_key}")"
+          for attempt in $(seq 1 60); do
+            if scp -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/id_vps -P "${VPS_SSH_PORT}" scripts/vps/provision-ubuntu.sh "root@${VPS_HOST}:/tmp/provision-ubuntu.sh" &&
+              ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "root@${VPS_HOST}" \
+                "DEPLOY_SSH_PUBLIC_KEY=${deploy_public_key_quoted} bash /tmp/provision-ubuntu.sh"; then
+              break
+            fi
+            if [[ "${attempt}" == "60" ]]; then
+              echo "Could not provision VPS over root SSH." >&2
+              exit 1
+            fi
+            echo "Waiting for root SSH/provisioning... attempt ${attempt}/60"
+            sleep 10
+          done
+
+      - name: Sync repository to VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER || 'clipbr' }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+          VPS_APP_DIR: ${{ vars.VPS_APP_DIR || '/srv/clipbr/app' }}
+        run: |
+          : "${VPS_USER:?VPS_USER is required}"
+          for attempt in $(seq 1 90); do
+            if ssh -o BatchMode=yes -o ConnectTimeout=10 -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${VPS_APP_DIR}' && docker compose version >/dev/null"; then
+              break
+            fi
+            if [[ "${attempt}" == "90" ]]; then
+              echo "VPS did not become reachable with Docker ready." >&2
+              exit 1
+            fi
+            echo "Waiting for VPS SSH/cloud-init/Docker... attempt ${attempt}/90"
+            sleep 10
+          done
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/id_vps -p ${VPS_SSH_PORT}" \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='node_modules' \
+            --exclude='coverage' \
+            --exclude='.coverage' \
+            --exclude='.pytest_cache' \
+            --exclude='reports/*.tmp' \
+            ./ "${VPS_USER}@${VPS_HOST}:${VPS_APP_DIR}/"
+
+      - name: Optionally write .env.production from GitHub secret
+        if: env.HAS_VPS_ENV_PRODUCTION_B64 == 'true'
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER || 'clipbr' }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+          VPS_APP_DIR: ${{ vars.VPS_APP_DIR || '/srv/clipbr/app' }}
+          VPS_ENV_PRODUCTION_B64: ${{ secrets.VPS_ENV_PRODUCTION_B64 }}
+        run: |
+          remote_dir="$(printf '%q' "${VPS_APP_DIR}")"
+          printf '%s' "${VPS_ENV_PRODUCTION_B64}" | ssh -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "${VPS_USER}@${VPS_HOST}" "base64 -d > ${remote_dir}/.env.production && chmod 600 ${remote_dir}/.env.production"
+
+      - name: Deploy images on VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER || 'clipbr' }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+          VPS_APP_DIR: ${{ vars.VPS_APP_DIR || '/srv/clipbr/app' }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_READ_TOKEN || github.token }}
+          MIGRATION_IMAGE: ${{ needs.build-images.outputs.migration_image }}
+          API_IMAGE: ${{ needs.build-images.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.build-images.outputs.web_image }}
+          MEDIA_IMAGE: ${{ needs.build-images.outputs.media_image }}
+          OBSERVE_READY_SECONDS: "60"
+        run: |
+          remote_dir="$(printf '%q' "${VPS_APP_DIR}")"
+          remote_env="/tmp/clipbr-deploy-${GITHUB_RUN_ID}.env"
+          local_env="$(mktemp)"
+          {
+            printf 'MIGRATION_IMAGE=%q\n' "${MIGRATION_IMAGE}"
+            printf 'API_IMAGE=%q\n' "${API_IMAGE}"
+            printf 'WEB_IMAGE=%q\n' "${WEB_IMAGE}"
+            printf 'MEDIA_IMAGE=%q\n' "${MEDIA_IMAGE}"
+            printf 'GHCR_USERNAME=%q\n' "${GHCR_USERNAME}"
+            printf 'GHCR_TOKEN=%q\n' "${GHCR_TOKEN}"
+            printf 'OBSERVE_READY_SECONDS=%q\n' "${OBSERVE_READY_SECONDS}"
+          } > "${local_env}"
+          scp -i ~/.ssh/id_vps -P "${VPS_SSH_PORT}" "${local_env}" "${VPS_USER}@${VPS_HOST}:${remote_env}"
+          rm -f "${local_env}"
+          ssh -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
+            "cd ${remote_dir} && set -a && . ${remote_env} && set +a && rm -f ${remote_env} && bash scripts/vps/deploy-registry.sh"
+
+      - name: Optional VPS product smoke
+        if: github.event_name == 'workflow_dispatch' && (inputs.run_product_e2e == 'true' || inputs.run_5g == 'true')
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER || 'clipbr' }}
+          VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
+          VPS_APP_DIR: ${{ vars.VPS_APP_DIR || '/srv/clipbr/app' }}
+          RUN_PRODUCT_E2E: ${{ inputs.run_product_e2e }}
+          RUN_5G: ${{ inputs.run_5g }}
+          OBSERVE_SECONDS: ${{ inputs.observe_seconds || '120' }}
+          PRODUCT_E2E_EMAIL: ${{ secrets.VPS_PRODUCT_E2E_EMAIL }}
+          PRODUCT_E2E_PASSWORD: ${{ secrets.VPS_PRODUCT_E2E_PASSWORD }}
+          PRODUCT_E2E_TURNSTILE_TOKEN: ${{ secrets.VPS_PRODUCT_E2E_TURNSTILE_TOKEN }}
+        run: |
+          remote_dir="$(printf '%q' "${VPS_APP_DIR}")"
+          remote_env="/tmp/clipbr-smoke-${GITHUB_RUN_ID}.env"
+          local_env="$(mktemp)"
+          {
+            printf 'RUN_PRODUCT_E2E=%q\n' "${RUN_PRODUCT_E2E}"
+            printf 'RUN_5G=%q\n' "${RUN_5G}"
+            printf 'OBSERVE_SECONDS=%q\n' "${OBSERVE_SECONDS}"
+            printf 'PRODUCT_E2E_EMAIL=%q\n' "${PRODUCT_E2E_EMAIL}"
+            printf 'PRODUCT_E2E_PASSWORD=%q\n' "${PRODUCT_E2E_PASSWORD}"
+            printf 'PRODUCT_E2E_TURNSTILE_TOKEN=%q\n' "${PRODUCT_E2E_TURNSTILE_TOKEN}"
+          } > "${local_env}"
+          scp -i ~/.ssh/id_vps -P "${VPS_SSH_PORT}" "${local_env}" "${VPS_USER}@${VPS_HOST}:${remote_env}"
+          rm -f "${local_env}"
+          ssh -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
+            "cd ${remote_dir} && set -a && . ${remote_env} && set +a && rm -f ${remote_env} && bash scripts/vps/smoke.sh"

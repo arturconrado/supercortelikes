@@ -1,0 +1,25 @@
+name: clipbr-vps
+
+services:
+  migrate:
+    image: ${MIGRATION_IMAGE:?MIGRATION_IMAGE is required}
+    build: null
+    entrypoint: ["/usr/bin/dumb-init", "--", "./node_modules/.bin/prisma"]
+    command: ["migrate", "deploy", "--schema=apps/api/prisma/schema.prisma"]
+
+  api:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    build: null
+
+  worker:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    build: null
+    command: [node, apps/api/dist/worker.js]
+
+  web:
+    image: ${WEB_IMAGE:?WEB_IMAGE is required}
+    build: null
+
+  media-worker:
+    image: ${MEDIA_IMAGE:?MEDIA_IMAGE is required}
+    build: null

@@ -33,6 +33,18 @@ if ! id "${APP_USER}" >/dev/null 2>&1; then
 fi
 usermod -aG docker "${APP_USER}"
 
+install -d -m 700 -o "${APP_USER}" -g "${APP_USER}" "/home/${APP_USER}/.ssh"
+if [[ -n "${DEPLOY_SSH_PUBLIC_KEY:-}" ]]; then
+  printf '%s\n' "${DEPLOY_SSH_PUBLIC_KEY}" >> "/home/${APP_USER}/.ssh/authorized_keys"
+elif [[ -f /root/.ssh/authorized_keys ]]; then
+  cp /root/.ssh/authorized_keys "/home/${APP_USER}/.ssh/authorized_keys"
+else
+  touch "/home/${APP_USER}/.ssh/authorized_keys"
+  echo "WARNING: no SSH public key found for ${APP_USER}. Set DEPLOY_SSH_PUBLIC_KEY or copy an authorized_keys file before GitHub Actions deploy." >&2
+fi
+chown "${APP_USER}:${APP_USER}" "/home/${APP_USER}/.ssh/authorized_keys"
+chmod 600 "/home/${APP_USER}/.ssh/authorized_keys"
+
 install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}/app"
 install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}/backups"
 for dir in postgres redis minio media caddy/data caddy/config; do

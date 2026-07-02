@@ -18,6 +18,8 @@ Status de entrada esperado: gate local aprovado em `reports/product-e2e-validati
 
 Esse desenho econômico é para lançamento rápido, demo comercial e primeiros clientes pequenos. Não é arquitetura enterprise/multi-região.
 
+Para operar a DigitalOcean via MCP e acionar deploy pela esteira do GitHub, use também o runbook [docs/runbooks/digitalocean-mcp-github-actions.md](/Users/arturconrado/supercortelikes/docs/runbooks/digitalocean-mcp-github-actions.md). O exemplo seguro de configuração MCP fica em [docs/runbooks/digitalocean-mcp.example.json](/Users/arturconrado/supercortelikes/docs/runbooks/digitalocean-mcp.example.json).
+
 Referências operacionais: [DigitalOcean Droplet pricing](https://www.digitalocean.com/pricing/droplets), [DigitalOcean plans](https://docs.digitalocean.com/products/droplets/concepts/choosing-a-plan/), [DigitalOcean Cloud Firewalls](https://docs.digitalocean.com/products/networking/firewalls/how-to/configure-rules/), [DigitalOcean Volumes](https://docs.digitalocean.com/products/volumes/) e [Hetzner Cloud](https://www.hetzner.com/cloud/).
 
 Na página de preços consultada em 2026-06-28, o Basic Droplet 4 vCPU / 8 GB RAM / 160 GB SSD aparece por aproximadamente US$48/mês. Hetzner costuma ser mais barato para CPU/RAM equivalentes, mas confirme o preço final na tela do provedor antes de criar o servidor.
@@ -213,6 +215,95 @@ Para migrar de MinIO local para DigitalOcean Spaces depois do primeiro lançamen
 4. troque `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` e `S3_FORCE_PATH_STYLE=false`;
 5. remova a dependência de `minio`/`minio-init` em um Compose específico para Spaces;
 6. rode `npm run vps:smoke` e `RUN_5G=true npm run vps:smoke`.
+
+## 5.1. CI/CD GitHub Actions para qualquer VPS
+
+A esteira genérica fica em `.github/workflows/vps-cicd.yml`.
+
+Ela funciona assim:
+
+1. Pull request roda o `release-gate.yml`.
+2. Push na `main` roda o gate, cria imagens `migration`, `api`, `web` e `media-worker` no GHCR e só faz deploy se `VPS_DEPLOY_ENABLED=true`.
+3. `workflow_dispatch` permite deploy manual de um SHA/tag e smoke opcional.
+4. A VPS não compila a aplicação; ela apenas recebe o repositório, baixa as imagens e executa `docker compose up --wait` com `docker-compose.vps.yml` + `docker-compose.vps.images.yml`.
+
+Isso deixa o mesmo fluxo pronto para DigitalOcean, Hetzner, OVH, Vultr, Linode ou qualquer VPS Ubuntu com Docker.
+
+Configure o environment GitHub `vps-production` para os secrets sensíveis do deploy.
+
+Secrets obrigatórios:
+
+- `VPS_HOST`: IP ou host da VPS.
+- `VPS_USER`: usuário SSH, normalmente `clipbr`.
+- `VPS_SSH_KEY`: chave privada SSH do deploy.
+
+Secrets opcionais:
+
+- `VPS_ENV_PRODUCTION_B64`: conteúdo do `.env.production` em base64. Se não configurar, o arquivo deve existir na VPS em `/srv/clipbr/app/.env.production`.
+- `GHCR_READ_TOKEN`: PAT com acesso de leitura ao GHCR, útil se as imagens estiverem privadas. Durante o workflow, o `GITHUB_TOKEN` costuma bastar para publicar/puxar imagens do mesmo repositório.
+- `VPS_PRODUCT_E2E_EMAIL`, `VPS_PRODUCT_E2E_PASSWORD`, `VPS_PRODUCT_E2E_TURNSTILE_TOKEN`: usados apenas no smoke manual pós-deploy.
+
+Vars recomendadas em nível de repositório ou organização, não apenas no environment:
+
+- `VPS_DEPLOY_ENABLED=false` inicialmente. Troque para `true` só depois do primeiro deploy manual passar.
+- `VPS_APP_DIR=/srv/clipbr/app`.
+- `VPS_USER=clipbr`.
+- `VPS_SSH_PORT=22`.
+- `VPS_PUBLIC_API_URL=https://api.DOMINIO.com`.
+- `VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY=<site-key>`.
+- `NEXT_PUBLIC_TERMS_VERSION=terms-2026-06`.
+- `NEXT_PUBLIC_PRIVACY_VERSION=privacy-2026-06`.
+- `DIGITALOCEAN_MODE=validate` para usar Droplet existente já preparado; `adopt` para usar Droplet existente e rodar bootstrap; `provision` só para criar Droplet novo.
+- `DIGITALOCEAN_DROPLET_ID=<id do Droplet existente>`, recomendado quando o Droplet já existe.
+- `DIGITALOCEAN_DROPLET_NAME=<nome do Droplet existente>`, alternativa ao ID.
+- `DIGITALOCEAN_DROPLET_REGION=nyc3`.
+- `DIGITALOCEAN_DROPLET_SIZE=s-4vcpu-8gb`.
+- `DIGITALOCEAN_SSH_KEY_IDS=<ids das SSH keys na DigitalOcean>`, obrigatório apenas quando `provision` precisar criar Droplet novo.
+- `DIGITALOCEAN_FIREWALL_NAME=<firewall existente>`, opcional; se não informar, a validação de firewall cloud é pulada.
+- `DIGITALOCEAN_DOMAIN=DOMINIO.com`, se o DNS for gerenciado pela DigitalOcean.
+- `DIGITALOCEAN_MANAGE_DNS=true`, somente se quiser que o workflow crie/atualize `@`, `api` e `storage`.
+
+Secret opcional para modo DigitalOcean:
+
+- `DIGITALOCEAN_ACCESS_TOKEN`: usado pelo GitHub Actions para validar/provisionar Droplet com `doctl`.
+
+Para Droplet existente, use:
+
+- `digitalocean_mode=validate` se o Droplet já tem Docker, Compose e usuário `clipbr` com SSH.
+- `digitalocean_mode=adopt` se o Droplet existe, mas precisa instalar Docker/criar usuário `clipbr`. Nesse modo, `VPS_SSH_KEY` precisa acessar `root` uma vez para executar `scripts/vps/provision-ubuntu.sh`.
+- `digitalocean_mode=provision` apenas se quiser criar um Droplet novo.
+
+Para gerar `VPS_ENV_PRODUCTION_B64`:
+
+```bash
+# macOS
+base64 -i .env.production | tr -d '\n'
+
+# Linux
+base64 -w0 .env.production
+```
+
+Primeiro deploy recomendado:
+
+1. Identifique o Droplet existente e configure `DIGITALOCEAN_DROPLET_ID` ou `DIGITALOCEAN_DROPLET_NAME`.
+2. Aponte DNS e aguarde propagação.
+3. Configure secrets/vars no GitHub.
+4. Rode `VPS CI/CD` manualmente com `deploy=true`, `digitalocean_mode=validate`, `run_product_e2e=false` e `run_5g=false`.
+5. Se passar, rode novamente com `run_product_e2e=true`.
+6. Rode `run_5g=true` fora de horário de pico.
+7. Só depois defina `VPS_DEPLOY_ENABLED=true`.
+
+Deploy manual equivalente, caso você queira testar direto na VPS com imagens já publicadas:
+
+```bash
+API_IMAGE=ghcr.io/ORG/REPO/api:SHA \
+MIGRATION_IMAGE=ghcr.io/ORG/REPO/migration:SHA \
+WEB_IMAGE=ghcr.io/ORG/REPO/web:SHA \
+MEDIA_IMAGE=ghcr.io/ORG/REPO/media-worker:SHA \
+npm run vps:deploy:registry
+```
+
+O deploy por registry valida `.env.production`, impede placeholders, faz login no GHCR quando `GHCR_TOKEN` estiver disponível, executa migrations, sobe containers, checa `/health/ready`, `/health/pipeline`, website público e observa restart count.
 
 ## 6. Smoke e gate na VPS
 

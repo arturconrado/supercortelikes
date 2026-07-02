@@ -2,7 +2,7 @@
 
 Esta configuração entrega o frontend na Vercel, API e fila no Render, banco no Neon e objetos privados no Cloudflare R2. O único worker Render reúne o consumidor BullMQ e o media-worker Python no mesmo container e usa `/data` como disco persistente.
 
-Se o alvo for o lançamento rápido em VPS all-in-one, use o runbook [README_VPS_DEPLOY.md](/Users/arturconrado/supercortelikes/README_VPS_DEPLOY.md). O perfil econômico padrão é 4 vCPU / 8 GB RAM com `VPS_SIZE_PROFILE=budget`; DigitalOcean continua suportado e Hetzner é a alternativa barata recomendada com `VPS_PROVIDER=hetzner`. Ele cobre `docker-compose.vps.yml`, `Caddyfile`, `.env.vps.example` e scripts de preflight, provisionamento, deploy, smoke, backup e rollback.
+Se o alvo for o lançamento rápido em VPS all-in-one, use o runbook [README_VPS_DEPLOY.md](/Users/arturconrado/supercortelikes/README_VPS_DEPLOY.md). O perfil econômico padrão é 4 vCPU / 8 GB RAM com `VPS_SIZE_PROFILE=budget`; DigitalOcean continua suportado e Hetzner é a alternativa barata recomendada com `VPS_PROVIDER=hetzner`. Ele cobre `docker-compose.vps.yml`, `Caddyfile`, `.env.vps.example`, scripts de preflight/provisionamento/deploy/smoke/backup/rollback e a esteira GitHub Actions genérica `.github/workflows/vps-cicd.yml` para deploy em qualquer VPS via SSH + GHCR.
 
 Para validação manual local em modo “produção em uma caixa só”, use o ambiente all-in-one:
 

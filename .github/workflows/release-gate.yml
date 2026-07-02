@@ -160,10 +160,59 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/vps/provision-ubuntu.sh
+          bash -n scripts/vps/deploy-registry.sh
+          bash -n scripts/vps/digitalocean-provision.sh
+          bash -n scripts/vps/digitalocean-validate.sh
       - name: Validate local Compose profiles
         run: |
           docker compose -f docker-compose.local.yml --profile local-lite config --quiet
           docker compose -f docker-compose.local.yml --profile local-full config --quiet
+      - name: Validate VPS Compose manifests
+        env:
+          APP_DOMAIN: example.com
+          CADDY_EMAIL: admin@example.com
+          PUBLIC_APP_URL: https://example.com
+          PUBLIC_API_URL: https://api.example.com
+          CORS_ORIGIN: https://example.com
+          CORS_ORIGINS: https://example.com
+          S3_PUBLIC_ENDPOINT: https://storage.example.com
+          S3_CORS_ALLOWED_ORIGINS_JSON: '["https://example.com"]'
+          POSTGRES_DB: clipbr
+          POSTGRES_USER: clipbr
+          POSTGRES_PASSWORD: postgres_password
+          REDIS_PASSWORD: redis_password
+          S3_BUCKET: clipbr-videos
+          S3_ACCESS_KEY_ID: minio_access
+          S3_SECRET_ACCESS_KEY: minio_secret
+          JWT_SECRET: jwt_secret_123456789012345678901234567890123456789012345678
+          REFRESH_TOKEN_SECRET: refresh_secret_1234567890123456789012345678901234567890
+          MEDIA_WORKER_TOKEN: media_secret_1234567890123456789012345678901234567890
+          MERCADO_PAGO_ACCESS_TOKEN: mp_access_token
+          MERCADO_PAGO_WEBHOOK_SECRET: mp_webhook_secret_123456
+          RESEND_API_KEY: resend_key
+          EMAIL_FROM: noreply@example.com
+          TURNSTILE_SECRET_KEY: turnstile_secret
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: turnstile_site
+          MIGRATION_IMAGE: ghcr.io/example/clipbr-migration:test
+          API_IMAGE: ghcr.io/example/clipbr-api:test
+          WEB_IMAGE: ghcr.io/example/clipbr-web:test
+          MEDIA_IMAGE: ghcr.io/example/clipbr-media-worker:test
+        run: |
+          docker compose -f docker-compose.vps.yml config --quiet
+          docker compose -f docker-compose.vps.yml -f docker-compose.vps.images.yml config --quiet
+      - name: Validate VPS shell scripts
+        run: |
+          bash -n scripts/vps/provision-ubuntu.sh
+          bash -n scripts/vps/deploy.sh
+          bash -n scripts/vps/deploy-registry.sh
+          bash -n scripts/vps/digitalocean-provision.sh
+          bash -n scripts/vps/digitalocean-validate.sh
+          bash -n scripts/vps/smoke.sh
+          bash -n scripts/vps/backup.sh
+          bash -n scripts/vps/rollback.sh
       - name: Validate external release Compose
         env:
           DATABASE_URL: postgresql://demo:demo@db.example.com/demo
