@@ -43,6 +43,9 @@ class Settings:
     llm_api_key: str
     llm_model: str
     llm_timeout_seconds: int
+    ytdlp_cookies_file: str
+    ytdlp_proxy: str
+    ytdlp_user_agent: str
     max_concurrent_jobs: int
     log_level: str
 
@@ -96,6 +99,9 @@ class Settings:
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
             llm_timeout_seconds=max(5, int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))),
+            ytdlp_cookies_file=os.getenv("YTDLP_COOKIES_FILE", "").strip(),
+            ytdlp_proxy=os.getenv("YTDLP_PROXY", "").strip(),
+            ytdlp_user_agent=os.getenv("YTDLP_USER_AGENT", "").strip(),
             max_concurrent_jobs=max(1, int(os.getenv("MEDIA_MAX_CONCURRENT_JOBS", "1"))),
             log_level=os.getenv("LOG_LEVEL", "info").lower(),
         )
@@ -124,5 +130,7 @@ class Settings:
             missing.append("LLM_API_KEY")
         if self.diarization_enabled and not self.hf_token:
             missing.append("HF_TOKEN")
+        if self.ytdlp_cookies_file and not Path(self.ytdlp_cookies_file).expanduser().is_file():
+            missing.append("YTDLP_COOKIES_FILE")
         if missing:
             raise RuntimeError("Missing required worker configuration: %s" % ", ".join(missing))

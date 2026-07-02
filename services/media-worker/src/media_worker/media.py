@@ -28,6 +28,15 @@ YOUTUBE_FORMAT_SELECTOR = (
     "b[ext=mp4]/"
     "bestvideo*+bestaudio/best"
 )
+YOUTUBE_AUTH_FAILURE_MARKERS = (
+    "sign in to confirm",
+    "not a bot",
+    "use --cookies",
+    "cookies-from-browser",
+    "login required",
+    "private video",
+    "confirm your age",
+)
 
 
 def materialize_source(uri: str, target_dir: Path, settings: Settings) -> Path:
@@ -139,12 +148,13 @@ def _download_with_ytdlp(uri: str, target_dir: Path, settings: Settings) -> Path
         'quiet': True,
         'no_warnings': True,
     }
+    _configure_ytdlp_runtime(options, settings)
     try:
         with yt_dlp.YoutubeDL(options) as downloader:
             info = downloader.extract_info(uri, download=True)
             _write_source_metadata(info, target_dir)
     except Exception as error:
-        raise WorkerError('URL_IMPORT_FAILED', 'Unable to import the remote video', status_code=502) from error
+        raise _ytdlp_worker_error(uri, error, settings) from error
     downloaded = _downloaded_sources(target_dir)
     if not downloaded:
         raise WorkerError('URL_IMPORT_EMPTY', 'URL import produced no media file', status_code=502)
@@ -153,6 +163,49 @@ def _download_with_ytdlp(uri: str, target_dir: Path, settings: Settings) -> Path
         result.unlink(missing_ok=True)
         raise WorkerError('SOURCE_TOO_LARGE', 'YouTube video exceeds configured size limit', status_code=413)
     return result
+
+
+def _configure_ytdlp_runtime(options: Dict[str, Any], settings: Settings) -> None:
+    if settings.ytdlp_cookies_file:
+        options["cookiefile"] = settings.ytdlp_cookies_file
+    if settings.ytdlp_proxy:
+        options["proxy"] = settings.ytdlp_proxy
+    if settings.ytdlp_user_agent:
+        options["http_headers"] = {"User-Agent": settings.ytdlp_user_agent}
+
+
+def _ytdlp_worker_error(uri: str, error: Exception, settings: Settings) -> WorkerError:
+    text = str(error)
+    lower = text.lower()
+    host = (urllib.parse.urlparse(uri).hostname or "").lower()
+    is_youtube = host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+    if is_youtube and any(marker in lower for marker in YOUTUBE_AUTH_FAILURE_MARKERS):
+        if settings.ytdlp_cookies_file:
+            message = (
+                "O YouTube recusou a importação automática deste link. "
+                "Atualize os cookies do importador na VPS ou envie o arquivo manualmente."
+            )
+        else:
+            message = (
+                "O YouTube bloqueou a importação automática deste link. "
+                "Envie o arquivo manualmente ou configure cookies do YouTube no importador."
+            )
+        return WorkerError(
+            "URL_IMPORT_AUTH_REQUIRED",
+            message,
+            status_code=502,
+            detail={
+                "provider": "youtube",
+                "cookiesConfigured": bool(settings.ytdlp_cookies_file),
+                "reason": "provider_auth_or_bot_check",
+            },
+        )
+    return WorkerError(
+        "URL_IMPORT_FAILED",
+        "Não foi possível importar este link. Tente outro link público ou envie o arquivo manualmente.",
+        status_code=502,
+        detail={"provider": host or "unknown", "reason": "download_failed"},
+    )
 
 
 def _downloaded_sources(target_dir: Path) -> list[Path]:

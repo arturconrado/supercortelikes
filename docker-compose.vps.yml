@@ -90,6 +90,9 @@ x-worker-environment: &worker-environment
   LLM_API_KEY: ${LLM_API_KEY:-}
   LLM_MODEL: ${LLM_MODEL:-openai/gpt-4o-mini}
   LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
+  YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
+  YTDLP_PROXY: ${YTDLP_PROXY:-}
+  YTDLP_USER_AGENT: ${YTDLP_USER_AGENT:-}
   AI_REQUIRED: "true"
   RETAIN_SOURCE_DOWNLOADS: "false"
   ENABLE_AI: "true"

@@ -71,9 +71,9 @@ mkdir -p \
 # files created by older containers/root, so never let a best-effort permission
 # repair on cache files abort the deploy. Runtime readiness validates the
 # writable paths after the containers are started.
-mkdir -p "${VPS_DATA_DIR}/media/pipelines" "${VPS_DATA_DIR}/media/models"
+mkdir -p "${VPS_DATA_DIR}/media/pipelines" "${VPS_DATA_DIR}/media/models" "${VPS_DATA_DIR}/media/cookies"
 if ! chown -R 10001:10001 "${VPS_DATA_DIR}/media" 2>/dev/null; then
-  chmod a+rwX "${VPS_DATA_DIR}/media" "${VPS_DATA_DIR}/media/models" 2>/dev/null || true
+  chmod a+rwX "${VPS_DATA_DIR}/media" "${VPS_DATA_DIR}/media/models" "${VPS_DATA_DIR}/media/cookies" 2>/dev/null || true
   chmod -R a+rwX "${VPS_DATA_DIR}/media/pipelines" 2>/dev/null || true
   find "${VPS_DATA_DIR}/media" -maxdepth 2 -type d -exec chmod a+rwX {} + 2>/dev/null || true
 fi

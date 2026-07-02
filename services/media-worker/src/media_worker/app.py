@@ -91,6 +91,8 @@ async def readiness() -> JSONResponse:
         required.append("yolo")
     if settings.diarization_enabled:
         required.append("huggingFaceToken")
+    if settings.ytdlp_cookies_file:
+        required.append("ytdlpCookiesFile")
     required_ready = all(bool(dependencies.get(name)) for name in required)
     return JSONResponse(
         status_code=200 if required_ready else 503,
@@ -113,7 +115,17 @@ def _readiness_dependencies() -> Dict[str, bool]:
         "storage": _storage_ready(),
         "redis": _redis_ready(),
         "huggingFaceToken": bool(settings.hf_token),
+        "ytdlpCookiesFile": _configured_file_readable(settings.ytdlp_cookies_file),
     }
+
+
+def _configured_file_readable(path: str) -> bool:
+    if not path:
+        return True
+    try:
+        return os.path.isfile(path) and os.access(path, os.R_OK)
+    except BaseException:
+        return False
 
 
 def _path_writable(path: Any) -> bool:

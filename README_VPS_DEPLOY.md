@@ -486,6 +486,39 @@ Inspecionar filas:
 curl -fsS https://api.DOMINIO.com/health/pipeline | jq
 ```
 
+### Importação YouTube/URL
+
+Em VPS de datacenter, o YouTube pode bloquear `yt-dlp` com desafio anti-bot. O sintoma no pipeline é:
+
+```text
+URL_IMPORT_AUTH_REQUIRED
+O YouTube bloqueou a importação automática deste link.
+```
+
+Para habilitar importação YouTube com cookies:
+
+1. Exporte um arquivo `cookies.txt` em formato Netscape a partir de uma conta/navegador autorizado.
+2. Copie o arquivo para a VPS sem commitar no Git:
+
+   ```bash
+   scp youtube-cookies.txt clipbr@DOMINIO_OU_IP:/srv/clipbr/data/media/cookies/youtube.txt
+   ssh clipbr@DOMINIO_OU_IP 'chmod 600 /srv/clipbr/data/media/cookies/youtube.txt'
+   ```
+
+3. Configure no `.env.production`:
+
+   ```env
+   YTDLP_COOKIES_FILE=/data/cookies/youtube.txt
+   ```
+
+4. Recrie o media-worker:
+
+   ```bash
+   docker compose --env-file .env.production -f docker-compose.vps.yml -f docker-compose.vps.images.yml -p clipbr-vps up -d --wait media-worker worker
+   ```
+
+Se os cookies expirarem, o worker volta a informar que o YouTube recusou a importação e será necessário atualizar o arquivo. Para links bloqueados, a alternativa operacional é orientar o usuário a enviar o arquivo de vídeo diretamente.
+
 ## 10. Go-live comercial
 
 Só declarar lançamento comercial quando:

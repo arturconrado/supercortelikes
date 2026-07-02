@@ -107,6 +107,73 @@ def test_youtube_download_configures_deno_runtime(tmp_path, monkeypatch):
     assert (tmp_path / "source.metadata.json").read_text(encoding="utf-8")
 
 
+def test_youtube_download_uses_optional_cookies_proxy_and_user_agent(tmp_path, monkeypatch):
+    cookies = tmp_path / "youtube-cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+    class YoutubeDL:
+        options = {}
+
+        def __init__(self, options):
+            YoutubeDL.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, _uri, download):
+            assert download is True
+            (tmp_path / "source.mp4").write_bytes(b"video")
+            return {"id": "VYDE529RzNk"}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=YoutubeDL))
+
+    _download_youtube(
+        "https://www.youtube.com/watch?v=VYDE529RzNk",
+        tmp_path,
+        configured_settings(
+            ytdlp_cookies_file=str(cookies),
+            ytdlp_proxy="http://proxy.example:8080",
+            ytdlp_user_agent="PicaShortsImport/1.0",
+        ),
+    )
+
+    assert YoutubeDL.options["cookiefile"] == str(cookies)
+    assert YoutubeDL.options["proxy"] == "http://proxy.example:8080"
+    assert YoutubeDL.options["http_headers"] == {"User-Agent": "PicaShortsImport/1.0"}
+
+
+def test_youtube_auth_failure_is_actionable(tmp_path, monkeypatch):
+    class YoutubeDL:
+        def __init__(self, _options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, _uri, download):
+            assert download is True
+            raise RuntimeError("Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=YoutubeDL))
+
+    with pytest.raises(WorkerError) as error:
+        _download_youtube("https://www.youtube.com/watch?v=VYDE529RzNk", tmp_path, configured_settings())
+
+    assert error.value.code == "URL_IMPORT_AUTH_REQUIRED"
+    assert "YouTube bloqueou" in str(error.value)
+    assert error.value.detail == {
+        "provider": "youtube",
+        "cookiesConfigured": False,
+        "reason": "provider_auth_or_bot_check",
+    }
+
+
 def test_materialize_source_http_paths(tmp_path, monkeypatch):
     settings = configured_settings()
     monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response([b"abc", b"def"]))
