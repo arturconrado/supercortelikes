@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG DENO_VERSION=2.3.0
 ARG TARGETARCH
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg libglib2.0-0 libgl1 unzip \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg libglib2.0-0 libgl1 patchelf unzip \
     && case "$TARGETARCH" in \
       amd64) DENO_ARCH="x86_64" ;; \
       arm64) DENO_ARCH="aarch64" ;; \
@@ -36,6 +36,7 @@ RUN pip install -r requirements.txt \
 
 FROM system AS ai-dependencies
 RUN pip install -r requirements-ai.txt \
+    && find /usr/local/lib/python3.11/site-packages -name 'libctranslate2*.so*' -print -exec patchelf --clear-execstack {} \; \
     && python -c "import yt_dlp, whisperx, cv2, mediapipe, ultralytics; print('ai-imports-ok')"
 
 FROM lite-dependencies AS lite

@@ -34,7 +34,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_MAX_CONCURRENT_JOBS=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends dumb-init ffmpeg libglib2.0-0 libgl1 ca-certificates openssl \
+    && apt-get install -y --no-install-recommends dumb-init ffmpeg libglib2.0-0 libgl1 ca-certificates openssl patchelf \
     && ffmpeg -version >/dev/null \
     && ffprobe -version >/dev/null \
     && rm -rf /var/lib/apt/lists/*
@@ -42,6 +42,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY services/media-worker/requirements.txt services/media-worker/requirements-ai.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements-ai.txt \
+    && find /usr/local/lib/python3.11/site-packages -name 'libctranslate2*.so*' -print -exec patchelf --clear-execstack {} \; \
     && python -c "import whisperx,cv2,mediapipe,ultralytics,redis; print('bundle-ai-imports-ok')"
 
 COPY services/media-worker/pyproject.toml ./
