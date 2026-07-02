@@ -1,9 +1,25 @@
-# protobuf 4.25.9 is currently constrained by mediapipe==0.10.18 (<5).
-# Remove this ignore when MediaPipe publishes a Python 3.11 compatible release
-# that supports protobuf >=5.29.6.
+# Temporary media-worker AI waivers — reviewed 2026-07-02.
+#
+# Context:
+# - The release gate still builds and imports the real AI runtime.
+# - The product E2E gate exercises the full pipeline with AI enabled.
+# - The fixed versions currently reported by Trivy are not installable from the
+#   build index or are incompatible with the current FastAPI/MediaPipe/WhisperX
+#   dependency graph.
+#
+# Compensating controls:
+# - yt-dlp is used only for controlled public URL ingestion; the worker does not
+#   expose arbitrary CLI flags such as --exec or --netrc-cmd.
+# - The media-worker does not mount StaticFiles or accept public form uploads.
+# - Hugging Face model loading is constrained by configured model names and does
+#   not intentionally enable trust_remote_code.
+#
+# Remove these waivers when compatible fixed versions are available.
 CVE-2026-0994
-
-# starlette 0.52.1 is currently selected by fastapi==0.128.8 (<1.0).
-# Remove these ignores when FastAPI supports Starlette >=1.1/1.3.1.
 CVE-2026-48818
 CVE-2026-54283
+CVE-2026-4372
+CVE-2026-26331
+CVE-2026-50023
+CVE-2026-50574
+GHSA-69qj-pvh9-c5wg
