@@ -1,95 +1,66 @@
-# Validação E2E de Produção — Picashorts / ClipBR
+# Validação de Produção — PicaShorts
 
 Data: 2026-07-02  
-Ambiente: produção VPS DigitalOcean  
+Ambiente: VPS DigitalOcean all-in-one  
 Web: https://picashorts.com  
 API: https://api.picashorts.com  
 Storage: https://storage.picashorts.com  
-Build em produção: `00a590af2adae4fa8d9a1256d9ae0e87643e84f3`
+Build em produção validada: `5c15c79d46d5264f514e4893693795c48d1ef2af`  
+GitHub Actions deploy: https://github.com/arturconrado/supercortelikes/actions/runs/28618482512
 
 ## Resultado executivo
 
-Status inicial: ❌ PRODUÇÃO NÃO APROVADA PARA LANÇAMENTO COMERCIAL
+Status operacional: ⚠️ PRODUÇÃO PARCIALMENTE VALIDADA, MAS AINDA NÃO APROVADA COMO ESTÁVEL/GA.
 
-Atualização pós-hotfix, 2026-07-02:
+O deploy novo foi publicado com sucesso, o produto está acessível na web, a marca pública já aparece como PicaShorts, DNS/TLS estão funcionando, API/storage respondem e o fluxo principal por upload direto passou de ponta a ponta em produção:
 
-Status operacional do fluxo principal: ✅ PASS em produção para upload → processamento → transcript → segmentos → score → cortes → legendas → render → export → download.
+`register/login → projeto → upload multipart → fila → transcrição → segmentos → score → clips → legendas → render → export → download assinado`.
 
-Status de lançamento comercial/GA: ⚠️ AINDA NÃO DECLARAR GA. Faltam deploy do rebranding PicaShorts, teste browser após deploy, `ffprobe` externo/local instalado no runner do gate, limpeza dos contadores BullMQ antigos e soak/observação.
-
-A aplicação está exposta publicamente, TLS está funcionando, API está respondendo, storage está acessível via domínio público e os containers principais estão sem restart. Porém o fluxo principal do produto falha em produção: upload direto funciona, mas o pipeline de processamento quebra no estágio `INGESTION` e abre DLQ.
-
-Bloqueador raiz identificado:
+Porém há um bloqueador real remanescente: `/health/pipeline` está `degraded` porque existe 1 DLQ aberta em ingestão de URL/YouTube. A causa capturada nos logs é bloqueio anti-bot do YouTube pelo `yt-dlp`:
 
 ```text
-PermissionError: [Errno 13] Permission denied: '/data/pipelines'
+ERROR: [youtube] qHlquy4-YEs: Sign in to confirm you’re not a bot.
 ```
 
-O container `media-worker` roda como usuário `worker` (`uid=10001`), mas o volume bindado em `/data` está montado a partir de `/srv/clipbr/data/media` com ownership `1000:1000`. Com isso, o worker não consegue criar diretórios de pipeline.
-
-Hotfix aplicado na VPS:
-
-```text
-mkdir -p /srv/clipbr/data/media/pipelines /srv/clipbr/data/media/models
-chmod -R a+rwX /srv/clipbr/data/media
-docker restart clipbr-vps-media-worker-1 clipbr-vps-worker-1
-```
-
-Validação após hotfix:
-
-```text
-media-volume-write-ok
-clipbr-vps-media-worker-1 health=healthy
-clipbr-vps-worker-1 health=healthy
-```
-
-As 6 DLQs abertas eram de contas/arquivos de teste desta validação e foram marcadas como `DISCARDED`, sem apagar registros, para restaurar `deadLettersOpen=0`.
+Enquanto houver DLQ aberta, o produto não deve ser declarado “produção estável” para todos os fluxos. O fluxo de upload direto está OK; o fluxo de import por YouTube/URL precisa correção operacional/produto.
 
 ## O que passou
 
 | Área | Resultado |
 |---|---:|
+| Deploy GitHub Actions → VPS | PASS |
 | DNS `picashorts.com` | PASS |
 | DNS `api.picashorts.com` | PASS |
 | DNS `storage.picashorts.com` | PASS |
-| TLS/HTTPS | PASS |
+| TLS/HTTPS via Caddy | PASS |
+| Branding público PicaShorts | PASS |
 | API `/health/ready` | PASS |
 | Storage `/minio/health/live` | PASS |
 | Containers principais running | PASS |
-| Restart count dos containers | PASS, `0` |
-| Registro via API com aceite legal | PASS |
-| Login via API | PASS |
-| Criação de projeto via API | PASS |
+| Restart count pós-deploy | PASS, `0` |
+| Registro/login via API | PASS |
+| Criação de projeto | PASS |
 | Upload multipart direto | PASS |
 | Confirmação de upload | PASS |
-| Pipeline completo pós-hotfix | PASS |
-| Transcript/segmentos/score pós-hotfix | PASS |
-| Clips/captions/render/export/download pós-hotfix | PASS |
-| UI autenticada: dashboard/upload/library/projects/exports/analytics/billing/settings | PASS com achados |
-| Criação de projeto via UI | PASS |
+| Worker consumindo fila | PASS |
+| Pipeline por upload direto | PASS |
+| Transcript/segmentos/score | PASS |
+| Clips/captions/render/export/download | PASS |
+| `ffprobe` do MP4 final via container | PASS, H.264 1080×1920 |
+| Browser smoke autenticado | PASS |
+| Páginas públicas legais | PASS |
 
-## O que falhou
+## O que falhou / pendências críticas
 
 | Área | Resultado |
 |---|---:|
-| Pipeline de processamento inicial | FAIL antes do hotfix |
-| Geração de transcript inicial | FAIL antes do hotfix |
-| Segmentos/viral score inicial | FAIL antes do hotfix |
-| Criação de cortes inicial | FAIL antes do hotfix |
-| Render/export/download final inicial | FAIL antes do hotfix |
-| DLQ aberta inicial | FAIL antes do hotfix, depois `deadLettersOpen=0` |
-| `/health/pipeline` com DLQ aberta | FAIL lógico na build atual; correção implementada no repo, pendente deploy |
-| Páginas públicas `/terms`, `/privacy`, `/refunds` | FAIL: redirecionam para login |
-| Cadastro via browser/headless | FAIL/blocked: Turnstile mantém botão desabilitado |
-| Import de URL inválida | FAIL UX/contrato: aceita `example.com` e redireciona para tela de processamento |
-| LLM em produção | FAIL/config: `ENABLE_AI=true`, mas `LLM_PROVIDER=none` |
-
-| Validação pendente | Resultado |
-|---|---:|
-| Branding PicaShorts na produção | Pendente deploy |
-| Browser E2E pós-deploy PicaShorts | Pendente |
-| `ffprobe` do MP4 final no runner local | Pendente instalar binário ou validar via container |
-| Soak 10 min/24h | Pendente |
+| `/health/pipeline` final | FAIL/DEGRADED |
+| DLQ aberta | FAIL, `deadLettersOpen=1` |
+| Import YouTube/URL em produção | FAIL para `https://www.youtube.com/watch?v=qHlquy4-YEs` |
+| LLM real em produção | Pendente, `LLM_PROVIDER=none` |
+| E-mail verificado | Pendente, `EMAIL_VERIFICATION_REQUIRED=false` |
+| Turnstile | Pendente, `TURNSTILE_REQUIRED=false` |
+| Soak 24h | Pendente |
 
 ## Evidências de infraestrutura
 
@@ -106,7 +77,7 @@ storage.picashorts.com  162.243.114.141
 ```json
 {
   "status": "ok",
-  "build": "00a590af2adae4fa8d9a1256d9ae0e87643e84f3",
+  "build": "5c15c79d46d5264f514e4893693795c48d1ef2af",
   "database": "up",
   "redis": "up",
   "storage": "up",
@@ -118,184 +89,98 @@ storage.picashorts.com  162.243.114.141
 
 ### Health do pipeline
 
-Snapshot final:
+Snapshot pós-E2E:
 
 ```json
 {
-  "status": "ok",
-  "deadLettersOpen": 6,
+  "status": "degraded",
   "outbox": {
     "relay": "up",
     "unpublished": 0,
     "oldestAgeMs": 0
   },
+  "deadLettersOpen": 1,
   "queues": {
     "ingestion": {
       "workers": 1,
-      "failed": 6
+      "waiting": 0,
+      "active": 0,
+      "failed": 8,
+      "paused": false
     },
     "dead-letter": {
-      "waiting": 6
+      "waiting": 8,
+      "active": 0
     }
   }
 }
 ```
 
-Achado: `status` não deveria ser `ok` com `deadLettersOpen > 0` em produção.
-
-Snapshot pós-hotfix:
-
-```json
-{
-  "status": "ok",
-  "deadLettersOpen": 0,
-  "outbox": {
-    "relay": "up",
-    "unpublished": 0,
-    "oldestAgeMs": 0
-  }
-}
-```
-
-Observação: os contadores internos BullMQ ainda mostram histórico antigo `ingestion.failed=6` e `dead-letter.waiting=6`. Eles não são DLQ aberta no banco, mas devem ser limpos para evitar ruído operacional.
+Observação: os contadores BullMQ ainda carregam histórico de falhas antigas (`failed=8`, `dead-letter.waiting=8`). O critério operacional mais importante é `deadLettersOpen`; ele está em `1` e precisa ser tratado.
 
 ### Containers
 
 ```text
-clipbr-vps-worker-1         Up 24 minutes (healthy)
-clipbr-vps-web-1            Up 24 minutes (healthy)
-clipbr-vps-api-1            Up 24 minutes (healthy)
-clipbr-vps-media-worker-1   Up 24 minutes (healthy)
-clipbr-vps-caddy-1          Up About an hour
-clipbr-vps-postgres-1       Up About an hour (healthy)
-clipbr-vps-redis-1          Up About an hour (healthy)
-clipbr-vps-minio-1          Up About an hour (healthy)
+clipbr-vps-worker-1         Up About a minute (healthy)
+clipbr-vps-web-1            Up About a minute (healthy)
+clipbr-vps-api-1            Up About a minute (healthy)
+clipbr-vps-media-worker-1   Up 2 minutes (healthy)
+clipbr-vps-caddy-1          Up 3 hours
+clipbr-vps-postgres-1       Up 3 hours (healthy)
+clipbr-vps-redis-1          Up 3 hours (healthy)
+clipbr-vps-minio-1          Up 3 hours (healthy)
 ```
 
-Restart count: `0` para todos os containers verificados.
+Restart count pós-deploy: `0` para todos os containers verificados.
 
 ### Recursos da VPS
 
 ```text
-RAM: 7.8 GiB total, 6.2 GiB available
-Swap: 8.0 GiB
-Disco /: 154G total, 25G usado, 130G livre, 17%
+Disco /: 154G total, 34G usado, 121G livre, 22%
+RAM: 7.8Gi total, 6.1Gi available
+Swap: 8.0Gi total, ~0 usado
 ```
 
-Durante o teste, `media-worker` ficou por volta de `51% CPU` e `565 MiB RAM`.
-
-Snapshot de infra pós-hotfix:
+Snapshot `docker stats --no-stream`:
 
 ```text
-clipbr-vps-api-1 restart=0 status=running health=healthy
-clipbr-vps-web-1 restart=0 status=running health=healthy
-clipbr-vps-media-worker-1 restart=0 status=running health=healthy
-clipbr-vps-worker-1 restart=0 status=running health=healthy
-clipbr-vps-postgres-1 restart=0 status=running health=healthy
-clipbr-vps-redis-1 restart=0 status=running health=healthy
-clipbr-vps-minio-1 restart=0 status=running health=healthy
-
-Disco: 154G total, 28G usado, 127G livre, 18%
-Memória: 7.8Gi total, 5.7Gi available
-Portas públicas: 22, 80, 443
-Postgres: 127.0.0.1:55432
+worker        66 MiB
+web           42 MiB
+api           86 MiB
+media-worker 789 MiB
+caddy         77 MiB
+postgres      76 MiB
+redis         11 MiB
+minio        110 MiB
 ```
-
-### Configuração runtime sanitizada
-
-Snapshot sanitizado do `.env.production` na VPS:
-
-```text
-PUBLIC_APP_URL=https://picashorts.com
-PUBLIC_API_URL=https://api.picashorts.com
-CORS_ORIGIN=https://picashorts.com
-UPLOAD_MODE=direct
-ENABLE_AI=true
-LLM_PROVIDER=none
-EMAIL_VERIFICATION_REQUIRED=false
-TURNSTILE_REQUIRED=false
-```
-
-Achados:
-
-- A produção está com IA de pipeline habilitada, mas sem provider LLM ativo; scoring/títulos/SEO não usam OpenRouter hoje.
-- A UI exibe Turnstile e bloqueia o botão de cadastro quando o token não existe, mas o backend está com `TURNSTILE_REQUIRED=false`.
-- E-mail verificado não é exigido em produção neste snapshot.
 
 ### Portas expostas
 
 ```text
-0.0.0.0:22
-0.0.0.0:80
-0.0.0.0:443
-127.0.0.1:55432
+Públicas: 22, 80, 443
+Postgres: 127.0.0.1:55432
+Redis: interno
+MinIO: interno, exposto somente via Caddy em https://storage.picashorts.com
 ```
 
-Postgres, Redis e MinIO não aparecem expostos publicamente por porta direta. O storage público passa pelo Caddy em HTTPS.
-
-## E2E real de API
-
-Arquivo bruto: `/tmp/clipbr-prod-api-e2e.json`
-
-Fluxo executado:
-
-1. `GET /health/ready`
-2. `GET /health/pipeline`
-3. `POST /auth/register` sem aceite legal, esperado `400`
-4. `POST /auth/register` com aceite legal, esperado `201`
-5. `POST /auth/login`
-6. `GET /auth/me`
-7. `GET /billing/plans`
-8. `GET /usage/current`
-9. `POST /projects`
-10. Geração de vídeo MP4 com fala sintética via `ffmpeg` do `media-worker`
-11. `POST /videos/presigned-upload`
-12. `POST /videos/:id/upload-parts`
-13. `PUT` direto para storage assinado
-14. `POST /videos/confirm-upload`
-15. Poll de `GET /videos/:id/pipeline`
-16. Poll de `GET /videos/:id`
-17. Poll de `GET /videos/:id/clips`
-
-Resultado:
+### Configuração runtime sanitizada
 
 ```text
-Upload multipart: PASS
-Confirmação: PASS
-Pipeline inicial: FAIL em INGESTION
-Tentativas: 5
-DLQ: OPEN
+APP_ENV=production
+NODE_ENV=production
+UPLOAD_MODE=direct
+ENABLE_AI=true
+LLM_PROVIDER=none
+LLM_MODEL=openai/gpt-4o-mini
+EMAIL_VERIFICATION_REQUIRED=false
+TURNSTILE_REQUIRED=false
+S3_PUBLIC_ENDPOINT=https://storage.picashorts.com
+CORS_ORIGIN=https://picashorts.com
 ```
 
-Erro persistido:
+## E2E real de produto
 
-```text
-PIPELINE_STAGE_FAILED
-Unexpected token 'I', "Internal S"... is not valid JSON
-```
-
-Causa raiz reproduzida diretamente dentro do container:
-
-```text
-PermissionError: [Errno 13] Permission denied: '/data/pipelines'
-```
-
-Detalhe técnico:
-
-```text
-container media-worker:
-uid=10001(worker) gid=10001(worker)
-
-/data:
-drwxr-xr-x 2 1000 1000 ...
-
-host:
-/srv/clipbr/data/media owned by clipbr:clipbr
-```
-
-### Reexecução pós-hotfix
-
-Arquivo bruto: `/tmp/picashorts-product-e2e-prod-final.json`
+Arquivo bruto local: `/tmp/picashorts-product-e2e-prod-latest.log`
 
 Resultado:
 
@@ -303,300 +188,246 @@ Resultado:
 {
   "status": "PASS",
   "suite": "product-e2e-ga-v1",
-  "videoId": "c079b99a-a1fa-468c-bc86-be3d22a8f54d",
-  "pipelineRunId": "9aa5aac5-4387-4abb-8cd7-e6decfd93d9a",
-  "stages": [
-    { "stage": "INGESTION", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "TRANSCRIPTION", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "SEGMENTATION", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "SCORING", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "CLIPS", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "CAPTIONS", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "RENDERING", "status": "SUCCEEDED", "attempts": 1 },
-    { "stage": "EXPORTS", "status": "SUCCEEDED", "attempts": 1 }
-  ],
-  "downloadStatus": 200,
-  "deadLettersOpen": 0
+  "apiUrl": "https://api.picashorts.com",
+  "account": "product-e2e-d1f53369@clipbr.test",
+  "workspaceId": "2798bdb3-b3f2-48ec-972c-43abdb5a9fc5",
+  "projectId": "c05df083-1383-4a99-9ee0-d063aa4a061d",
+  "videoId": "3fc965b3-3b02-40fa-b8c2-d99ac08a7078",
+  "pipelineRunId": "31e081a6-bc67-47aa-b14f-4e41dd06c11a",
+  "uploadParts": 1,
+  "clips": 1,
+  "downloadStatus": 200
 }
 ```
 
-Observação: `ffprobe` foi pulado na reexecução final porque o binário não está instalado no runner local atual. Na primeira tentativa pós-hotfix, o download/export ocorreu, mas o script falhou localmente em `spawnSync ffprobe ENOENT`.
+Estágios:
 
-## E2E browser/UI
+```text
+INGESTION     SUCCEEDED attempts=1
+TRANSCRIPTION SUCCEEDED attempts=1
+SEGMENTATION  SUCCEEDED attempts=1
+SCORING       SUCCEEDED attempts=1
+CLIPS         SUCCEEDED attempts=1
+CAPTIONS      SUCCEEDED attempts=1
+RENDERING     SUCCEEDED attempts=1
+EXPORTS       SUCCEEDED attempts=1
+```
 
-Arquivos brutos:
+Uso medido:
 
-- `/tmp/clipbr-browser-e2e/report.json`
-- `/tmp/clipbr-browser-e2e/authenticated-report.json`
-- Screenshots: `/tmp/clipbr-browser-e2e/*.png`
-- `/tmp/clipbr-prod-browser-report-latest.json`
-- `/tmp/clipbr-prod-auth-browser-report-latest.json`
-- Screenshots: `/tmp/clipbr-prod-browser-mr3tihp2-*.png`
-- Screenshots autenticados: `/tmp/clipbr-prod-auth-browser-mr3tqjnc-*.png`
+```text
+usageBefore.remaining = 60
+usageAfter.minutes    = 0.06
+usageAfter.remaining  = 59.94
+```
 
-### Páginas públicas
+Billing write foi propositalmente pulado:
 
-| Página | Resultado |
-|---|---:|
-| `/` | Redireciona para `/dashboard` e depois login |
-| `/terms` | Redireciona para login |
-| `/privacy` | Redireciona para login |
-| `/refunds` | Redireciona para login |
-| `/login?next=%2Fdashboard` | PASS |
-| `/register` | Renderiza |
+```text
+PRODUCT_E2E_ENABLE_BILLING_WRITE=false
+```
 
-Achado: termos, privacidade e reembolso devem ser públicos para operação comercial.
+## Validação do MP4 exportado
 
-### Login/cadastro
-
-- Login inválido mostra feedback de erro.
-- Cadastro mostra critérios de senha:
-  - 12 caracteres ou mais;
-  - letra minúscula;
-  - letra maiúscula;
-  - número.
-- Botão `Criar conta` permanece desabilitado com dados inválidos.
-- Cadastro válido via browser/headless ficou bloqueado porque o Turnstile não liberou token no teste.
-- Cadastro via API continua aceitando registro sem `turnstileToken`, o que parece inconsistente com a UI e com a premissa `TURNSTILE_REQUIRED=true`.
-- Na rodada browser final, o campo oculto `cf-turnstile-response` permaneceu vazio mesmo após nome/e-mail/senha forte/aceite preenchidos.
-- O request do Turnstile falhou com `400` e console `Cloudflare Turnstile Error: 400020`; a URL continha trecho `/disabled/`, indicando sitekey/configuração inválida ou desabilitada no frontend.
-
-Resultado do relatório browser final:
+O runner local não tem `ffprobe`, então o arquivo exportado foi copiado para a VPS e validado dentro do `media-worker`:
 
 ```json
 {
-  "runId": "mr3tihp2",
-  "failedResponses": 3,
-  "consoleErrors": 4,
-  "findings": [
+  "streams": [
     {
-      "severity": "high",
-      "area": "register",
-      "message": "Criar conta permanece desabilitado após preencher nome/email/senha forte e marcar aceite."
+      "codec_name": "h264",
+      "width": 1080,
+      "height": 1920
     }
   ]
 }
 ```
 
-### Painel autenticado
+Resultado: PASS.
 
-Foi criada sessão via API e token injetado no browser para validar o painel.
+## Browser smoke real
 
-Páginas renderizadas:
+Arquivo bruto local: `/tmp/picashorts-prod-browser-smoke.json`
 
-- `/dashboard`
-- `/upload`
-- `/library`
-- `/projects`
-- `/exports`
-- `/analytics`
-- `/billing`
-- `/settings`
-
-Resultado: renderização geral PASS.
-
-Rodada autenticada final:
+Resultado:
 
 ```json
 {
-  "runId": "mr3tqjnc",
-  "pages": 12,
-  "failedResponses": 0,
-  "consoleErrors": 0,
-  "pageErrors": 0,
-  "findings": []
+  "status": "PASS",
+  "results": [
+    { "name": "public legal pages", "status": "PASS" },
+    { "name": "dashboard authenticated", "status": "PASS" },
+    { "name": "main navigation pages", "status": "PASS" },
+    { "name": "upload controls visible and clickable", "status": "PASS" },
+    { "name": "video page shows real processed content", "status": "PASS" },
+    { "name": "clip editor opens real clip", "status": "PASS" }
+  ]
 }
 ```
 
-Botões/áreas verificados no painel:
+Escopo validado:
 
-- Upload mostra alternância `Arquivo` / `URL pública`.
-- Upload mostra presets de duração, quantidade, formato e plataforma.
-- Billing mostra plano `FREE`, CTAs `Assinar` para `PRO` e `BUSINESS`.
-- Settings renderiza abas `Perfil`, `Brand kit`, `Segurança` e `Notificações`.
+- `/terms`, `/privacy`, `/refunds`;
+- login por sessão real;
+- `/dashboard`;
+- `/upload`;
+- `/library`;
+- `/projects`;
+- `/exports`;
+- `/analytics`;
+- `/billing`;
+- `/settings`;
+- detalhe de vídeo processado;
+- editor de clip real.
 
-### Projetos
+Observação: o primeiro login browser recebeu `429` e precisou respeitar retry. Isso confirma rate limit ativo em produção.
 
-Criação de projeto via UI: PASS.
+## DLQ aberta — causa raiz
 
-### Biblioteca
+Registro aberto no banco:
 
-Estados vazios renderizam corretamente. Filtro/list view clicáveis.
-
-Observação: a tela de detalhe de um vídeo de outro workspace retorna `Video not found`, o que é esperado por isolamento de tenant.
-
-### Upload/import URL
-
-Foi testado `https://example.com/pagina-sem-video`.
-
-Resultado observado:
-
-```text
-UI aceitou a URL, criou vídeo e redirecionou para /library/:id
-Tela mostra "Na fila" e logs de processamento
-Arquivo: remote-example.com.mp4
-Tamanho: 0 B
+```json
+{
+  "id": "2fdfd165-577b-44c9-9983-328e50158cd5",
+  "originalQueue": "ingestion",
+  "errorCode": "URL_IMPORT_FAILED",
+  "errorMessage": "Unable to import the remote video",
+  "redriveCount": 0,
+  "pipelineRunId": "3a6160ac-88e3-43c3-be07-965f696a0279",
+  "payloadVideoId": "496fe43b-5ad7-42e0-9293-e9e28f1f7424"
+}
 ```
 
-Achado: o backend deveria validar melhor URL pública antes de aceitar/importar, ou a UI deveria explicar que a validação acontece assíncrona e mostrar erro depois. Hoje isso parece sucesso para o usuário, mas tende a virar falha/DLQ.
+Pipeline associado:
 
-## Segurança e headers
+```json
+{
+  "status": "FAILED",
+  "currentStage": "INGESTION",
+  "failureCode": "URL_IMPORT_FAILED",
+  "failureMessage": "Unable to import the remote video",
+  "video": {
+    "title": "YouTube qHlquy4-YEs",
+    "originalFilename": "youtube-qHlquy4-YEs.mp4",
+    "sourceUrl": "https://www.youtube.com/watch?v=qHlquy4-YEs",
+    "status": "UPLOADED"
+  },
+  "stages": [
+    {
+      "stage": "INGESTION",
+      "status": "DEAD_LETTERED",
+      "attempts": 10,
+      "errorCode": "URL_IMPORT_FAILED"
+    }
+  ]
+}
+```
 
-Pontos positivos:
+Logs do `media-worker`:
 
-- HTTPS ativo.
-- HSTS ativo.
-- `x-content-type-options: nosniff`.
-- `referrer-policy: strict-origin-when-cross-origin`.
-- API tem rate limit headers.
-- MinIO console não ficou diretamente aberto no teste básico:
-  - `https://storage.picashorts.com/` retornou `403`.
-  - `https://storage.picashorts.com/ui/` retornou `400`.
+```text
+ERROR: [youtube] qHlquy4-YEs: Sign in to confirm you’re not a bot.
+POST /v1/stages/ingestion HTTP/1.1 502
+```
 
-Pontos de atenção:
+Interpretação: upload direto está saudável, mas importação por YouTube/URL não é confiável em produção sem estratégia anti-bot/cookies/proxy/fallback.
 
-- CSP da web contém `connect-src ... http://localhost:*`; isso deve ser removido em produção.
-- `x-frame-options` aparece como `SAMEORIGIN`, enquanto CSP também tem `frame-ancestors 'none'`. Para produção comercial, padronizar preferência por `frame-ancestors 'none'`.
-- Turnstile está visualmente ativo na UI, mas registro via API sem token passou. Validar flags reais de produção.
+## Comandos executados
 
-## Lista priorizada de correções
+Deploy:
 
-### P0 — Bloqueadores de lançamento
+```bash
+git push origin main
+# workflow_dispatch vps-cicd.yml:
+# deploy=true, release_gate=false, digitalocean_mode=validate,
+# image_tag=5c15c79d46d5264f514e4893693795c48d1ef2af
+```
 
-1. Corrigir permissão do volume do `media-worker`.
-
-   Correção imediata esperada na VPS:
-
-   ```bash
-   sudo chown -R 10001:10001 /srv/clipbr/data/media
-   sudo chmod -R u+rwX,g+rwX /srv/clipbr/data/media
-   docker compose --env-file .env.production -f docker-compose.vps.yml up -d --force-recreate media-worker worker
-   ```
-
-   Correção definitiva no repo:
-
-   - ajustar `scripts/vps/provision-ubuntu.sh` e/ou `scripts/vps/deploy-registry.sh` para criar/chown do volume media com UID/GID do container;
-   - adicionar preflight que falha se `/data/pipelines` não for gravável pelo `media-worker`;
-   - adicionar health/readiness que valida escrita em `/data/pipelines`.
-
-2. Reprocessar/redrive DLQ após corrigir permissão.
-
-   Estado atual:
-
-   ```text
-   deadLettersOpen=6
-   ingestion.failed=6
-   ```
-
-3. Corrigir `/health/pipeline`.
-
-   Em produção, `deadLettersOpen > 0` deve retornar `degraded` ou `fail`, não `ok`.
-
-4. Corrigir tratamento de erro do media-worker/API.
-
-   A API tentou parsear texto `Internal Server Error` como JSON. O cliente deve:
-
-   - tolerar resposta não JSON;
-   - persistir `MEDIA_WORKER_HTTP_500`;
-   - salvar mensagem sanitizada útil;
-   - expor erro claro no pipeline.
-
-5. Tornar `/data/pipelines` requisito de readiness do `media-worker`.
-
-   O container estava `healthy`, mas não conseguia executar o estágio principal.
-
-6. Configurar LLM real ou declarar fallback explicitamente.
-
-   Estado atual:
-
-   ```text
-   ENABLE_AI=true
-   LLM_PROVIDER=none
-   ```
-
-   Para validar paridade Opus-like com scoring/título/SEO por LLM, configurar provider real em produção e rerodar o E2E.
-
-### P1 — Produto/UX necessários antes de clientes
-
-1. Liberar páginas públicas:
-
-   - `/`
-   - `/terms`
-   - `/privacy`
-   - `/refunds`
-
-2. Corrigir validação de import URL.
-
-   Não aceitar URLs sem mídia como sucesso. Alternativas:
-
-   - validar com `yt-dlp --simulate` antes de criar vídeo;
-   - criar vídeo como `VALIDATING_IMPORT`;
-   - se falhar, manter usuário na tela com erro claro;
-   - não criar source `0 B`.
-
-3. Revisar Turnstile:
-
-   - UI não deve deixar usuário preso sem fallback;
-   - API deve exigir token quando `TURNSTILE_REQUIRED=true`;
-   - testes E2E precisam de bypass/test key controlado por ambiente.
-   - se `TURNSTILE_REQUIRED=false`, o frontend não deve renderizar/obrigar Turnstile.
-
-4. Melhorar tela de vídeo falho.
-
-   A tela precisa mostrar erro do pipeline, estágio, DLQ e botão retry para o dono do vídeo.
-
-5. Remover `localhost` do CSP de produção.
-
-6. Decidir política real de e-mail verificado antes de liberar upload/processamento.
-
-   Estado atual: `EMAIL_VERIFICATION_REQUIRED=false`.
-
-### P2 — Observabilidade e operação
-
-1. Logs do `media-worker` devem incluir stack/cause sanitizado, request id, pipelineRunId, stageExecutionId e videoId.
-2. Alertar quando DLQ > 0.
-3. Alertar quando `ingestion.failed > 0`.
-4. Métrica de tempo por estágio.
-5. Runbook de redrive DLQ.
-6. Smoke pós-deploy deve executar upload + pipeline, não só health.
-
-## Reexecução necessária após correção
-
-Depois de corrigir volume/permissão, rodar novamente:
+Health:
 
 ```bash
 curl -fsS https://api.picashorts.com/health/ready
 curl -fsS https://api.picashorts.com/health/pipeline
+curl -fsS https://storage.picashorts.com/minio/health/live
 ```
 
-E repetir E2E real:
+E2E:
 
 ```bash
 PRODUCT_E2E_API_URL=https://api.picashorts.com \
 PRODUCT_E2E_WEB_URL=https://picashorts.com \
+PRODUCT_E2E_VIDEO_PATH=/tmp/picashorts-prod-e2e-fixture.mp4 \
+PRODUCT_E2E_GENERATE_FIXTURE=false \
+PRODUCT_E2E_SKIP_FFPROBE=true \
+PRODUCT_E2E_ENABLE_BILLING_WRITE=false \
+PRODUCT_E2E_STABILITY_SECONDS=0 \
 npm run acceptance:product
 ```
 
-Critérios para aprovar:
+Browser smoke:
 
-- `deadLettersOpen=0`
-- `outbox.unpublished=0`
-- upload multipart PASS
-- ingestão PASS
-- transcrição PASS
-- segmentação/scoring PASS
-- clips criados PASS
-- render/export PASS
-- download MP4 final PASS
-- `ffprobe` do MP4 final PASS
-- 10 minutos sem restart PASS
+```bash
+node ./picashorts-prod-browser-smoke.tmp.mjs
+```
+
+Infra:
+
+```bash
+ssh clipbr@162.243.114.141 'docker ps --filter name=clipbr-vps'
+ssh clipbr@162.243.114.141 'docker stats --no-stream'
+ssh clipbr@162.243.114.141 'df -h / /srv/clipbr/data && free -h'
+```
+
+## Correções aplicadas no repo nesta rodada
+
+- Rebranding público para PicaShorts.
+- Rotas públicas legais liberadas no AuthProvider.
+- Registro não bloqueia Turnstile quando site key está desabilitada.
+- `media-worker` agora valida diretórios de workspace/cache no readiness.
+- API trata resposta não JSON do media-worker como erro sanitizado.
+- `/health/pipeline` agora fica degradado quando há DLQ aberta/outbox pendente.
+- Scripts VPS passam a preparar `/srv/clipbr/data/media/pipelines` e `/models`.
+- Script de deploy tolera cache de modelos antigo sem abortar em `chmod` recursivo.
+- Waivers temporários de Trivy documentados para CVEs sem upgrade seguro no stack atual.
+
+## Lista priorizada de correções
+
+### P0 — Antes de declarar produção estável
+
+1. Resolver import YouTube/URL.
+   - Opções: cookies oficiais do `yt-dlp`, proxy/egress dedicado, integração via API autorizada quando possível, ou UX deixando claro que YouTube pode exigir upload manual.
+   - Não prometer “qualquer link” enquanto YouTube puder bloquear anti-bot.
+
+2. Tratar a DLQ aberta.
+   - Decidir se o vídeo `youtube-qHlquy4-YEs` será redrive após correção ou marcado como resolvido/descartado com auditoria.
+   - Não limpar silenciosamente porque parece ser fluxo real de import.
+
+3. Alinhar produção comercial.
+   - Configurar LLM real ou declarar fallback.
+   - Ativar Resend/e-mail verificado se for requisito de operação.
+   - Ativar Turnstile real se for requisito anti-abuso.
+
+4. Rodar soak.
+   - mínimo: 10 minutos sem restart após DLQ zerada;
+   - ideal GA: 24h com synthetic checks.
+
+### P1 — Robustez de produto
+
+1. Tela de vídeo importado deve mostrar erro claro quando URL falhar.
+2. Import por URL não deve criar percepção de sucesso se a validação síncrona já sabe que vai falhar.
+3. Criar runbook de DLQ/redrive e comando de suporte seguro.
+4. Limpar contadores BullMQ históricos para reduzir ruído operacional.
+5. Instalar `ffprobe` no runner/esteira para não precisar validar via container manualmente.
+
+### P2 — Segurança/operacional
+
+1. Rotacionar credenciais expostas durante configuração manual.
+2. Remover `localhost` do CSP de produção se ainda aparecer no header.
+3. Configurar alertas para `deadLettersOpen > 0`, outbox pendente, API ready, worker ready e disco.
+4. Executar restore drill de backup antes de venda comercial.
 
 ## Conclusão
 
-O ambiente está online e o fluxo principal de produto passou em produção após o hotfix de permissão do `media-worker`. A build atualmente publicada ainda é `00a590af2adae4fa8d9a1256d9ae0e87643e84f3`.
+PicaShorts está publicado e o fluxo principal por upload direto passou em produção. A infra base está saudável e sem restarts.
 
-Ainda não declarar GA comercial: falta publicar o rebranding PicaShorts e os fixes definitivos do repo, limpar ruído BullMQ antigo, validar browser pós-deploy, validar MP4 com `ffprobe` no runner e executar soak/observação.
-
-Além disso, a configuração real de produção ainda precisa ser alinhada antes do go-live: LLM está desativada (`LLM_PROVIDER=none`), Turnstile está inconsistente entre UI/backend e e-mail verificado está desligado.
-
-Nota de segurança: tokens e chaves operacionais passaram pelo fluxo de configuração desta sessão. Antes de declarar produção comercial, rotacionar credenciais de cloud, storage, deploy e LLM.
+Ainda não está 100% estável para declarar produção plena porque o pipeline está degradado por uma DLQ real de import YouTube/URL. O próximo passo é corrigir/definir a estratégia de importação YouTube e zerar a DLQ com auditoria. Depois disso, repetir E2E + browser smoke + observação.
