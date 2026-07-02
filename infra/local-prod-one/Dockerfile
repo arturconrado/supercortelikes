@@ -47,6 +47,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MEDIA_WORKER_DATA_DIR=/data/pipelines \
     HF_HOME=/data/models/huggingface \
     TORCH_HOME=/data/models/torch \
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
     XDG_CACHE_HOME=/data/models/cache \
     MPLCONFIGDIR=/data/models/matplotlib \
     YOLO_CONFIG_DIR=/data/models \
