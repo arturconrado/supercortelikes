@@ -13,6 +13,7 @@ import { normalizeVideoProcessingOptions, type VideoProcessingOptionsInput } fro
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 const YTDLP_PROVIDER_HOSTS = new Set(['loom.com', 'www.loom.com', 'drive.google.com']);
 const DIRECT_VIDEO_SUFFIXES = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v']);
+type ImportSource = { originalFilename: string; title: string; mimeType: string; container: string };
 
 @Injectable()
 export class VideoImportService {
@@ -38,7 +39,7 @@ export class VideoImportService {
     const previous = await this.prisma.uploadAttempt.findUnique({ where: { idempotencyKey }, include: { video: true } });
     if (previous) return VideoResponseDto.from(previous.video as VideoRecord, true);
     const url = parsePublicImportUrl(urlValue);
-    const source = resolveImportSource(url);
+    const source = await resolveImportSource(url);
     if (projectId) {
       const project = await this.prisma.project.findFirst({ where: { id: projectId, workspaceId: user.workspaceId } });
       if (!project) throw new NotFoundException('Project not found');
@@ -121,12 +122,13 @@ function parsePublicImportUrl(value: string): URL {
   return url;
 }
 
-function resolveImportSource(url: URL): { originalFilename: string; title: string; mimeType: string; container: string } {
+async function resolveImportSource(url: URL): Promise<ImportSource> {
   const hostname = url.hostname.toLowerCase();
   if (YOUTUBE_HOSTS.has(hostname)) {
     const videoId = youtubeId(url);
     if (!videoId || !/^[A-Za-z0-9_-]{6,32}$/.test(videoId)) throw new BadRequestException('YouTube video id is invalid');
-    return { originalFilename: `youtube-${videoId}.mp4`, title: `YouTube ${videoId}`, mimeType: 'video/mp4', container: 'mp4' };
+    const title = await youtubeOembedTitle(url);
+    return { originalFilename: `youtube-${videoId}.mp4`, title: title ?? `YouTube ${videoId}`, mimeType: 'video/mp4', container: 'mp4' };
   }
   if (YTDLP_PROVIDER_HOSTS.has(hostname)) {
     const provider = hostname.includes('loom') ? 'loom' : 'google-drive';
@@ -143,6 +145,25 @@ function resolveImportSource(url: URL): { originalFilename: string; title: strin
   const container = suffix.slice(1) === 'm4v' ? 'mp4' : suffix.slice(1);
   const originalFilename = safeImportFilename(filename);
   return { originalFilename, title: displayTitleFromFilename(originalFilename), mimeType: mimeTypeForContainer(container), container };
+}
+
+async function youtubeOembedTitle(url: URL): Promise<string | undefined> {
+  const endpoint = new URL('https://www.youtube.com/oembed');
+  endpoint.searchParams.set('url', url.toString());
+  endpoint.searchParams.set('format', 'json');
+  try {
+    const response = await fetch(endpoint, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return undefined;
+    const payload = await response.json() as { title?: unknown };
+    return sanitizeImportTitle(typeof payload.title === 'string' ? payload.title : undefined);
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeImportTitle(value?: string): string | undefined {
+  const normalized = value?.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').replace(/\s+/g, ' ').trim();
+  return normalized ? normalized.slice(0, 180) : undefined;
 }
 
 function providerTitle(provider: string): string {

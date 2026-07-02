@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VideoImportService } from './video-import.service';
 
 const user = {
@@ -55,6 +55,10 @@ function harness() {
 }
 
 describe('VideoImportService', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it.each([
     ['https://www.youtube.com/watch?v=VYDE529RzNk', /^youtube-VYDE529RzNk\.mp4$/, 'mp4', 'video/mp4'],
     ['https://www.youtube.com/shorts/VYDE529RzNk', /^youtube-VYDE529RzNk\.mp4$/, 'mp4', 'video/mp4'],
@@ -63,6 +67,7 @@ describe('VideoImportService', () => {
     ['https://cdn.example.com/media/demo.webm', /^demo\.webm$/, 'webm', 'video/webm'],
     ['https://video.vendor.example/public/abc', /^remote-video\.vendor\.example\.mp4$/, 'mp4', 'video/mp4'],
   ])('creates a pipeline-ready import for %s', async (url, filename, container, mimeType) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: vi.fn() }));
     const { service, tx, createdVideos } = harness();
     const result = await service.import(url, 'import-key-1234', user, undefined, { aspectRatio: '4:5' });
 
@@ -72,6 +77,21 @@ describe('VideoImportService', () => {
     expect(createdVideos[0].mimeType).toBe(mimeType);
     expect(createdVideos[0].processingOptions).toMatchObject({ aspectRatio: '4:5', targetPlatform: 'INSTAGRAM_REELS' });
     expect(tx.outboxEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ type: 'video.uploaded.v1' }) }));
+  });
+
+  it('uses YouTube oEmbed metadata as the initial display title', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ title: '  A GWM IMPRESSIONOU A TODOS! Novo ORA 5 Por R$159.000. Confira!  ' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { service, createdVideos } = harness();
+
+    await expect(service.import('https://www.youtube.com/watch?v=qHlquy4-YEs', 'import-key-1234', user))
+      .resolves.toMatchObject({ title: 'A GWM IMPRESSIONOU A TODOS! Novo ORA 5 Por R$159.000. Confira!' });
+
+    expect(createdVideos[0].title).toBe('A GWM IMPRESSIONOU A TODOS! Novo ORA 5 Por R$159.000. Confira!');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('youtube.com/oembed');
   });
 
   it('returns previous imports idempotently', async () => {
