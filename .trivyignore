@@ -1,0 +1,9 @@
+# protobuf 4.25.9 is currently constrained by mediapipe==0.10.18 (<5).
+# Remove this ignore when MediaPipe publishes a Python 3.11 compatible release
+# that supports protobuf >=5.29.6.
+CVE-2026-0994
+
+# starlette 0.52.1 is currently selected by fastapi==0.128.8 (<1.0).
+# Remove these ignores when FastAPI supports Starlette >=1.1/1.3.1.
+CVE-2026-48818
+CVE-2026-54283
