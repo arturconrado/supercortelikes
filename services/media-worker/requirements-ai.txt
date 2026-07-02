@@ -8,7 +8,7 @@ torchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.21.0%2Bcpu-cp31
 torch==2.6.0; platform_machine != "x86_64"
 torchaudio==2.6.0; platform_machine != "x86_64"
 torchvision==0.21.0; platform_machine != "x86_64"
-transformers==5.3.0
+transformers==4.57.6
 pyannote-audio==3.3.2
 pyannote-core==5.0.0
 pyannote-database==5.1.3

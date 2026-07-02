@@ -91,7 +91,7 @@ async def readiness() -> JSONResponse:
         required.append("yolo")
     if settings.diarization_enabled:
         required.append("huggingFaceToken")
-    required_ready = all(bool(dependencies[name]) for name in required)
+    required_ready = all(bool(dependencies.get(name)) for name in required)
     return JSONResponse(
         status_code=200 if required_ready else 503,
         content={

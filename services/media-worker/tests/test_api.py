@@ -72,6 +72,8 @@ def test_readiness_requires_real_runtime_dependencies(monkeypatch):
             "ffmpeg": True,
             "ffprobe": True,
             "storage": True,
+            "workspace": True,
+            "modelCache": True,
             "redis": True,
             "whisperx": False,
             "opencv": True,
@@ -112,6 +114,8 @@ def test_readiness_passes_for_minimal_release_dependencies(monkeypatch):
             "ffmpeg": True,
             "ffprobe": True,
             "storage": True,
+            "workspace": True,
+            "modelCache": False,
             "redis": False,
             "whisperx": False,
             "opencv": False,
@@ -126,7 +130,7 @@ def test_readiness_passes_for_minimal_release_dependencies(monkeypatch):
 
     assert response.status_code == 200
     assert body["status"] == "ready"
-    assert body["required"] == ["ffmpeg", "ffprobe", "storage"]
+    assert body["required"] == ["ffmpeg", "ffprobe", "storage", "workspace"]
 
 
 def test_storage_and_redis_readiness_paths(monkeypatch):
