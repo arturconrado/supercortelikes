@@ -344,6 +344,7 @@ jobs:
           API_IMAGE: ${{ needs.build-images.outputs.api_image }}
           WEB_IMAGE: ${{ needs.build-images.outputs.web_image }}
           MEDIA_IMAGE: ${{ needs.build-images.outputs.media_image }}
+          BUILD_SHA: ${{ needs.build-images.outputs.image_tag }}
           OBSERVE_READY_SECONDS: "60"
         run: |
           remote_dir="$(printf '%q' "${VPS_APP_DIR}")"
@@ -354,6 +355,7 @@ jobs:
             printf 'API_IMAGE=%q\n' "${API_IMAGE}"
             printf 'WEB_IMAGE=%q\n' "${WEB_IMAGE}"
             printf 'MEDIA_IMAGE=%q\n' "${MEDIA_IMAGE}"
+            printf 'BUILD_SHA=%q\n' "${BUILD_SHA}"
             printf 'GHCR_USERNAME=%q\n' "${GHCR_USERNAME}"
             printf 'GHCR_TOKEN=%q\n' "${GHCR_TOKEN}"
             printf 'OBSERVE_READY_SECONDS=%q\n' "${OBSERVE_READY_SECONDS}"
