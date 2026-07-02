@@ -229,6 +229,45 @@ Ela funciona assim:
 
 Isso deixa o mesmo fluxo pronto para DigitalOcean, Hetzner, OVH, Vultr, Linode ou qualquer VPS Ubuntu com Docker.
 
+### Exposição rápida sem domínio próprio
+
+Para colocar a aplicação na web imediatamente usando apenas o IP da VPS, gere um domínio automático via `sslip.io`:
+
+```bash
+VPS_PUBLIC_IP=IP_DA_VPS VPS_EXPOSURE_PROFILE=smoke npm run vps:env:web
+```
+
+Isso cria `.env.production` com:
+
+```txt
+https://IP_DA_VPS.sslip.io
+https://api.IP_DA_VPS.sslip.io
+https://storage.IP_DA_VPS.sslip.io
+```
+
+O perfil `smoke` desliga verificação obrigatória de e-mail e Turnstile para permitir cadastro e validação manual inicial. Ele não deve ser tratado como GA comercial.
+
+Quando já tiver domínio e integrações reais:
+
+```bash
+APP_DOMAIN=seudominio.com \
+VPS_EXPOSURE_PROFILE=production \
+MERCADO_PAGO_ACCESS_TOKEN=... \
+MERCADO_PAGO_WEBHOOK_SECRET=... \
+RESEND_API_KEY=... \
+TURNSTILE_SECRET_KEY=... \
+NEXT_PUBLIC_TURNSTILE_SITE_KEY=... \
+npm run vps:env:web
+```
+
+Para usar esse env no GitHub Actions, salve o conteúdo em base64 no secret `VPS_ENV_PRODUCTION_B64`:
+
+```bash
+base64 -i .env.production | tr -d '\n'
+```
+
+No macOS, o comando acima já funciona; no Linux também pode usar `base64 -w0 .env.production`.
+
 Configure o environment GitHub `vps-production` para os secrets sensíveis do deploy.
 
 Secrets obrigatórios:

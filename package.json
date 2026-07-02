@@ -35,6 +35,7 @@
     "vps:deploy:registry": "bash scripts/vps/deploy-registry.sh",
     "vps:digitalocean:validate": "bash scripts/vps/digitalocean-validate.sh",
     "vps:digitalocean:provision": "bash scripts/vps/digitalocean-provision.sh",
+    "vps:env:web": "bash scripts/vps/generate-web-env.sh",
     "vps:smoke": "bash scripts/vps/smoke.sh",
     "vps:backup": "bash scripts/vps/backup.sh",
     "vps:rollback": "bash scripts/vps/rollback.sh",
