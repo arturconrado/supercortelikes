@@ -66,13 +66,16 @@ mkdir -p \
   "${VPS_BACKUP_DIR}"
 
 # The media-worker image runs as uid/gid 10001. Bind-mounted media data must be
-# writable by that user, otherwise the container stays healthy but pipeline
-# stages fail when creating /data/pipelines and /data/models. The deploy user
-# may not be root on existing VPSes, so prefer chown and fall back to a writable
-# internal media volume.
+# writable by that user, otherwise pipeline stages fail when creating
+# /data/pipelines and using /data/models. Existing model caches can contain
+# files created by older containers/root, so never let a best-effort permission
+# repair on cache files abort the deploy. Runtime readiness validates the
+# writable paths after the containers are started.
 mkdir -p "${VPS_DATA_DIR}/media/pipelines" "${VPS_DATA_DIR}/media/models"
 if ! chown -R 10001:10001 "${VPS_DATA_DIR}/media" 2>/dev/null; then
-  chmod -R a+rwX "${VPS_DATA_DIR}/media"
+  chmod a+rwX "${VPS_DATA_DIR}/media" "${VPS_DATA_DIR}/media/models" 2>/dev/null || true
+  chmod -R a+rwX "${VPS_DATA_DIR}/media/pipelines" 2>/dev/null || true
+  find "${VPS_DATA_DIR}/media" -maxdepth 2 -type d -exec chmod a+rwX {} + 2>/dev/null || true
 fi
 
 compose_args=(
