@@ -185,6 +185,8 @@ jobs:
   deploy-vps:
     name: Deploy to generic VPS
     if: |
+      always() &&
+      needs.build-images.result == 'success' &&
       github.event_name != 'pull_request' &&
       (
         (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
