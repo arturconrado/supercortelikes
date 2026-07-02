@@ -12,6 +12,12 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      release_gate:
+        description: Run the full release gate before deploy. Use false for app-only VPS deploys.
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
       digitalocean_mode:
         description: DigitalOcean infra mode before SSH deploy
         required: true
@@ -51,11 +57,22 @@ concurrency:
 jobs:
   gate:
     name: Release gate
+    if: github.event_name != 'workflow_dispatch' || inputs.release_gate == 'true'
     uses: ./.github/workflows/release-gate.yml
 
   build-images:
     name: Build and publish VPS images
-    if: github.event_name != 'pull_request'
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (
+        needs.gate.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && inputs.release_gate == 'false' && needs.gate.result == 'skipped')
+      ) &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
+      )
     needs: gate
     runs-on: ubuntu-24.04
     timeout-minutes: 90

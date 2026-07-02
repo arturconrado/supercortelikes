@@ -223,11 +223,19 @@ A esteira genérica fica em `.github/workflows/vps-cicd.yml`.
 Ela funciona assim:
 
 1. Pull request roda o `release-gate.yml`.
-2. Push na `main` roda o gate, cria imagens `migration`, `api`, `web` e `media-worker` no GHCR e só faz deploy se `VPS_DEPLOY_ENABLED=true`.
+2. Push na `main` roda o gate. Ele só cria imagens `migration`, `api`, `web` e `media-worker` no GHCR quando `VPS_DEPLOY_ENABLED=true`.
 3. `workflow_dispatch` permite deploy manual de um SHA/tag e smoke opcional.
-4. A VPS não compila a aplicação; ela apenas recebe o repositório, baixa as imagens e executa `docker compose up --wait` com `docker-compose.vps.yml` + `docker-compose.vps.images.yml`.
+4. Para rodar apenas a aplicação, use `workflow_dispatch` com `deploy=true` e `release_gate=false`. Esse modo pula E2E, regressão 5 GiB, scans e observação longa; ele apenas cria/publica as imagens e faz deploy na VPS.
+5. A VPS não compila a aplicação; ela apenas recebe o repositório, baixa as imagens e executa `docker compose up --wait` com `docker-compose.vps.yml` + `docker-compose.vps.images.yml`.
 
 Isso deixa o mesmo fluxo pronto para DigitalOcean, Hetzner, OVH, Vultr, Linode ou qualquer VPS Ubuntu com Docker.
+
+Use os modos assim:
+
+- `release_gate=false`: deploy rápido/app-only para validar visualmente a aplicação ou aplicar correções pequenas.
+- `release_gate=true`: release real, com gate completo antes do deploy.
+- `run_product_e2e=true`: smoke/E2E na VPS depois do deploy.
+- `run_5g=true`: regressão multipart 5 GiB na VPS; use fora de horário de pico.
 
 ### Exposição rápida sem domínio próprio
 
@@ -348,8 +356,8 @@ Primeiro deploy recomendado:
 1. Identifique o Droplet existente e configure `DIGITALOCEAN_DROPLET_ID` ou `DIGITALOCEAN_DROPLET_NAME`.
 2. Aponte DNS e aguarde propagação.
 3. Configure secrets/vars no GitHub.
-4. Rode `VPS CI/CD` manualmente com `deploy=true`, `digitalocean_mode=validate`, `run_product_e2e=false` e `run_5g=false`.
-5. Se passar, rode novamente com `run_product_e2e=true`.
+4. Para apenas subir a aplicação rapidamente, rode `VPS CI/CD` manualmente com `deploy=true`, `release_gate=false`, `digitalocean_mode=validate`, `run_product_e2e=false` e `run_5g=false`.
+5. Para validar release, rode novamente com `release_gate=true` e `run_product_e2e=true`.
 6. Rode `run_5g=true` fora de horário de pico.
 7. Só depois defina `VPS_DEPLOY_ENABLED=true`.
 

@@ -14,6 +14,8 @@ IMAGE_COMPOSE_FILE="${IMAGE_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.vps.images.
 : "${WEB_IMAGE:?WEB_IMAGE is required}"
 : "${MEDIA_IMAGE:?MEDIA_IMAGE is required}"
 
+DEPLOY_BUILD_SHA="${BUILD_SHA:-}"
+
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "Missing ${ENV_FILE}. Copy .env.vps.example to .env.production and fill secrets." >&2
   exit 1
@@ -34,6 +36,11 @@ set -a
 # shellcheck disable=SC1090
 . "${ENV_FILE}"
 set +a
+
+if [[ -n "${DEPLOY_BUILD_SHA}" ]]; then
+  BUILD_SHA="${DEPLOY_BUILD_SHA}"
+  export BUILD_SHA
+fi
 
 : "${APP_DOMAIN:?APP_DOMAIN is required}"
 : "${VPS_DATA_DIR:=/srv/clipbr/data}"
