@@ -297,6 +297,25 @@ Vars recomendadas em nível de repositório ou organização, não apenas no env
 - `DIGITALOCEAN_DROPLET_NAME=<nome do Droplet existente>`, alternativa ao ID.
 - `DIGITALOCEAN_DROPLET_REGION=nyc3`.
 - `DIGITALOCEAN_DROPLET_SIZE=s-4vcpu-8gb`.
+- `CLOUDFLARE_DNS_ENABLED=true` para o workflow criar/atualizar DNS automaticamente.
+- `CLOUDFLARE_ZONE_NAME=DOMINIO.com`.
+- `CLOUDFLARE_ZONE_ID=<zone-id>`, opcional se `CLOUDFLARE_ZONE_NAME` estiver definido.
+- `CLOUDFLARE_PROXIED=false` no primeiro deploy. Mantenha `storage.DOMINIO.com` sempre DNS-only para uploads grandes.
+- `CLOUDFLARE_TTL=120`.
+
+Secret adicional para DNS Cloudflare:
+
+- `CLOUDFLARE_API_TOKEN`: token com permissão `Zone:Read` e `DNS:Edit` para a zona do domínio.
+
+O workflow cria/atualiza estes registros:
+
+```txt
+DOMINIO.com          A   IP_DA_VPS
+api.DOMINIO.com      A   IP_DA_VPS
+storage.DOMINIO.com  A   IP_DA_VPS
+```
+
+`storage.DOMINIO.com` é forçado como DNS-only (`proxied=false`) porque presigned uploads grandes não devem passar pelo proxy da Cloudflare.
 - `DIGITALOCEAN_SSH_KEY_IDS=<ids das SSH keys na DigitalOcean>`, obrigatório apenas quando `provision` precisar criar Droplet novo.
 - `DIGITALOCEAN_FIREWALL_NAME=<firewall existente>`, opcional; se não informar, a validação de firewall cloud é pulada.
 - `DIGITALOCEAN_DOMAIN=DOMINIO.com`, se o DNS for gerenciado pela DigitalOcean.

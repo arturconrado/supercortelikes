@@ -216,6 +216,19 @@ jobs:
           fi
           bash scripts/vps/digitalocean-validate.sh
 
+      - name: Configure Cloudflare DNS
+        if: vars.CLOUDFLARE_DNS_ENABLED == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_ZONE_NAME: ${{ vars.CLOUDFLARE_ZONE_NAME || vars.DIGITALOCEAN_DOMAIN }}
+          CLOUDFLARE_RECORD_IP: ${{ vars.CLOUDFLARE_RECORD_IP || secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
+          CLOUDFLARE_PROXIED: ${{ vars.CLOUDFLARE_PROXIED || 'false' }}
+          CLOUDFLARE_STORAGE_PROXIED: "false"
+          CLOUDFLARE_TTL: ${{ vars.CLOUDFLARE_TTL || '120' }}
+        run: bash scripts/vps/cloudflare-dns.sh
+
       - name: Install SSH key
         shell: bash
         env:
