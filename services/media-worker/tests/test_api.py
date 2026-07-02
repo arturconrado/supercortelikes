@@ -1,8 +1,13 @@
-from fastapi.testclient import TestClient
 from dataclasses import replace
 from importlib import import_module
+import sys
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
 
 from media_worker.app import app
+from media_worker.errors import WorkerError
 from media_worker.models import PipelineRequest
 
 
@@ -27,6 +32,137 @@ def test_unknown_stage_returns_stable_error_contract():
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "UNKNOWN_STAGE"
+
+
+def test_authorize_requires_matching_internal_bearer(monkeypatch):
+    worker_app = import_module("media_worker.app")
+    monkeypatch.setattr(
+        worker_app,
+        "settings",
+        replace(worker_app.settings, internal_token="internal-token"),
+    )
+
+    worker_app.authorize("Bearer internal-token")
+    with pytest.raises(WorkerError, match="valid internal bearer"):
+        worker_app.authorize(None)
+    with pytest.raises(WorkerError, match="valid internal bearer"):
+        worker_app.authorize("Bearer wrong")
+
+
+def test_readiness_requires_real_runtime_dependencies(monkeypatch):
+    worker_app = import_module("media_worker.app")
+    monkeypatch.setattr(
+        worker_app,
+        "settings",
+        replace(
+            worker_app.settings,
+            redis_url="redis://localhost:6379/0",
+            enable_whisperx=True,
+            enable_opencv=True,
+            enable_mediapipe=True,
+            enable_yolo=True,
+            diarization_enabled=True,
+            hf_token="",
+        ),
+    )
+    monkeypatch.setattr(
+        worker_app,
+        "_readiness_dependencies",
+        lambda: {
+            "ffmpeg": True,
+            "ffprobe": True,
+            "storage": True,
+            "redis": True,
+            "whisperx": False,
+            "opencv": True,
+            "mediapipe": True,
+            "yolo": True,
+            "huggingFaceToken": False,
+        },
+    )
+
+    response = client.get("/health/ready")
+    body = response.json()
+
+    assert response.status_code == 503
+    assert body["status"] == "not-ready"
+    assert "whisperx" in body["required"]
+    assert "huggingFaceToken" in body["required"]
+
+
+def test_readiness_passes_for_minimal_release_dependencies(monkeypatch):
+    worker_app = import_module("media_worker.app")
+    monkeypatch.setattr(
+        worker_app,
+        "settings",
+        replace(
+            worker_app.settings,
+            redis_url="",
+            enable_whisperx=False,
+            enable_opencv=False,
+            enable_mediapipe=False,
+            enable_yolo=False,
+            diarization_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        worker_app,
+        "_readiness_dependencies",
+        lambda: {
+            "ffmpeg": True,
+            "ffprobe": True,
+            "storage": True,
+            "redis": False,
+            "whisperx": False,
+            "opencv": False,
+            "mediapipe": False,
+            "yolo": False,
+            "huggingFaceToken": False,
+        },
+    )
+
+    response = client.get("/health/ready")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["status"] == "ready"
+    assert body["required"] == ["ffmpeg", "ffprobe", "storage"]
+
+
+def test_storage_and_redis_readiness_paths(monkeypatch):
+    worker_app = import_module("media_worker.app")
+    base = replace(
+        worker_app.settings,
+        s3_endpoint_url="http://storage",
+        s3_access_key_id="access",
+        s3_secret_access_key="secret",
+        s3_bucket="bucket",
+        redis_url="redis://localhost:6379/0",
+    )
+    monkeypatch.setattr(worker_app, "settings", base)
+
+    class S3Client:
+        def head_bucket(self, **_kwargs):
+            return None
+
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: S3Client()))
+    assert worker_app._storage_ready() is True
+    monkeypatch.setattr(worker_app, "settings", replace(base, s3_bucket=""))
+    assert worker_app._storage_ready() is False
+
+    class RedisClient:
+        def ping(self):
+            return True
+
+    monkeypatch.setattr(worker_app, "settings", base)
+    monkeypatch.setitem(
+        sys.modules,
+        "redis",
+        SimpleNamespace(Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: RedisClient())),
+    )
+    assert worker_app._redis_ready() is True
+    monkeypatch.setattr(worker_app, "settings", replace(base, redis_url=""))
+    assert worker_app._redis_ready() is False
 
 
 def test_source_is_explicitly_required_for_ingestion(tmp_path, monkeypatch):

@@ -66,11 +66,26 @@ def test_pipeline_executes_every_stage_and_reframe(tmp_path, monkeypatch):
             values.append(path)
         return values
 
+    def thumbnail(_source, output, _settings, _duration_seconds):
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / "thumbnail.jpg"
+        path.write_bytes(b"thumbnail")
+        return path
+
+    def clip_thumbnail(_source, output, _settings, _at_seconds, stem):
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / (stem + ".jpg")
+        path.write_bytes(b"clip-thumbnail")
+        return path
+
     monkeypatch.setattr(module, "materialize_source", materialize)
     monkeypatch.setattr(module, "probe_media", lambda *_: {"durationSeconds": 20, "video": {"width": 640, "height": 360}})
+    monkeypatch.setattr(module, "extract_thumbnail", thumbnail)
+    monkeypatch.setattr(module, "extract_frame_thumbnail", clip_thumbnail)
+    monkeypatch.setattr(module, "detect_burned_in_subtitles", lambda *_: {"detected": False, "confidence": 0, "evidence": []})
     monkeypatch.setattr(module, "transcribe", lambda *_: {"language": "en", "confidence": 0.9, "speakerCount": 0, "durationSeconds": 20, "segments": [{"id": 0, "start": 0, "end": 20, "text": "useful segment", "speaker": None, "words": [{"word": "useful", "start": 0, "end": 1}]}]})
     monkeypatch.setattr(module, "semantic_segments", lambda *_args, **_kwargs: [{"id": 0, "start": 0, "end": 20, "text": "useful segment"}])
-    monkeypatch.setattr(module, "score_all", lambda segments: {"scores": [{"segmentId": 0, "score": 90}], "averageScore": 90})
+    monkeypatch.setattr(module, "score_all", lambda segments, *_args, **_kwargs: {"scores": [{"segmentId": 0, "score": 90}], "averageScore": 90})
     monkeypatch.setattr(module, "find_clips", lambda *_args, **_kwargs: [{"id": "clip-001", "start": 0, "end": 20, "score": 90, "text": "useful segment"}])
     monkeypatch.setattr(module, "build_caption_files", captions)
     monkeypatch.setattr(module, "analyze_focus", lambda *_args, **_kwargs: {"backend": "opencv", "detectionRate": 0, "width": 640, "height": 360, "focus": {"x": 320, "y": 180}})
