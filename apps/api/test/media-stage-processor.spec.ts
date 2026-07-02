@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { UnrecoverableError } from 'bullmq';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaStageProcessor } from '../src/media/media-stage.processor';
 
@@ -113,5 +114,26 @@ describe('MediaStageProcessor persistence', () => {
     media.execute.mockResolvedValueOnce({ artifacts: [{ kind: 'whisperx-transcript', path: outside }], metrics: {} });
     await expect(processor.process(job('transcription'))).rejects.toMatchObject({ code: 'ARTIFACT_PATH_REJECTED' });
     await rm(outside, { force: true });
+  });
+
+  it('does not retry YouTube auth/bot-check import failures', async () => {
+    prisma.video.findUnique.mockResolvedValueOnce({
+      id: 'video',
+      storageBucket: 'bucket',
+      storageKey: 'videos/source.mp4',
+      sourceUrl: 'https://www.youtube.com/watch?v=qHlquy4-YEs',
+    });
+    media.execute.mockRejectedValueOnce(
+      Object.assign(new Error('O YouTube bloqueou a importação automática deste link.'), {
+        code: 'URL_IMPORT_AUTH_REQUIRED',
+      }),
+    );
+
+    const promise = processor.process(job('ingestion'));
+    await expect(promise).rejects.toMatchObject({
+      code: 'URL_IMPORT_AUTH_REQUIRED',
+      message: 'O YouTube bloqueou a importação automática deste link.',
+    });
+    await expect(promise).rejects.toBeInstanceOf(UnrecoverableError);
   });
 });

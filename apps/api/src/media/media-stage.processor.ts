@@ -51,12 +51,19 @@ export class MediaStageProcessor {
     if (!video) throw new NotFoundException('Video not found for pipeline stage');
     const processingOptions = normalizeVideoProcessingOptions(video.processingOptions as never);
     const options = await this.options(job, video.storageBucket, processingOptions, video);
-    const response = await this.media.execute(
-      job,
-      video.sourceUrl ? undefined : { bucket: video.storageBucket, key: video.storageKey },
-      options,
-      video.sourceUrl ?? undefined,
-    );
+    let response: MediaStageResponse;
+    try {
+      response = await this.media.execute(
+        job,
+        video.sourceUrl ? undefined : { bucket: video.storageBucket, key: video.storageKey },
+        options,
+        video.sourceUrl ?? undefined,
+      );
+    } catch (error) {
+      const terminal = asUnrecoverableMediaError(error);
+      if (terminal) throw terminal;
+      throw error;
+    }
     await this.persist(job, response);
   }
 
@@ -488,6 +495,26 @@ export class MediaStageProcessor {
 function sanitizeVideoTitle(value?: string): string | undefined {
   const normalized = value?.trim().replace(/\s+/g, ' ');
   return normalized ? normalized.slice(0, 180) : undefined;
+}
+
+const UNRECOVERABLE_MEDIA_CODES = new Set([
+  'URL_IMPORT_AUTH_REQUIRED',
+  'SOURCE_SCHEME_UNSUPPORTED',
+  'SOURCE_TOO_LARGE',
+  'SOURCE_NOT_FOUND',
+]);
+
+function asUnrecoverableMediaError(error: unknown): UnrecoverableError | undefined {
+  const code = mediaErrorCode(error);
+  if (!code || !UNRECOVERABLE_MEDIA_CODES.has(code)) return undefined;
+  const message = error instanceof Error ? error.message : 'Media worker stage failed';
+  return Object.assign(new UnrecoverableError(message), { code });
+}
+
+function mediaErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 function scoreData(
