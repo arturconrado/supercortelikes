@@ -70,7 +70,7 @@ jobs:
           docker build -f infra/render/worker.Dockerfile -t clipbr-bundle:gate .
       - name: Smoke runtime imports and entrypoints
         run: |
-          docker run --rm --entrypoint node clipbr-api:gate -e "require('ioredis');require('bullmq')"
+          docker run --rm --entrypoint node clipbr-api:gate -e "const {createRequire}=require('module');const main=createRequire('/workspace/apps/api/dist/main.js');const worker=createRequire('/workspace/apps/api/dist/worker.js');main('ioredis');main('bullmq');main('@prisma/client');worker('ioredis');worker('bullmq')"
           docker run --rm --entrypoint python clipbr-media:gate -c "import whisperx,cv2,mediapipe,ultralytics,redis"
           docker run --rm --entrypoint node clipbr-bundle:gate -e "const {createRequire}=require('module');const r=createRequire('/workspace/apps/api/dist/worker.js');r('ioredis');r('bullmq');r('@prisma/client')"
       - name: Scan API image
@@ -116,6 +116,8 @@ jobs:
         with:
           node-version: 22.17.0
           cache: npm
+      - name: Install FFmpeg fixture tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm install --global npm@11.12.1 && npm ci && npm run db:generate
       - name: Run 5 GiB direct-upload regression without a processing worker
         run: |
