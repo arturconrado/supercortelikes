@@ -5,6 +5,29 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 
+type PipelineStatusGroup = { status: string; _count: { _all: number } };
+type RecentVideoSummary = {
+  sizeBytes: bigint | number | null;
+  durationMs: number | null;
+  thumbnailKey: string | null;
+  status: string;
+  _count: { clips: number };
+  pipelineRuns: Array<{ status: string; currentStage: string | null }>;
+};
+type RecentProjectSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  _count: { videos: number };
+  videos: Array<{
+    status: string;
+    _count: { clips: number };
+    pipelineRuns: Array<{ status: string }>;
+  }>;
+};
+
 @Controller('analytics')
 export class AnalyticsController {
   constructor(
@@ -66,8 +89,8 @@ export class AnalyticsController {
       creditsUsed: usage._sum.costCents ?? 0,
       usageQuantity: usage._sum.quantity?.toString() ?? '0',
       costCents: usage._sum.costCents ?? 0,
-      pipelines: Object.fromEntries(pipelines.map((item) => [item.status.toLowerCase(), item._count._all])),
-      recentVideos: await Promise.all(recentVideos.map(async (video) => ({
+      pipelines: Object.fromEntries((pipelines as PipelineStatusGroup[]).map((item: PipelineStatusGroup) => [item.status.toLowerCase(), item._count._all])),
+      recentVideos: await Promise.all((recentVideos as RecentVideoSummary[]).map(async (video: RecentVideoSummary) => ({
         ...video,
         sizeBytes: video.sizeBytes?.toString() ?? null,
         durationSeconds: video.durationMs ? Number(video.durationMs) / 1000 : undefined,
@@ -76,17 +99,17 @@ export class AnalyticsController {
         currentStage: video.pipelineRuns[0]?.currentStage ?? null,
         thumbnailUrl: video.thumbnailKey ? await this.storage.downloadUrl(video.thumbnailKey, 900) : undefined,
       }))),
-      recentProjects: recentProjects.map((project) => ({
+      recentProjects: (recentProjects as RecentProjectSummary[]).map((project: RecentProjectSummary) => ({
         id: project.id,
         name: project.name,
         description: project.description,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
         videosCount: project._count.videos,
-        clipsCount: project.videos.reduce((sum, video) => sum + video._count.clips, 0),
-        status: project.videos.some((video) => video.status === 'FAILED')
+        clipsCount: project.videos.reduce((sum: number, video: RecentProjectSummary['videos'][number]) => sum + video._count.clips, 0),
+        status: project.videos.some((video: RecentProjectSummary['videos'][number]) => video.status === 'FAILED')
           ? 'FAILED'
-          : project.videos.some((video) => video.pipelineRuns?.some((run) => run.status === 'RUNNING' || run.status === 'PENDING'))
+          : project.videos.some((video: RecentProjectSummary['videos'][number]) => video.pipelineRuns?.some((run: { status: string }) => run.status === 'RUNNING' || run.status === 'PENDING'))
             ? 'PROCESSING'
             : 'READY',
       })),

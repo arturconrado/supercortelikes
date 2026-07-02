@@ -72,7 +72,7 @@ jobs:
           docker run --rm --entrypoint python clipbr-media:gate -c "import whisperx,cv2,mediapipe,ultralytics,redis"
           docker run --rm --entrypoint node clipbr-bundle:gate -e "const {createRequire}=require('module');const r=createRequire('/workspace/apps/api/dist/worker.js');r('ioredis');r('bullmq');r('@prisma/client')"
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: clipbr-api:gate
           format: table
@@ -80,7 +80,7 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
       - name: Scan web image
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: clipbr-web:gate
           format: table
@@ -88,7 +88,7 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
       - name: Scan media image
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: clipbr-media:gate
           format: table
@@ -96,7 +96,7 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
       - name: Scan bundle image
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: clipbr-bundle:gate
           format: table
@@ -114,7 +114,7 @@ jobs:
         with:
           node-version: 22.17.0
           cache: npm
-      - run: npm ci
+      - run: npm install --global npm@11.12.1 && npm ci
       - name: Run 5 GiB direct-upload regression without a processing worker
         run: |
           docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite up --build --detach --wait
