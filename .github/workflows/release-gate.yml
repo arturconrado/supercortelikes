@@ -35,10 +35,12 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: npm install --global npm@11.12.1 && npm ci
+      - name: Generate Prisma client
+        run: npm run db:generate
       - name: Lint and typecheck
         run: npm run lint && npm run typecheck
       - name: Validate Prisma and migrate an empty database
-        run: npm run db:validate && npm run db:generate && npm run db:migrate:deploy
+        run: npm run db:validate && npm run db:migrate:deploy
       - name: Test TypeScript with coverage gates
         run: npm run test:coverage && npm run test --workspace @clipbr/web
       - name: Test Python with independent coverage gates
@@ -114,7 +116,7 @@ jobs:
         with:
           node-version: 22.17.0
           cache: npm
-      - run: npm install --global npm@11.12.1 && npm ci
+      - run: npm install --global npm@11.12.1 && npm ci && npm run db:generate
       - name: Run 5 GiB direct-upload regression without a processing worker
         run: |
           docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite up --build --detach --wait
