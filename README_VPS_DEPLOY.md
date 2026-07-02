@@ -1,4 +1,4 @@
-# Deploy VPS all-in-one — ClipBR / Supercorteslikes
+# Deploy VPS all-in-one — PicaShorts
 
 Este runbook sobe o produto completo em uma VPS única com Docker Compose, Caddy, PostgreSQL, Redis, MinIO, API, web, worker Node e media-worker Python/IA.
 

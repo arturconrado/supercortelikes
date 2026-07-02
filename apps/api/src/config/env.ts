@@ -35,7 +35,7 @@ const environmentSchema = z.object({
   MERCADO_PAGO_ACCESS_TOKEN: optionalSecret,
   MERCADO_PAGO_WEBHOOK_SECRET: z.preprocess((value) => (value === '' ? undefined : value), z.string().min(16).optional()),
   RESEND_API_KEY: optionalSecret,
-  EMAIL_FROM: z.string().email().default('noreply@clipbr.ai'),
+  EMAIL_FROM: z.string().email().default('noreply@picashorts.com'),
   S3_ENDPOINT: z.string().url(),
   S3_PUBLIC_ENDPOINT: optionalUrl,
   S3_PUBLIC_BASE_URL: optionalUrl,
@@ -45,7 +45,7 @@ const environmentSchema = z.object({
   S3_BUCKET: z.string().min(3),
   S3_FORCE_PATH_STYLE: booleanString,
   REDIS_URL: z.string().url(),
-  QUEUE_PREFIX: z.string().regex(/^[A-Za-z0-9_-]+$/).default('clipbr'),
+  QUEUE_PREFIX: z.string().regex(/^[A-Za-z0-9_-]+$/).default('picashorts'),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   MEDIA_WORKER_URL: z.string().url().default('http://localhost:8000'),
@@ -64,7 +64,7 @@ const environmentSchema = z.object({
   LLM_MODEL: optionalSecret,
   MEDIA_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
-  OTEL_SERVICE_NAME: z.string().default('clipbr-api'),
+  OTEL_SERVICE_NAME: z.string().default('picashorts-api'),
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(5_368_709_120),
   UPLOAD_ALLOWED_MIME_TYPES: z
     .string()

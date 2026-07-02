@@ -50,6 +50,8 @@ install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}/backups"
 for dir in postgres redis minio media caddy/data caddy/config; do
   install -d -o "${APP_USER}" -g "${APP_USER}" "${APP_ROOT}/data/${dir}"
 done
+install -d -o 10001 -g 10001 "${APP_ROOT}/data/media/pipelines" "${APP_ROOT}/data/media/models"
+chmod -R a+rwX "${APP_ROOT}/data/media"
 
 if [[ ! -f /swapfile ]]; then
   fallocate -l "${SWAP_SIZE}" /swapfile

@@ -6,7 +6,7 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'], display: 'swap' });
 
 export const metadata: Metadata = {
-  title: { default: 'ClipBR AI', template: '%s · ClipBR AI' },
+  title: { default: 'PicaShorts', template: '%s · PicaShorts' },
   description: 'Crie cortes curtos de alto impacto com inteligência artificial.',
 };
 

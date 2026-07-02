@@ -336,7 +336,7 @@ export class MediaStageProcessor {
           { title: `${title}: veja o momento principal`, ctrScore: 50 },
         ],
         description: (clip.text || clip.reason || title).slice(0, 600),
-        hashtags: keywords.length ? keywords.map((keyword) => `#${keyword}`) : ['#ClipBR', '#Cortes', '#Video'],
+        hashtags: keywords.length ? keywords.map((keyword) => `#${keyword}`) : ['#PicaShorts', '#Cortes', '#Video'],
         keywords,
       };
     }
@@ -456,7 +456,7 @@ export class MediaStageProcessor {
         // Fall back to text watermark if the configured object is temporarily unavailable.
       }
     }
-    const text = typeof config.text === 'string' && config.text.trim() ? config.text.trim() : kit?.name || 'ClipBR AI';
+    const text = typeof config.text === 'string' && config.text.trim() ? config.text.trim() : kit?.name || 'PicaShorts';
     return {
       watermarkText: text,
       watermarkTextPosition: textWatermarkPosition(position),

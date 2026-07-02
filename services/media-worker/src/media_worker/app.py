@@ -1,4 +1,6 @@
 import hmac
+import logging
+import os
 import shutil
 import threading
 from functools import lru_cache
@@ -20,10 +22,11 @@ from .seo import generate_seo
 
 settings = Settings.from_env()
 configure_logging(settings.log_level)
+logger = logging.getLogger(__name__)
 pipeline = Pipeline(settings)
 stage_capacity = threading.BoundedSemaphore(settings.max_concurrent_jobs)
 app = FastAPI(
-    title="SuperCortesLikes Media Worker",
+    title="PicaShorts Media Worker",
     version=__version__,
     docs_url=None,
     redoc_url=None,
@@ -36,6 +39,21 @@ async def worker_error_handler(_: Request, error: WorkerError) -> JSONResponse:
         status_code=error.status_code,
         content={
             "error": {"code": error.code, "message": str(error), "detail": error.detail}
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(_: Request, error: Exception) -> JSONResponse:
+    logger.exception("Unhandled media-worker error")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "MEDIA_WORKER_INTERNAL_ERROR",
+                "message": "Media worker failed while executing the requested operation",
+                "detail": {"type": type(error).__name__},
+            }
         },
     )
 
@@ -58,9 +76,11 @@ async def liveness() -> Dict[str, Any]:
 @app.get("/health/ready")
 async def readiness() -> JSONResponse:
     dependencies = await run_in_threadpool(_readiness_dependencies)
-    required = ["ffmpeg", "ffprobe", "storage"]
+    required = ["ffmpeg", "ffprobe", "storage", "workspace"]
     if settings.redis_url:
         required.append("redis")
+    if settings.enable_ai:
+        required.append("modelCache")
     if settings.enable_whisperx:
         required.append("whisperx")
     if settings.enable_opencv:
@@ -88,10 +108,35 @@ def _readiness_dependencies() -> Dict[str, bool]:
         "ffmpeg": shutil.which(settings.ffmpeg_binary) is not None,
         "ffprobe": shutil.which(settings.ffprobe_binary) is not None,
         **imports,
+        "workspace": _path_writable(settings.data_dir),
+        "modelCache": _model_cache_ready(),
         "storage": _storage_ready(),
         "redis": _redis_ready(),
         "huggingFaceToken": bool(settings.hf_token),
     }
+
+
+def _path_writable(path: Any) -> bool:
+    try:
+        directory = path if hasattr(path, "mkdir") else settings.data_dir / str(path)
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / ".picashorts-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except BaseException:
+        return False
+
+
+def _model_cache_ready() -> bool:
+    paths = [
+        os.getenv("HF_HOME"),
+        os.getenv("TORCH_HOME"),
+        os.getenv("XDG_CACHE_HOME"),
+        os.getenv("MPLCONFIGDIR"),
+        os.getenv("YOLO_CONFIG_DIR"),
+    ]
+    return all(_path_writable(value) for value in paths if value)
 
 
 @lru_cache(maxsize=1)

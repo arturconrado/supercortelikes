@@ -7,8 +7,8 @@ const config = {
   get: vi.fn((key: string) => ({
     MERCADO_PAGO_ACCESS_TOKEN: 'mp-token',
     MERCADO_PAGO_WEBHOOK_SECRET: 'webhook-secret-123456',
-    PUBLIC_APP_URL: 'https://app.clipbr.ai',
-    PUBLIC_API_URL: 'https://api.clipbr.ai',
+    PUBLIC_APP_URL: 'https://picashorts.com',
+    PUBLIC_API_URL: 'https://api.picashorts.com',
   }[key])),
 } as any;
 

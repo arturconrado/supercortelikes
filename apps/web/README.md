@@ -1,6 +1,6 @@
-# ClipBR Web
+# PicaShorts Web
 
-Frontend Next.js do ClipBR AI. Configure `NEXT_PUBLIC_API_URL` com a origem pública da API; em desenvolvimento, o valor esperado é `http://localhost:3001`.
+Frontend Next.js do PicaShorts. Configure `NEXT_PUBLIC_API_URL` com a origem pública da API; em desenvolvimento, o valor esperado é `http://localhost:3001`.
 
 ## Executar
 

@@ -64,8 +64,9 @@ export class HealthController {
         this.prisma.deadLetterJob.count({ where: { status: 'OPEN' } }),
         this.queues.heartbeatExists('outbox-relay'),
       ]);
+      const healthy = relay && deadLettersOpen === 0 && unpublished === 0;
       return {
-        status: relay ? 'ok' : 'degraded',
+        status: healthy ? 'ok' : 'degraded',
         outbox: {
           relay: relay ? 'up' : 'down',
           unpublished,

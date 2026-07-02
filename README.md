@@ -1,4 +1,4 @@
-# SuperCortesLikes / ClipBR AI
+# PicaShorts
 
 Plataforma SaaS para transformar vídeos longos em cortes verticais prontos para publicação.
 

@@ -158,7 +158,7 @@ describe('health, exports, and media contracts', () => {
   it('reports API and pipeline readiness and converts failures to 503', async () => {
     const prisma: any = {
       $queryRaw: vi.fn().mockResolvedValue([1]),
-      outboxEvent: { count: vi.fn().mockResolvedValue(2), findFirst: vi.fn().mockResolvedValue({ createdAt: new Date(Date.now() - 1000) }) },
+      outboxEvent: { count: vi.fn().mockResolvedValue(0), findFirst: vi.fn().mockResolvedValue(null) },
       deadLetterJob: { count: vi.fn().mockResolvedValue(0) },
     };
     const queues: any = { ping: vi.fn().mockResolvedValue('PONG'), heartbeatExists: vi.fn().mockResolvedValue(true), diagnostics: vi.fn().mockResolvedValue({ ingestion: { waiting: 0 } }), essentialQueuesRegistered: vi.fn().mockReturnValue(true) };

@@ -61,7 +61,7 @@ export class BillingService {
     if (input.method === 'PIX') {
       const payment = await this.request<MercadoPagoResource>('/v1/payments', {
         transaction_amount: priceByPlan[input.plan],
-        description: `ClipBR AI ${input.plan} - 30 dias`,
+        description: `PicaShorts ${input.plan} - 30 dias`,
         payment_method_id: 'pix',
         external_reference: reference,
         notification_url: `${this.apiUrl}/api/mercado-pago/webhook`,
@@ -86,7 +86,7 @@ export class BillingService {
       };
     } else {
       const subscription = await this.request<MercadoPagoResource>('/preapproval', {
-        reason: `ClipBR AI ${input.plan}`,
+        reason: `PicaShorts ${input.plan}`,
         external_reference: reference,
         payer_email: user.email,
         auto_recurring: {
@@ -144,7 +144,7 @@ export class BillingService {
     if (method === 'PIX') {
       const payment = await this.request<MercadoPagoResource>('/v1/payments', {
         transaction_amount: amountCents / 100,
-        description: `ClipBR AI top-up - ${input.minutes} minutos`,
+        description: `PicaShorts top-up - ${input.minutes} minutos`,
         payment_method_id: 'pix',
         external_reference: reference,
         notification_url: `${this.apiUrl}/api/mercado-pago/webhook`,
@@ -175,7 +175,7 @@ export class BillingService {
         back_urls: { success: `${this.appUrl}/settings/billing`, failure: `${this.appUrl}/settings/billing` },
         items: [
           {
-            title: `ClipBR AI top-up - ${input.minutes} minutos`,
+            title: `PicaShorts top-up - ${input.minutes} minutos`,
             quantity: 1,
             currency_id: 'BRL',
             unit_price: amountCents / 100,
@@ -385,7 +385,7 @@ export class BillingService {
       headers: {
         authorization: `Bearer ${this.accessToken}`,
         'content-type': 'application/json',
-        'x-idempotency-key': idempotencyKey ?? `clipbr-${Date.now()}`,
+        'x-idempotency-key': idempotencyKey ?? `picashorts-${Date.now()}`,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(15_000),

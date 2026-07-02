@@ -7,6 +7,7 @@ import type { User } from '@/lib/types';
 
 type AuthContextValue = { user?: User; loading: boolean; logout: () => void; refresh: () => Promise<void> };
 const AuthContext = createContext<AuthContextValue>({ loading: true, logout() {}, async refresh() {} });
+const PUBLIC_ROUTES = new Set(['/login', '/register', '/forgot-password', '/terms', '/privacy', '/refunds']);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User>();
@@ -19,7 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); const listener = () => void refresh(); window.addEventListener('clipbr:session', listener); return () => window.removeEventListener('clipbr:session', listener); }, []);
-  useEffect(() => { if (!loading && !user && !['/login', '/register'].includes(pathname)) router.replace(`/login?next=${encodeURIComponent(pathname)}`); }, [loading, user, pathname, router]);
+  useEffect(() => { if (!loading && !user && !PUBLIC_ROUTES.has(pathname)) router.replace(`/login?next=${encodeURIComponent(pathname)}`); }, [loading, user, pathname, router]);
   const logout = () => { clearSession(); setUser(undefined); router.replace('/login'); };
   return <AuthContext.Provider value={{ user, loading, logout, refresh }}>{children}</AuthContext.Provider>;
 }

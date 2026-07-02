@@ -6,7 +6,7 @@ async function check(): Promise<void> {
   const mediaWorkerUrl = process.env.MEDIA_WORKER_URL;
   if (!redisUrl || !mediaWorkerUrl) throw new Error('Worker health environment is incomplete');
 
-  const prefix = `${process.env.QUEUE_PREFIX ?? 'clipbr'}-${process.env.NODE_ENV ?? 'development'}`;
+  const prefix = `${process.env.QUEUE_PREFIX ?? 'picashorts'}-${process.env.NODE_ENV ?? 'development'}`;
   const instance = process.env.HOSTNAME || hostname();
   const redis = new IORedis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
   try {

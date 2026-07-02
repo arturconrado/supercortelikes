@@ -11,7 +11,7 @@ const configValues = {
   REFRESH_TOKEN_SECRET: 'refresh-secret-at-least-32-characters',
   TERMS_VERSION: 'terms-2026-06',
   PRIVACY_VERSION: 'privacy-2026-06',
-  PUBLIC_APP_URL: 'https://app.clipbr.ai',
+  PUBLIC_APP_URL: 'https://picashorts.com',
 };
 const config = (values: Record<string, unknown> = {}) => ({ get: vi.fn((key: string) => ({ ...configValues, ...values })[key]) }) as any;
 

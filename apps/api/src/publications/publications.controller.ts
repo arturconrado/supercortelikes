@@ -35,7 +35,7 @@ export class PublicationsController {
         provider: input.provider,
         status,
         scheduledAt,
-        title: input.title?.trim() || clip.title || 'Corte ClipBR AI',
+        title: input.title?.trim() || clip.title || 'Corte PicaShorts',
         description: input.description?.trim() || clip.seo?.description,
         hashtags: (input.hashtags ?? (clip.seo?.hashtags as string[] | undefined) ?? []) as Prisma.InputJsonArray,
       },

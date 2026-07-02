@@ -35,7 +35,8 @@ function fieldError(form: { displayName: string; email: string; password: string
 export default function RegisterPage() {
   const termsVersion = process.env.NEXT_PUBLIC_TERMS_VERSION ?? 'terms-2026-06';
   const privacyVersion = process.env.NEXT_PUBLIC_PRIVACY_VERSION ?? 'privacy-2026-06';
-  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '';
+  const configuredTurnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '';
+  const turnstileSiteKey = configuredTurnstileSiteKey === 'disabled' ? '' : configuredTurnstileSiteKey;
   const router = useRouter();
   const [form, setForm] = useState({ displayName: '', email: '', password: '' });
   const [accepted, setAccepted] = useState(false);

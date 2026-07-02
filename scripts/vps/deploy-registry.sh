@@ -65,6 +65,16 @@ mkdir -p \
   "${VPS_DATA_DIR}/caddy/config" \
   "${VPS_BACKUP_DIR}"
 
+# The media-worker image runs as uid/gid 10001. Bind-mounted media data must be
+# writable by that user, otherwise the container stays healthy but pipeline
+# stages fail when creating /data/pipelines and /data/models. The deploy user
+# may not be root on existing VPSes, so prefer chown and fall back to a writable
+# internal media volume.
+mkdir -p "${VPS_DATA_DIR}/media/pipelines" "${VPS_DATA_DIR}/media/models"
+if ! chown -R 10001:10001 "${VPS_DATA_DIR}/media" 2>/dev/null; then
+  chmod -R a+rwX "${VPS_DATA_DIR}/media"
+fi
+
 compose_args=(
   --env-file "${ENV_FILE}"
   -f "${BASE_COMPOSE_FILE}"

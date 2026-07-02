@@ -180,7 +180,7 @@ export class AuthService {
     });
     await this.email?.send({
       to: user.email,
-      subject: 'Redefina sua senha no ClipBR',
+      subject: 'Redefina sua senha no PicaShorts',
       text: `Acesse ${this.appUrl}/reset-password?token=${token} para redefinir sua senha. O link expira em 1 hora.`,
       html: `<p>Use o link abaixo para redefinir sua senha. Ele expira em 1 hora.</p><p><a href="${this.appUrl}/reset-password?token=${token}">Redefinir senha</a></p>`,
     });
@@ -234,7 +234,7 @@ export class AuthService {
     });
     await this.email?.send({
       to: email,
-      subject: 'Verifique seu e-mail no ClipBR',
+      subject: 'Verifique seu e-mail no PicaShorts',
       text: `Olá, ${displayName}. Acesse ${this.appUrl}/verify-email?token=${token} para verificar seu e-mail.`,
       html: `<p>Olá, ${displayName}.</p><p><a href="${this.appUrl}/verify-email?token=${token}">Verificar e-mail</a></p>`,
     });

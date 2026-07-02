@@ -250,7 +250,7 @@ function BrandForm() {
               className="rounded-lg bg-black/35 px-3 py-1 text-sm font-bold"
               style={{ color: form.primaryColor, opacity: form.watermarkOpacity, fontFamily: form.fontFamily || undefined }}
             >
-              {form.watermarkText || form.name || 'ClipBR AI'}
+              {form.watermarkText || form.name || 'PicaShorts'}
             </span>
           </div>
         </div>

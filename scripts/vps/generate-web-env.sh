@@ -71,12 +71,23 @@ else
   require_external NEXT_PUBLIC_TURNSTILE_SITE_KEY
 fi
 
+llm_provider="${LLM_PROVIDER:-openrouter}"
 llm_api_key="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
-if [[ -n "${llm_api_key}" ]]; then
-  llm_provider="${LLM_PROVIDER:-openrouter}"
-else
-  llm_provider="${LLM_PROVIDER:-none}"
-fi
+case "${llm_provider}" in
+  openrouter)
+    if [[ -z "${llm_api_key}" ]]; then
+      echo "LLM_API_KEY or OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter." >&2
+      exit 1
+    fi
+    ;;
+  none)
+    llm_api_key=""
+    ;;
+  *)
+    echo "Invalid LLM_PROVIDER=${llm_provider}. Use openrouter or none." >&2
+    exit 1
+    ;;
+esac
 
 umask 077
 tmp_file="$(mktemp)"

@@ -78,7 +78,17 @@ export class MediaWorkerClient {
     } catch {
       throw new ServiceUnavailableException('Media worker is unavailable');
     }
-    const payload = (await response.json()) as unknown;
+    let payload: unknown;
+    if (typeof response.text === 'function') {
+      const text = await response.text();
+      try {
+        payload = text ? JSON.parse(text) : {};
+      } catch {
+        payload = { error: { code: 'MEDIA_WORKER_NON_JSON_RESPONSE', message: text.slice(0, 200) || 'Media worker returned a non-JSON response' } };
+      }
+    } else {
+      payload = await response.json();
+    }
     if (!response.ok) {
       const error = payload as { error?: { code?: string; message?: string } };
       throw Object.assign(new Error(error.error?.message ?? 'Media worker stage failed'), {
