@@ -108,10 +108,10 @@ tmp_file="$(mktemp)"
   printf '\n'
   printf 'POSTGRES_DB=%s\n' "${POSTGRES_DB:-clipbr}"
   printf 'POSTGRES_USER=%s\n' "${POSTGRES_USER:-clipbr}"
-  printf 'POSTGRES_PASSWORD=%s\n' "${POSTGRES_PASSWORD:-$(random_base64)}"
+  printf 'POSTGRES_PASSWORD=%s\n' "${POSTGRES_PASSWORD:-$(random_hex)}"
   printf 'POSTGRES_LOCAL_PORT=%s\n' "${POSTGRES_LOCAL_PORT:-55432}"
   printf '\n'
-  printf 'REDIS_PASSWORD=%s\n' "${REDIS_PASSWORD:-$(random_base64)}"
+  printf 'REDIS_PASSWORD=%s\n' "${REDIS_PASSWORD:-$(random_hex)}"
   printf 'QUEUE_PREFIX=%s\n' "${QUEUE_PREFIX:-clipbr-vps}"
   printf 'OUTBOX_POLL_INTERVAL_MS=%s\n' "${OUTBOX_POLL_INTERVAL_MS:-1000}"
   printf 'OUTBOX_BATCH_SIZE=%s\n' "${OUTBOX_BATCH_SIZE:-20}"

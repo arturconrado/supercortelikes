@@ -202,7 +202,7 @@ services:
           }
         ]
         EOF
-        mc cors set "local/$${S3_BUCKET}" /tmp/cors.json
+        mc cors set "local/$${S3_BUCKET}" /tmp/cors.json || echo "WARN: bucket CORS configuration failed; relying on MINIO_API_CORS_ALLOW_ORIGIN"
 
   migrate:
     build: { context: ., dockerfile: apps/api/Dockerfile, target: migration }
