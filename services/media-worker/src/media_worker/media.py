@@ -23,19 +23,32 @@ YTDLP_SOURCE_HOSTS = {
     "drive.google.com",
 }
 YOUTUBE_FORMAT_SELECTOR = (
-    "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/"
-    "bv*[ext=mp4]+ba[ext=m4a]/"
-    "b[ext=mp4]/"
-    "bestvideo*+bestaudio/best"
+    "bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/"
+    "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/"
+    "b[height<=1080][ext=mp4]/"
+    "bv*[height<=1080]+ba/"
+    "b[height<=1080]/"
+    "best[height<=1080]/"
+    "best"
+)
+DEFAULT_YTDLP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
 )
 YOUTUBE_AUTH_FAILURE_MARKERS = (
     "sign in to confirm",
     "not a bot",
+    "verify you are not a bot",
+    "verify you're not a bot",
     "use --cookies",
     "cookies-from-browser",
     "login required",
     "private video",
     "confirm your age",
+    "http error 403",
+    "http error 429",
+    "too many requests",
 )
 
 
@@ -79,7 +92,7 @@ def materialize_source(uri: str, target_dir: Path, settings: Settings) -> Path:
             "Only local, HTTP, and HTTPS media sources are accepted",
         )
     request = urllib.request.Request(
-        uri, headers={"User-Agent": "SuperCortesLikes-MediaWorker/1.0"}
+        uri, headers={"User-Agent": settings.ytdlp_user_agent or DEFAULT_YTDLP_USER_AGENT}
     )
     temporary = destination.with_suffix(destination.suffix + ".part")
     total = 0
@@ -140,9 +153,20 @@ def _download_with_ytdlp(uri: str, target_dir: Path, settings: Settings) -> Path
         'outtmpl': str(target_dir / 'source.%(ext)s'),
         'merge_output_format': 'mp4',
         'noplaylist': True,
+        'playlist_items': '1',
         'max_filesize': settings.max_download_bytes,
         'socket_timeout': settings.request_timeout_seconds,
         'retries': 3,
+        'fragment_retries': 5,
+        'extractor_retries': 3,
+        'file_access_retries': 3,
+        'concurrent_fragment_downloads': 2,
+        'continuedl': True,
+        'overwrites': False,
+        'restrictfilenames': True,
+        'windowsfilenames': True,
+        'cachedir': str(settings.data_dir / 'models' / 'cache' / 'yt-dlp'),
+        'http_headers': {"User-Agent": settings.ytdlp_user_agent or DEFAULT_YTDLP_USER_AGENT},
         'js_runtimes': {'deno': {}},
         'remote_components': {'ejs:github'},
         'quiet': True,

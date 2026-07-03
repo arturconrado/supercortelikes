@@ -74,8 +74,9 @@ def test_materialize_source_local_cached_and_validation(tmp_path, monkeypatch):
 
 
 def test_youtube_import_prefers_cpu_friendly_mp4_formats():
-    assert YOUTUBE_FORMAT_SELECTOR.startswith("bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]")
-    assert "bestvideo*+bestaudio/best" in YOUTUBE_FORMAT_SELECTOR
+    assert YOUTUBE_FORMAT_SELECTOR.startswith("bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a]")
+    assert "best[height<=1080]" in YOUTUBE_FORMAT_SELECTOR
+    assert "bv*[height<=1080]+ba" in YOUTUBE_FORMAT_SELECTOR
 
 
 def test_youtube_download_configures_deno_runtime(tmp_path, monkeypatch):
@@ -104,6 +105,12 @@ def test_youtube_download_configures_deno_runtime(tmp_path, monkeypatch):
     assert YoutubeDL.options["format"] == YOUTUBE_FORMAT_SELECTOR
     assert YoutubeDL.options["js_runtimes"] == {"deno": {}}
     assert YoutubeDL.options["remote_components"] == {"ejs:github"}
+    assert YoutubeDL.options["fragment_retries"] == 5
+    assert YoutubeDL.options["extractor_retries"] == 3
+    assert YoutubeDL.options["concurrent_fragment_downloads"] == 2
+    assert YoutubeDL.options["continuedl"] is True
+    assert YoutubeDL.options["playlist_items"] == "1"
+    assert "Mozilla/5.0" in YoutubeDL.options["http_headers"]["User-Agent"]
     assert (tmp_path / "source.metadata.json").read_text(encoding="utf-8")
 
 
@@ -218,6 +225,11 @@ class StorageClient:
 
 def install_storage_client(monkeypatch, client):
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: client))
+    monkeypatch.setitem(
+        sys.modules,
+        "botocore.config",
+        SimpleNamespace(Config=lambda **kwargs: kwargs),
+    )
 
 
 def test_materialize_storage_success_cache_and_version(tmp_path, monkeypatch):

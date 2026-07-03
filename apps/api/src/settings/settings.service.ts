@@ -1,13 +1,19 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import * as argon2 from 'argon2';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
+import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 import type { BrandKitDto, BrandLogoDto, ChangePasswordDto, NotificationsDto } from './settings.dto';
 
 @Injectable()
 export class SettingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+  ) {}
 
   async updateProfile(user: AuthenticatedUser, name: string): Promise<unknown> {
     const updated = await this.prisma.user.update({
@@ -69,6 +75,8 @@ export class SettingsService {
   async updateBrandLogo(user: AuthenticatedUser, input: BrandLogoDto): Promise<unknown> {
     const current = await this.prisma.brandKit.findFirst({ where: { workspaceId: user.workspaceId } });
     const currentWatermark = jsonRecord(current?.watermark ?? null);
+    const uploadedLogoKey = input.dataUrl ? await this.uploadBrandLogo(user.workspaceId, input) : undefined;
+    const logoKey = uploadedLogoKey ?? input.logoKey;
     const watermark: Record<string, unknown> = {
       ...currentWatermark,
       position: input.position ?? 'W-tw-32:H-th-32',
@@ -79,7 +87,7 @@ export class SettingsService {
       return this.prisma.brandKit.update({
         where: { id: current.id },
         data: {
-          ...(input.logoKey !== undefined ? { logoKey: input.logoKey.trim() || null } : {}),
+          ...(logoKey !== undefined ? { logoKey: logoKey.trim() || null } : {}),
           watermark: watermark as Prisma.InputJsonObject,
         },
       });
@@ -90,10 +98,23 @@ export class SettingsService {
         name: 'Default',
         primaryColor: '#B8FF2C',
         accentColor: '#FFFFFF',
-        ...(input.logoKey ? { logoKey: input.logoKey.trim() } : {}),
+        ...(logoKey ? { logoKey: logoKey.trim() } : {}),
         watermark: watermark as Prisma.InputJsonObject,
       },
     });
+  }
+
+  private async uploadBrandLogo(workspaceId: string, input: BrandLogoDto): Promise<string> {
+    const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(input.dataUrl ?? '');
+    if (!match) throw new BadRequestException('Logo must be a PNG, JPEG or WebP data URL');
+    const contentType = match[1]!;
+    const extension = LOGO_TYPES[contentType];
+    if (!extension) throw new BadRequestException('Unsupported logo type');
+    const buffer = Buffer.from(match[2]!, 'base64');
+    if (!buffer.length || buffer.byteLength > MAX_LOGO_BYTES) throw new BadRequestException('Logo must be between 1 byte and 5 MiB');
+    const key = `brand-kits/${workspaceId}/${randomUUID()}.${extension}`;
+    await this.storage.upload(key, Readable.from(buffer), contentType);
+    return key;
   }
 
   async changePassword(user: AuthenticatedUser, input: ChangePasswordDto): Promise<void> {
@@ -108,6 +129,13 @@ export class SettingsService {
     ]);
   }
 }
+
+const MAX_LOGO_BYTES = 5 * 1024 * 1024;
+const LOGO_TYPES: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+};
 
 function jsonRecord(value: Prisma.JsonValue | null): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};

@@ -29,6 +29,16 @@ export class BrandLogoDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(7_000_000)
+  dataUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  fileName?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(80)
   watermarkText?: string;
 

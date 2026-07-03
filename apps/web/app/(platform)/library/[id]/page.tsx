@@ -3,7 +3,7 @@
 import { ArrowLeft, CheckCircle2, Clock3, Film, LoaderCircle, Pencil, Scissors, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ClipCard } from '@/components/clip-card';
 import { Alert, Badge, Button, Card, EmptyState, Input, Modal, PageHeader, Progress, Skeleton, StatusBadge } from '@/components/ui';
 import { useCollection, useResource } from '@/hooks/use-resource';
@@ -66,7 +66,9 @@ export default function VideoPage() {
   const { data: video, loading, error, refresh, setData: setVideo } = videoResource;
   const { refresh: refreshClips } = clipsResource;
   const { refresh: refreshPipeline } = pipelineResource;
-  const clips = clipsResource.data;
+  const rawClips = clipsResource.data;
+  const [clipFilter, setClipFilter] = useState<'ALL' | 'HIGH_SCORE' | 'READY' | 'VERTICAL'>('ALL');
+  const [clipSort, setClipSort] = useState<'SCORE' | 'DURATION' | 'RECENT'>('SCORE');
   const [retrying, setRetrying] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -74,18 +76,31 @@ export default function VideoPage() {
   const [titleError, setTitleError] = useState('');
   const [previewClip, setPreviewClip] = useState<Clip | null>(null);
   const [lastPipelineRefreshAt, setLastPipelineRefreshAt] = useState<Date | null>(null);
+  const clips = useMemo(() => {
+    const filtered = rawClips.filter((clip) => {
+      if (clipFilter === 'HIGH_SCORE') return (clip.score ?? 0) >= 80;
+      if (clipFilter === 'READY') return ['READY', 'SUCCEEDED', 'COMPLETED'].includes((clip.status ?? '').toUpperCase());
+      if (clipFilter === 'VERTICAL') return (clip.aspectRatio ?? '9:16') === '9:16';
+      return true;
+    });
+    return [...filtered].sort((a, b) => {
+      if (clipSort === 'DURATION') return (b.durationSeconds ?? 0) - (a.durationSeconds ?? 0);
+      if (clipSort === 'RECENT') return String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
+      return (b.score ?? 0) - (a.score ?? 0);
+    });
+  }, [rawClips, clipFilter, clipSort]);
 
   useEffect(() => {
     if (video && !editingTitle) setTitleDraft(video.title ?? video.originalFilename);
   }, [video, editingTitle]);
 
   useEffect(() => {
-    if (!video || !isProcessing(video, clips)) return;
+    if (!video || !isProcessing(video, rawClips)) return;
     const timer = window.setInterval(() => {
       void Promise.all([refresh(), refreshPipeline(), refreshClips()]).finally(() => setLastPipelineRefreshAt(new Date()));
     }, 3500);
     return () => window.clearInterval(timer);
-  }, [video, clips.length, refresh, refreshPipeline, refreshClips]);
+  }, [video, rawClips.length, refresh, refreshPipeline, refreshClips]);
 
   useEffect(() => {
     if (pipelineResource.data) setLastPipelineRefreshAt(new Date());
@@ -123,9 +138,9 @@ export default function VideoPage() {
   if (error || !video) return <Alert>{error ?? 'Vídeo não encontrado.'}</Alert>;
 
   const status = effectiveStatus(video);
-  const processing = isProcessing(video, clips);
+  const processing = isProcessing(video, rawClips);
   const pipeline = pipelineResource.data;
-  const progress = pipeline?.progress ?? pipelineProgress(video, clips);
+  const progress = pipeline?.progress ?? pipelineProgress(video, rawClips);
   const openErrors = pipeline?.run?.openDeadLetters ?? [];
   const displayTitle = video.title ?? video.originalFilename;
   const activity = pipeline?.run?.stages ?? [];
@@ -222,7 +237,7 @@ export default function VideoPage() {
               const currentIndex = PIPELINE_STAGES.findIndex((item) => item.key === video.currentStage);
               const stageIndex = PIPELINE_STAGES.findIndex((item) => item.key === stage.key);
               const pipelineStage = pipeline?.run?.stages.find((item) => item.stage === stage.key);
-              const done = pipelineStage?.status === 'SUCCEEDED' || status === 'SUCCEEDED' || clips.length > 0 || (currentIndex >= 0 && stageIndex < currentIndex);
+              const done = pipelineStage?.status === 'SUCCEEDED' || status === 'SUCCEEDED' || rawClips.length > 0 || (currentIndex >= 0 && stageIndex < currentIndex);
               const failed = pipelineStage?.status === 'FAILED' || pipelineStage?.status === 'DEAD_LETTERED';
               const active = video.currentStage === stage.key && processing;
               return (
@@ -268,7 +283,7 @@ export default function VideoPage() {
               ['Formato', video.container?.toUpperCase() ?? video.mimeType],
               ['Tamanho', formatBytes(video.sizeBytes)],
               ['Duração', formatDuration(video.durationSeconds)],
-              ['Cortes', String(video.clipsCount ?? clips.length ?? 0)],
+              ['Cortes', String(video.clipsCount ?? rawClips.length ?? 0)],
             ].map(([key, value]) => (
               <div key={key} className="flex justify-between gap-4">
                 <dt className="text-zinc-600">{key}</dt>
@@ -297,12 +312,43 @@ export default function VideoPage() {
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
             <h2 className="font-semibold text-white">Cortes encontrados</h2>
-            <p className="mt-1 text-xs text-zinc-600">Assim que a IA encontrar os melhores momentos, eles aparecem aqui.</p>
+            <p className="mt-1 text-xs text-zinc-600">Filtre, pré-visualize e abra o editor para ajustar cada corte.</p>
           </div>
           {processing && <span className="inline-flex items-center gap-2 text-xs text-zinc-500"><Clock3 className="size-3"/>Atualizando…</span>}
         </div>
+        <div className="mb-4 grid gap-3 rounded-2xl border border-white/[.07] bg-panel/70 p-3 sm:grid-cols-2 lg:flex lg:items-center lg:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {[
+              ['ALL', 'Todos'],
+              ['HIGH_SCORE', 'Score 80+'],
+              ['READY', 'Prontos'],
+              ['VERTICAL', '9:16'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setClipFilter(value as typeof clipFilter)}
+                className={cn('rounded-full px-3 py-1.5 text-xs font-semibold transition', clipFilter === value ? 'bg-lime text-black' : 'bg-white/[.05] text-zinc-400 hover:text-white')}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-2 text-xs text-zinc-500 lg:justify-end">
+            Ordenar
+            <select
+              value={clipSort}
+              onChange={(event) => setClipSort(event.target.value as typeof clipSort)}
+              className="h-9 rounded-xl border border-white/10 bg-white/[.035] px-3 text-xs text-white outline-none"
+            >
+              <option value="SCORE">Maior score</option>
+              <option value="DURATION">Maior duração</option>
+              <option value="RECENT">Mais recentes</option>
+            </select>
+          </label>
+        </div>
 
-        {clipsResource.loading && !clips.length ? (
+        {clipsResource.loading && !rawClips.length ? (
           <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-72"/>)}
           </div>

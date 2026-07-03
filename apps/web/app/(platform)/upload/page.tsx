@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle2, FileVideo, Link2, LoaderCircle, UploadCloud, X } from 'lucide-react';
+import { CheckCircle2, Clipboard, FileVideo, Info, Link2, LoaderCircle, UploadCloud, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { DragEvent, FormEvent, useRef, useState } from 'react';
 import { Alert, Button, Card, Input, Label, PageHeader, Progress } from '@/components/ui';
@@ -62,6 +62,7 @@ export default function UploadPage() {
   const [urlBusy, setUrlBusy] = useState(false);
   const [urlError, setUrlError] = useState('');
   const [urlSuccess, setUrlSuccess] = useState('');
+  const [urlTouched, setUrlTouched] = useState(false);
   const [processingOptions, setProcessingOptions] = useState<VideoProcessingOptions>(DEFAULT_PROCESSING_OPTIONS);
   const input = useRef<HTMLInputElement>(null);
 
@@ -121,7 +122,12 @@ export default function UploadPage() {
   async function importUrl(event: FormEvent) {
     event.preventDefault();
     const value = url.trim();
-    if (!value) return;
+    const validation = validateImportUrl(value);
+    if (validation) {
+      setUrlTouched(true);
+      setUrlError(validation);
+      return;
+    }
     setUrlBusy(true);
     setUrlError('');
     setUrlSuccess('');
@@ -135,15 +141,27 @@ export default function UploadPage() {
       setUrlSuccess('Importação iniciada. Abrindo a tela do vídeo…');
       router.push(`/library/${video.id}`);
     } catch (reason) {
-      setUrlError(reason instanceof Error ? reason.message : 'Não foi possível importar esse link.');
+      setUrlError(importErrorMessage(reason));
     } finally {
       setUrlBusy(false);
+    }
+  }
+
+  async function pasteUrl() {
+    setUrlError('');
+    try {
+      const value = await navigator.clipboard.readText();
+      setUrl(value.trim());
+      setUrlTouched(true);
+    } catch {
+      setUrlError('Não consegui acessar a área de transferência. Cole o link manualmente no campo.');
     }
   }
 
   const uploading = items.some((item) => item.status === 'uploading');
   const pending = items.some((item) => item.status === 'waiting' || (item.status === 'error' && !validateVideo(item.file, limits)));
   const completed = items.filter((item) => item.status === 'done').length;
+  const urlValidation = urlTouched ? validateImportUrl(url.trim()) : '';
 
   return (
     <>
@@ -248,11 +266,33 @@ export default function UploadPage() {
                   {urlSuccess && <div className="mb-4 rounded-xl border border-emerald-500/15 bg-emerald-500/[.08] p-3.5 text-sm text-emerald-200">{urlSuccess}</div>}
                   <Label htmlFor="video-url">URL do vídeo</Label>
                   <div className="flex flex-col gap-3 sm:flex-row">
-                    <Input id="video-url" type="url" required value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.youtube.com/watch?v=..."/>
+                    <div className="flex-1">
+                      <Input
+                        id="video-url"
+                        type="url"
+                        required
+                        value={url}
+                        onBlur={() => setUrlTouched(true)}
+                        onChange={(event) => { setUrl(event.target.value); setUrlTouched(true); setUrlError(''); }}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        aria-invalid={Boolean(urlValidation)}
+                      />
+                      <p className={`mt-2 text-xs leading-5 ${urlValidation ? 'text-red-300' : 'text-zinc-600'}`}>
+                        {urlValidation || 'Links públicos são importados em segundo plano. YouTube pode exigir cookies quando bloquear automação.'}
+                      </p>
+                    </div>
+                    <Button type="button" variant="secondary" onClick={() => void pasteUrl()} className="shrink-0">
+                      <Clipboard className="size-4"/>
+                      Colar
+                    </Button>
                     <Button disabled={urlBusy} className="shrink-0">
                       {urlBusy && <LoaderCircle className="size-4 animate-spin"/>}
                       Importar
                     </Button>
+                  </div>
+                  <div className="mt-4 rounded-xl border border-white/[.06] bg-white/[.025] p-3 text-xs leading-5 text-zinc-500">
+                    <Info className="mr-1 inline size-3 text-lime"/>
+                    Se uma plataforma bloquear a importação automática, o fluxo continua claro: envie o arquivo manualmente ou configure cookies no importador da VPS.
                   </div>
                 </form>
               </div>
@@ -260,7 +300,7 @@ export default function UploadPage() {
           )}
         </div>
 
-        <UploadInfo quota={quota.data}/>
+        <UploadInfo quota={quota.data} options={processingOptions} files={items.map((item) => item.file)}/>
       </div>
     </>
   );
@@ -349,7 +389,8 @@ function ProcessingOptionsPanel({ value, onChange }: { value: VideoProcessingOpt
   );
 }
 
-function UploadInfo({ quota }: { quota?: UsageSnapshot }) {
+function UploadInfo({ quota, options, files }: { quota?: UsageSnapshot; options: VideoProcessingOptions; files: File[] }) {
+  const estimatedMinutes = estimateMinutes(options, files);
   return (
     <Card className="h-fit p-5">
       <h3 className="font-semibold text-white">Seu plano</h3>
@@ -360,6 +401,12 @@ function UploadInfo({ quota }: { quota?: UsageSnapshot }) {
           <p className="mt-2">Upload até {formatBytes(quota.limits.maxUploadBytes)} · export {quota.limits.exportResolution}{quota.limits.watermark ? ' · com marca d’água' : ''}</p>
         </div>
       ) : null}
+      <div className="mt-4 rounded-xl border border-lime/15 bg-lime/[.06] p-3 text-xs leading-5 text-lime">
+        <p className="font-semibold">Estimativa desta sessão</p>
+        <p className="mt-1 text-lime/80">
+          {estimatedMinutes > 0 ? `Até ${estimatedMinutes} min de processamento planejado` : `${options.clipCount} cortes · ${options.aspectRatio} · ${options.targetPlatform}`}
+        </p>
+      </div>
       <h3 className="mt-6 font-semibold text-white">O que acontece depois?</h3>
       <ol className="mt-5 space-y-5">
         {[
@@ -376,4 +423,31 @@ function UploadInfo({ quota }: { quota?: UsageSnapshot }) {
       <div className="mt-6 border-t border-white/[.06] pt-5 text-xs leading-5 text-zinc-600">Ao enviar, você confirma que possui os direitos necessários sobre o conteúdo.</div>
     </Card>
   );
+}
+
+function validateImportUrl(value: string): string {
+  if (!value) return 'Cole uma URL pública para iniciar a importação.';
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return 'Use uma URL começando com http:// ou https://.';
+    if (!parsed.hostname.includes('.')) return 'Informe um domínio público válido.';
+    return '';
+  } catch {
+    return 'Essa URL não parece válida. Confira o link e tente novamente.';
+  }
+}
+
+function importErrorMessage(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : 'Não foi possível importar esse link.';
+  const lower = message.toLowerCase();
+  if (lower.includes('youtube') || lower.includes('cookie') || lower.includes('auth_required')) {
+    return 'O YouTube bloqueou a importação automática deste link. Envie o arquivo manualmente ou configure cookies do YouTube no importador.';
+  }
+  return message;
+}
+
+function estimateMinutes(options: VideoProcessingOptions, files: File[]): number {
+  if (!files.length) return 0;
+  const perClipSeconds = Math.max(options.minimumDurationSeconds, Math.min(options.maximumDurationSeconds, 60));
+  return Math.max(1, Math.ceil((options.clipCount * perClipSeconds) / 60));
 }

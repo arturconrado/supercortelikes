@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, Check, ImageIcon, KeyRound, LoaderCircle, Palette, UserRound } from 'lucide-react';
+import { Bell, Check, KeyRound, LoaderCircle, Palette, UploadCloud, UserRound } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { Alert, Button, Card, Input, Label, PageHeader } from '@/components/ui';
@@ -138,6 +138,9 @@ function BrandForm() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
+  const [logoDataUrl, setLogoDataUrl] = useState('');
+  const [logoPreview, setLogoPreview] = useState('');
+  const [logoError, setLogoError] = useState('');
 
   useEffect(() => {
     api<Partial<BrandKitState> | { data: Partial<BrandKitState> }>(endpoints.brandKit)
@@ -166,7 +169,7 @@ function BrandForm() {
       await api('/brand-kits/logo', {
         method: 'POST',
         body: JSON.stringify({
-          logoKey: form.logoKey,
+          ...(logoDataUrl ? { dataUrl: logoDataUrl } : { logoKey: form.logoKey }),
           watermarkText: form.watermarkText,
           position: form.watermarkPosition,
           opacity: Number(form.watermarkOpacity),
@@ -180,6 +183,23 @@ function BrandForm() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function chooseLogo(file?: File) {
+    setLogoError('');
+    setLogoDataUrl('');
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setLogoError('Use PNG, JPEG ou WebP.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setLogoError('O logo deve ter até 5 MB.');
+      return;
+    }
+    const dataUrl = await fileToDataUrl(file);
+    setLogoDataUrl(dataUrl);
+    setLogoPreview(dataUrl);
   }
 
   const currentPosition = positionOptions.find((item) => item.value === form.watermarkPosition) ?? positionOptions.at(-1)!;
@@ -207,12 +227,20 @@ function BrandForm() {
             <Input id="watermark" value={form.watermarkText} onChange={(event) => setForm({ ...form, watermarkText: event.target.value })}/>
           </div>
           <div>
-            <Label htmlFor="logo-key">Logo no storage</Label>
-            <div className="relative">
-              <ImageIcon className="absolute left-3.5 top-3.5 size-4 text-zinc-600"/>
-              <Input id="logo-key" className="pl-10" value={form.logoKey} onChange={(event) => setForm({ ...form, logoKey: event.target.value })} placeholder="brand-kits/logo.png"/>
-            </div>
-            <p className="mt-2 text-xs text-zinc-600">Por enquanto informe a chave/URL já enviada ao storage.</p>
+            <Label htmlFor="brand-logo">Logo da marca</Label>
+            <label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[.035] px-3.5 text-sm font-semibold text-zinc-300 transition hover:border-lime/40 hover:text-white">
+              <UploadCloud className="size-4"/>
+              Enviar PNG/JPEG/WebP
+              <input
+                id="brand-logo"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(event) => void chooseLogo(event.target.files?.[0])}
+              />
+            </label>
+            {logoError ? <p className="mt-2 text-xs text-red-300">{logoError}</p> : <p className="mt-2 text-xs text-zinc-600">Até 5 MB. O arquivo fica privado no storage.</p>}
+            {form.logoKey && !logoPreview && <p className="mt-2 truncate text-xs text-zinc-600">Atual: {form.logoKey}</p>}
           </div>
         </div>
 
@@ -246,12 +274,21 @@ function BrandForm() {
         <div className="rounded-xl border border-white/[.07] bg-black p-5">
           <p className="text-xs text-zinc-600">Prévia</p>
           <div className={`mt-3 flex aspect-[16/7] rounded-lg bg-gradient-to-br from-zinc-800 to-zinc-950 p-4 ${currentPosition.className}`}>
-            <span
-              className="rounded-lg bg-black/35 px-3 py-1 text-sm font-bold"
-              style={{ color: form.primaryColor, opacity: form.watermarkOpacity, fontFamily: form.fontFamily || undefined }}
-            >
-              {form.watermarkText || form.name || 'PicaShorts'}
-            </span>
+            {logoPreview ? (
+              <img
+                src={logoPreview}
+                alt="Prévia do logo"
+                className="max-h-16 max-w-[180px] rounded-lg object-contain"
+                style={{ opacity: form.watermarkOpacity }}
+              />
+            ) : (
+              <span
+                className="rounded-lg bg-black/35 px-3 py-1 text-sm font-bold"
+                style={{ color: form.primaryColor, opacity: form.watermarkOpacity, fontFamily: form.fontFamily || undefined }}
+              >
+                {form.watermarkText || form.name || 'PicaShorts'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -259,6 +296,15 @@ function BrandForm() {
       </form>
     </Card>
   );
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Não foi possível ler o logo.'));
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.readAsDataURL(file);
+  });
 }
 
 function ColorInput({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (value: string) => void }) {
