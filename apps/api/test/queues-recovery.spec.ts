@@ -80,7 +80,7 @@ describe('queue registry and worker factory', () => {
     const factory = new StageWorkerFactory(orchestrator, dead, config);
     factory.create('ingestion', vi.fn().mockRejectedValue(error), 1);
 
-    await expect(mocks.processors[0]({ data: job(), opts: { attempts: 5 }, attemptsMade: 0, id: 'job' })).rejects.toThrow('YouTube');
+    await expect(mocks.processors[0]({ data: job(), opts: { attempts: 5 }, attemptsMade: 0, id: 'job' })).resolves.toBeUndefined();
 
     expect(orchestrator.fail).toHaveBeenCalledWith(expect.anything(), error, { deadLettered: false });
     expect(dead.capture).not.toHaveBeenCalled();

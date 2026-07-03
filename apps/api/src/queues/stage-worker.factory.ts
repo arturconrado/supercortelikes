@@ -44,6 +44,8 @@ export class StageWorkerFactory implements OnModuleDestroy {
             await this.orchestrator.fail(job, error, { deadLettered: captureDeadLetter });
             if (captureDeadLetter) {
               await this.deadLetters.capture(stage, bullJob.id ?? job.eventId, job, error, bullJob.attemptsMade + 1);
+            } else {
+              return;
             }
           } else {
             await this.orchestrator.retry(job, error);
