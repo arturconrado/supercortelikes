@@ -15,6 +15,8 @@ Optional env:
   COMPOSE_PROJECT_NAME=clipbr-vps
   VPS_COOKIES_PATH=/srv/clipbr/data/media/cookies/youtube.txt
   CONTAINER_COOKIES_PATH=/data/cookies/youtube.txt
+  YTDLP_USER_AGENT='Mozilla/5.0 ...'
+  YTDLP_PROXY=http://user:pass@host:port
   TEST_URL=https://www.youtube.com/watch?v=...
 
 The cookies file must be in Netscape cookies.txt format and is never printed.
@@ -73,13 +75,15 @@ echo "Uploading YouTube cookies to ${VPS_USER}@${VPS_HOST}:${VPS_COOKIES_PATH}"
 "${scp_base[@]}" "${COOKIE_FILE}" "${VPS_USER}@${VPS_HOST}:${remote_tmp}"
 
 remote_prefix=$(
-  printf 'VPS_APP_DIR=%q VPS_COOKIES_PATH=%q CONTAINER_COOKIES_PATH=%q COMPOSE_PROJECT_NAME=%q REMOTE_TMP=%q TEST_URL=%q' \
+  printf 'VPS_APP_DIR=%q VPS_COOKIES_PATH=%q CONTAINER_COOKIES_PATH=%q COMPOSE_PROJECT_NAME=%q REMOTE_TMP=%q TEST_URL=%q YTDLP_PROXY_VALUE=%q YTDLP_USER_AGENT_VALUE=%q' \
     "${VPS_APP_DIR}" \
     "${VPS_COOKIES_PATH}" \
     "${CONTAINER_COOKIES_PATH}" \
     "${COMPOSE_PROJECT_NAME}" \
     "${remote_tmp}" \
-    "${TEST_URL:-}"
+    "${TEST_URL:-}" \
+    "${YTDLP_PROXY:-}" \
+    "${YTDLP_USER_AGENT:-}"
 )
 
 "${ssh_base[@]}" "${VPS_USER}@${VPS_HOST}" "${remote_prefix} bash -s" <<'REMOTE'
@@ -96,7 +100,7 @@ if [[ ! -f .env.production ]]; then
   exit 1
 fi
 
-python3 - .env.production "${CONTAINER_COOKIES_PATH}" <<'PY'
+python3 - .env.production "${CONTAINER_COOKIES_PATH}" "${YTDLP_PROXY_VALUE}" "${YTDLP_USER_AGENT_VALUE}" <<'PY'
 from __future__ import annotations
 
 import shutil
@@ -106,28 +110,37 @@ from pathlib import Path
 
 env_path = Path(sys.argv[1])
 container_path = sys.argv[2]
-key = "YTDLP_COOKIES_FILE"
+proxy = sys.argv[3]
+user_agent = sys.argv[4]
+updates = {"YTDLP_COOKIES_FILE": container_path}
+if proxy:
+    updates["YTDLP_PROXY"] = proxy
+if user_agent:
+    updates["YTDLP_USER_AGENT"] = user_agent
 
 stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 backup_path = env_path.with_name(f"{env_path.name}.bak.{stamp}")
 shutil.copy2(env_path, backup_path)
 
 lines = env_path.read_text(encoding="utf-8").splitlines()
-updated = False
+seen: set[str] = set()
 next_lines: list[str] = []
 for line in lines:
-    if line.startswith(f"{key}="):
-        next_lines.append(f"{key}={container_path}")
-        updated = True
+    key = line.split("=", 1)[0] if "=" in line else ""
+    if key in updates:
+        next_lines.append(f"{key}={updates[key]}")
+        seen.add(key)
     else:
         next_lines.append(line)
-if not updated:
+missing = [key for key in updates if key not in seen]
+if missing:
     if next_lines and next_lines[-1].strip():
         next_lines.append("")
-    next_lines.append(f"{key}={container_path}")
+    for key in missing:
+        next_lines.append(f"{key}={updates[key]}")
 
 env_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
-print(f"Updated {key}; backup created at {backup_path}")
+print(f"Updated {', '.join(updates)}; backup created at {backup_path}")
 PY
 
 compose=(

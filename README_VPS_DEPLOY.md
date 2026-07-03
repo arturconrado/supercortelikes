@@ -511,6 +511,17 @@ Para habilitar importação YouTube com cookies:
    `YTDLP_COOKIES_FILE=/data/cookies/youtube.txt` no `.env.production`,
    recria `media-worker`/`worker` e valida o health.
 
+   Se precisar reproduzir o mesmo navegador usado para exportar os cookies,
+   também é possível passar `YTDLP_USER_AGENT`. Se a VPS/datacenter continuar
+   bloqueada pelo provedor, `YTDLP_PROXY` pode ser configurado da mesma forma:
+
+   ```bash
+   VPS_HOST=162.243.114.141 \
+   YTDLP_USER_AGENT='Mozilla/5.0 (...) Chrome/...' \
+   YTDLP_PROXY='http://usuario:senha@host:porta' \
+   ./scripts/vps/configure-youtube-cookies.sh ./youtube-cookies.txt
+   ```
+
 3. Alternativa manual, sem o script:
 
    ```bash
