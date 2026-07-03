@@ -40,8 +40,11 @@ export class StageWorkerFactory implements OnModuleDestroy {
           const maxAttempts = typeof bullJob.opts.attempts === 'number' ? bullJob.opts.attempts : 1;
           const terminal = error instanceof UnrecoverableError || bullJob.attemptsMade + 1 >= maxAttempts;
           if (terminal) {
-            await this.orchestrator.fail(job, error);
-            await this.deadLetters.capture(stage, bullJob.id ?? job.eventId, job, error, bullJob.attemptsMade + 1);
+            const captureDeadLetter = shouldCaptureDeadLetter(error);
+            await this.orchestrator.fail(job, error, { deadLettered: captureDeadLetter });
+            if (captureDeadLetter) {
+              await this.deadLetters.capture(stage, bullJob.id ?? job.eventId, job, error, bullJob.attemptsMade + 1);
+            }
           } else {
             await this.orchestrator.retry(job, error);
           }
@@ -62,4 +65,18 @@ export class StageWorkerFactory implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     await Promise.all(this.workers.map((worker) => worker.close()));
   }
+}
+
+const USER_ACTIONABLE_TERMINAL_CODES = new Set([
+  'URL_IMPORT_AUTH_REQUIRED',
+  'SOURCE_SCHEME_UNSUPPORTED',
+  'SOURCE_TOO_LARGE',
+  'SOURCE_NOT_FOUND',
+]);
+
+function shouldCaptureDeadLetter(error: unknown): boolean {
+  const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string'
+    ? error.code.toUpperCase()
+    : undefined;
+  return !code || !USER_ACTIONABLE_TERMINAL_CODES.has(code);
 }

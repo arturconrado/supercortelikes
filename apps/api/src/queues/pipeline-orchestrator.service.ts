@@ -105,13 +105,14 @@ export class PipelineOrchestratorService {
     });
   }
 
-  async fail(jobInput: PipelineJob, error: unknown): Promise<void> {
+  async fail(jobInput: PipelineJob, error: unknown, options: { deadLettered?: boolean } = {}): Promise<void> {
     const job = pipelineJobSchema.parse(jobInput);
+    const stageStatus = options.deadLettered === false ? 'FAILED' : 'DEAD_LETTERED';
     await this.prisma.$transaction([
       this.prisma.stageExecution.update({
         where: { id: job.stageExecutionId },
         data: {
-          status: 'DEAD_LETTERED',
+          status: stageStatus,
           completedAt: new Date(),
           errorCode: errorCode(error),
           errorMessage: safeErrorMessage(error),

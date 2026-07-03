@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { UnrecoverableError } from 'bullmq';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -65,8 +66,24 @@ describe('queue registry and worker factory', () => {
 
     factory.create('ingestion', vi.fn().mockRejectedValue(new Error('terminal')), 1);
     await expect(mocks.processors[2]({ data: job(), opts: { attempts: 1 }, attemptsMade: 0, id: 'job' })).rejects.toThrow('terminal');
-    expect(orchestrator.fail).toHaveBeenCalled();
+    expect(orchestrator.fail).toHaveBeenCalledWith(expect.anything(), expect.any(Error), { deadLettered: true });
     expect(dead.capture).toHaveBeenCalled();
+    await factory.onModuleDestroy();
+  });
+
+  it('fails user-actionable provider errors without opening DLQ', async () => {
+    const orchestrator: any = { begin: vi.fn().mockResolvedValue('started'), complete: vi.fn(), retry: vi.fn(), fail: vi.fn() };
+    const dead: any = { capture: vi.fn() };
+    const error = Object.assign(new UnrecoverableError('O YouTube bloqueou a importação automática deste link.'), {
+      code: 'URL_IMPORT_AUTH_REQUIRED',
+    });
+    const factory = new StageWorkerFactory(orchestrator, dead, config);
+    factory.create('ingestion', vi.fn().mockRejectedValue(error), 1);
+
+    await expect(mocks.processors[0]({ data: job(), opts: { attempts: 5 }, attemptsMade: 0, id: 'job' })).rejects.toThrow('YouTube');
+
+    expect(orchestrator.fail).toHaveBeenCalledWith(expect.anything(), error, { deadLettered: false });
+    expect(dead.capture).not.toHaveBeenCalled();
     await factory.onModuleDestroy();
   });
 });
