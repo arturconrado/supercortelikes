@@ -8,7 +8,24 @@ Storage: https://storage.picashorts.com
 
 ## Resultado executivo
 
-Status: ⚠️ PARCIALMENTE APROVADO
+Status atualizado: ✅ APROVADO PARA OPERAÇÃO CORE
+
+Atualização final em 2026-07-03T14:37:17Z:
+
+- Deploy ativo: `5e9a4253995c8a4c9d04376637808f35f7bac2ec`
+- `/health/ready`: OK
+- `/health/pipeline`: OK
+- DLQ aberta: 0
+- Outbox pendente: 0
+- Todas as filas: `waiting=0`, `active=0`, `delayed=0`, `failed=0`
+- Containers principais: `restart=0`
+- `npm run acceptance:product`: PASS contra produção
+- Export final validado com `ffprobe`: H.264, 1080x1920
+- Import YouTube sem cookies: falha esperada `URL_IMPORT_AUTH_REQUIRED`, sem DLQ, sem failed job e com health global OK
+
+O status anterior abaixo foi preservado como histórico da validação antes da correção operacional das DLQs.
+
+Status anterior: ⚠️ PARCIALMENTE APROVADO
 
 A produção está operacional para o fluxo principal via upload direto:
 
@@ -218,7 +235,27 @@ Conclusão:
 4. Configurar `LLM_API_KEY`/OpenRouter em produção se scoring/SEO por LLM for obrigatório.
 5. Rodar soak de 10 minutos/24h conforme critério comercial.
 
-## Veredito
+## Veredito atualizado
+
+Produção está apta para operação core:
+
+- upload direto;
+- processamento IA local;
+- cortes;
+- legendas;
+- render;
+- export/download;
+- health operacional limpo.
+
+Importação YouTube continua dependente de cookies/proxy do provedor. Sem cookies, o produto agora falha de forma controlada para o usuário e não degrada produção.
+
+Para operação comercial plena com todos os recursos opcionais:
+
+- configurar `youtube-cookies.txt` se a promessa comercial incluir importação YouTube automática;
+- configurar `LLM_API_KEY`/OpenRouter se scoring/SEO externo por LLM for obrigatório;
+- reativar `EMAIL_VERIFICATION_REQUIRED` e `TURNSTILE_REQUIRED` quando Resend/Turnstile reais estiverem prontos.
+
+## Veredito anterior
 
 Produção está apta para validação manual do fluxo por upload direto e exportação.
 
