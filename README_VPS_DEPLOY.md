@@ -498,20 +498,33 @@ O YouTube bloqueou a importação automática deste link.
 Para habilitar importação YouTube com cookies:
 
 1. Exporte um arquivo `cookies.txt` em formato Netscape a partir de uma conta/navegador autorizado.
-2. Copie o arquivo para a VPS sem commitar no Git:
+2. Use o script operacional local para copiar o arquivo, ativar a env e reiniciar o worker:
+
+   ```bash
+   VPS_HOST=162.243.114.141 \
+   TEST_URL='https://www.youtube.com/watch?v=qHlquy4-YEs' \
+   ./scripts/vps/configure-youtube-cookies.sh ./youtube-cookies.txt
+   ```
+
+   O script não imprime o conteúdo dos cookies. Ele grava o arquivo em
+   `/srv/clipbr/data/media/cookies/youtube.txt`, configura
+   `YTDLP_COOKIES_FILE=/data/cookies/youtube.txt` no `.env.production`,
+   recria `media-worker`/`worker` e valida o health.
+
+3. Alternativa manual, sem o script:
 
    ```bash
    scp youtube-cookies.txt clipbr@DOMINIO_OU_IP:/srv/clipbr/data/media/cookies/youtube.txt
    ssh clipbr@DOMINIO_OU_IP 'chmod 600 /srv/clipbr/data/media/cookies/youtube.txt'
    ```
 
-3. Configure no `.env.production`:
+4. Configure no `.env.production`:
 
    ```env
    YTDLP_COOKIES_FILE=/data/cookies/youtube.txt
    ```
 
-4. Recrie o media-worker:
+5. Recrie o media-worker:
 
    ```bash
    docker compose --env-file .env.production -f docker-compose.vps.yml -f docker-compose.vps.images.yml -p clipbr-vps up -d --wait media-worker worker
