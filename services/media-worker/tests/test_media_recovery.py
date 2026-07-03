@@ -31,9 +31,11 @@ def configured_settings(**changes):
 
 
 class Response:
-    def __init__(self, chunks, content_length=None):
+    def __init__(self, chunks, content_length=None, headers=None):
         self.chunks = iter(chunks)
-        self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
+        self.headers = dict(headers or {})
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
 
     def __enter__(self):
         return self
@@ -183,9 +185,16 @@ def test_youtube_auth_failure_is_actionable(tmp_path, monkeypatch):
 
 def test_materialize_source_http_paths(tmp_path, monkeypatch):
     settings = configured_settings()
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response([b"abc", b"def"]))
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: Response(
+            [b"abc", b"def"],
+            headers={"Content-Disposition": 'attachment; filename="Meu-video-original.mp4"'},
+        ),
+    )
     result = materialize_source("https://example.test/video.mp4", tmp_path / "valid", settings)
     assert result.read_bytes() == b"abcdef"
+    assert "Meu video original" in (tmp_path / "valid" / "source.metadata.json").read_text(encoding="utf-8")
 
     monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response([], content_length=64))
     with pytest.raises(WorkerError, match="size limit"):

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import urllib.parse
 import urllib.request
@@ -127,6 +128,7 @@ def materialize_source(uri: str, target_dir: Path, settings: Settings) -> Path:
         if total == 0:
             raise WorkerError("SOURCE_EMPTY", "Remote media source is empty")
         os.replace(temporary, destination)
+        _write_direct_source_metadata(uri, response.headers, destination, target_dir)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -256,6 +258,42 @@ def _write_source_metadata(info: Any, target_dir: Path) -> None:
         json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _write_direct_source_metadata(
+    uri: str, headers: Any, destination: Path, target_dir: Path
+) -> None:
+    title = _direct_source_title(uri, headers, destination)
+    _write_source_metadata({"title": title, "webpage_url": uri}, target_dir)
+
+
+def _direct_source_title(uri: str, headers: Any, destination: Path) -> str:
+    filename = _filename_from_content_disposition(
+        headers.get("Content-Disposition", "") if hasattr(headers, "get") else ""
+    )
+    if not filename:
+        filename = Path(urllib.parse.unquote(urllib.parse.urlparse(uri).path)).name
+    if not filename:
+        filename = destination.name
+    stem = Path(filename).stem or filename
+    title = re.sub(r"[_-]+", " ", stem)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title or "Vídeo importado"
+
+
+def _filename_from_content_disposition(value: str) -> str:
+    if not value:
+        return ""
+    encoded = re.search(r"filename\*\s*=\s*([^']*)''([^;]+)", value, flags=re.IGNORECASE)
+    if encoded:
+        return Path(urllib.parse.unquote(encoded.group(2).strip().strip('"'))).name
+    plain = re.search(r'filename\s*=\s*"([^"]+)"', value, flags=re.IGNORECASE)
+    if plain:
+        return Path(plain.group(1)).name
+    plain = re.search(r"filename\s*=\s*([^;]+)", value, flags=re.IGNORECASE)
+    if plain:
+        return Path(plain.group(1).strip().strip('"')).name
+    return ""
 
 
 def materialize_storage(
