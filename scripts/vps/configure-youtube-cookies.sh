@@ -147,9 +147,32 @@ compose=(
   docker compose
   --env-file .env.production
   -f docker-compose.vps.yml
-  -f docker-compose.vps.images.yml
-  -p "${COMPOSE_PROJECT_NAME}"
 )
+
+if python3 - .env.production <<'PY'
+from pathlib import Path
+import sys
+
+required = {"MIGRATION_IMAGE", "API_IMAGE", "WEB_IMAGE", "MEDIA_IMAGE"}
+values: dict[str, str] = {}
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        continue
+    key, value = stripped.split("=", 1)
+    values[key.strip()] = value.strip().strip('"').strip("'")
+
+missing = [key for key in required if not values.get(key)]
+raise SystemExit(1 if missing else 0)
+PY
+then
+  compose+=(-f docker-compose.vps.images.yml)
+  echo "Using registry image compose override."
+else
+  echo "Registry image env vars are not fully configured; using base VPS compose."
+fi
+
+compose+=(-p "${COMPOSE_PROJECT_NAME}")
 
 "${compose[@]}" up -d --wait media-worker worker
 
