@@ -321,9 +321,12 @@ O workflow cria/atualiza estes registros:
 
 ```txt
 DOMINIO.com          A   IP_DA_VPS
+www.DOMINIO.com      A   IP_DA_VPS
 api.DOMINIO.com      A   IP_DA_VPS
 storage.DOMINIO.com  A   IP_DA_VPS
 ```
+
+`www.DOMINIO.com` é apenas entrada de compatibilidade: o Caddy redireciona permanentemente para `https://DOMINIO.com`. A origem canônica do app continua sendo o domínio raiz.
 
 `storage.DOMINIO.com` é forçado como DNS-only (`proxied=false`) porque presigned uploads grandes não devem passar pelo proxy da Cloudflare.
 - `DIGITALOCEAN_SSH_KEY_IDS=<ids das SSH keys na DigitalOcean>`, obrigatório apenas quando `provision` precisar criar Droplet novo.

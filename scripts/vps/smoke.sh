@@ -25,6 +25,11 @@ printf '\n'
 curl -fsS "https://api.${APP_DOMAIN}/health/pipeline"
 printf '\n'
 curl -fsSI "https://${APP_DOMAIN}" >/dev/null
+www_location="$(curl -fsSI "https://www.${APP_DOMAIN}" | awk 'BEGIN{IGNORECASE=1} /^location:/ {print $2}' | tr -d '\r')"
+case "${www_location}" in
+  "https://${APP_DOMAIN}"|"https://${APP_DOMAIN}/"|"https://${APP_DOMAIN}/"*) ;;
+  *) echo "Expected https://www.${APP_DOMAIN} to redirect to https://${APP_DOMAIN}, got: ${www_location:-<missing>}" >&2; exit 1 ;;
+esac
 curl -fsS "https://storage.${APP_DOMAIN}/minio/health/live" >/dev/null
 
 if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then

@@ -130,6 +130,7 @@ for value in "${proxied}" "${storage_proxied}"; do
 done
 
 upsert_a_record "${zone_id}" "${zone_name}" "${zone_name}" "${CLOUDFLARE_RECORD_IP}" "${proxied}" "${ttl}"
+upsert_a_record "${zone_id}" "${zone_name}" "www.${zone_name}" "${CLOUDFLARE_RECORD_IP}" "${proxied}" "${ttl}"
 upsert_a_record "${zone_id}" "${zone_name}" "api.${zone_name}" "${CLOUDFLARE_RECORD_IP}" "${proxied}" "${ttl}"
 upsert_a_record "${zone_id}" "${zone_name}" "storage.${zone_name}" "${CLOUDFLARE_RECORD_IP}" "false" "${ttl}"
 
