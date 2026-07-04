@@ -78,7 +78,7 @@ export class AnalyticsController {
         },
       }),
     ]);
-    return {
+    return serialize({
       videos,
       clips,
       exportsReady,
@@ -90,9 +90,16 @@ export class AnalyticsController {
       usageQuantity: usage._sum.quantity?.toString() ?? '0',
       costCents: usage._sum.costCents ?? 0,
       pipelines: Object.fromEntries((pipelines as PipelineStatusGroup[]).map((item: PipelineStatusGroup) => [item.status.toLowerCase(), item._count._all])),
-      recentVideos: await Promise.all((recentVideos as RecentVideoSummary[]).map(async (video: RecentVideoSummary) => ({
-        ...video,
+      recentVideos: await Promise.all((recentVideos as RecentVideoSummary[]).map(async (video: RecentVideoSummary & Record<string, unknown>) => ({
+        id: video.id,
+        originalFilename: video.originalFilename,
+        title: video.title,
+        status: video.status,
+        mimeType: video.mimeType,
+        container: video.container,
         sizeBytes: video.sizeBytes?.toString() ?? null,
+        createdAt: video.createdAt,
+        updatedAt: video.updatedAt,
         durationSeconds: video.durationMs ? Number(video.durationMs) / 1000 : undefined,
         clipsCount: video._count.clips,
         processingStatus: video.pipelineRuns[0]?.status ?? (video.status === 'UPLOADED' ? 'PENDING' : video.status),
@@ -113,13 +120,13 @@ export class AnalyticsController {
             ? 'PROCESSING'
             : 'READY',
       })),
-    };
+    });
   }
 
   @Get()
   async overview(@CurrentUser() user: AuthenticatedUser): Promise<Record<string, unknown>> {
     const [summary, activity] = await Promise.all([this.summary(user), this.timeseries(user)]);
-    return { ...summary, activity };
+    return serialize({ ...summary, activity });
   }
 
   @Get('timeseries')
@@ -140,4 +147,8 @@ export class AnalyticsController {
       costCents: row.costCents.toString(),
     }));
   }
+}
+
+function serialize<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value, (_key, item: unknown) => (typeof item === 'bigint' ? item.toString() : item))) as T;
 }
