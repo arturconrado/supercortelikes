@@ -219,7 +219,7 @@ export default function ClipViewerPage() {
           <div className="hidden flex-wrap gap-2 sm:flex">
             {clip.downloadUrl && (
               <Button asChild variant="secondary">
-                <a href={clip.downloadUrl} download>
+                <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}>
                   <Download className="size-4"/>
                   Baixar
                 </a>
@@ -441,7 +441,7 @@ export default function ClipViewerPage() {
             <div className="mt-5 flex flex-wrap gap-2">
               {clip.downloadUrl && (
                 <Button asChild variant="secondary">
-                  <a href={clip.downloadUrl} download><Download className="size-4"/>Baixar MP4</a>
+                  <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}><Download className="size-4"/>Baixar MP4</a>
                 </Button>
               )}
               <Button onClick={() => void createExport()} disabled={exporting}>
@@ -482,6 +482,14 @@ export default function ClipViewerPage() {
 
 function roundSeconds(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function clipDownloadFilename(clip: Clip): string {
+  const title = (clip.title ?? `picashorts-clip-${clip.id.slice(0, 8)}`)
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /\.mp4$/i.test(title) ? title : `${title}.mp4`;
 }
 
 function extractCaptionSample(cues: unknown[]): string {

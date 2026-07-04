@@ -15,7 +15,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Readable } from 'node:stream';
 import type { Environment } from '../config/env';
-import type { MultipartPart, ObjectStorage, StoredObject, StoredObjectMetadata } from './storage.port';
+import type { DownloadUrlOptions, MultipartPart, ObjectStorage, StoredObject, StoredObjectMetadata } from './storage.port';
 
 @Injectable()
 export class R2StorageService implements ObjectStorage {
@@ -118,9 +118,39 @@ export class R2StorageService implements ObjectStorage {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 
-  async downloadUrl(key: string, expiresInSeconds = 900): Promise<string> {
-    return getSignedUrl(this.publicClient, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: Math.min(3600, Math.max(60, expiresInSeconds)),
-    });
+  async downloadUrl(key: string, expiresInSeconds = 900, options: DownloadUrlOptions = {}): Promise<string> {
+    return getSignedUrl(
+      this.publicClient,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        ResponseContentDisposition: contentDisposition(options.disposition, options.filename),
+        ResponseContentType: options.contentType,
+      }),
+      {
+        expiresIn: Math.min(3600, Math.max(60, expiresInSeconds)),
+      },
+    );
   }
+}
+
+function contentDisposition(disposition?: DownloadUrlOptions['disposition'], filename?: string): string | undefined {
+  if (!disposition) return undefined;
+  if (!filename) return disposition;
+  const safe = sanitizeDownloadFilename(filename);
+  const ascii = safe.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encodeRfc5987ValueChars(safe)}`;
+}
+
+function sanitizeDownloadFilename(filename: string): string {
+  const trimmed = filename
+    .normalize('NFC')
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return trimmed || 'picashorts-video.mp4';
+}
+
+function encodeRfc5987ValueChars(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }

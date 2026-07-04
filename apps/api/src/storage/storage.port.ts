@@ -17,6 +17,12 @@ export interface StoredObjectMetadata {
   etag?: string;
 }
 
+export interface DownloadUrlOptions {
+  disposition?: 'inline' | 'attachment';
+  filename?: string;
+  contentType?: string;
+}
+
 export interface ObjectStorage {
   ready(): Promise<boolean>;
   createMultipart(key: string, contentType: string): Promise<string>;
@@ -26,5 +32,5 @@ export interface ObjectStorage {
   metadata(key: string): Promise<StoredObjectMetadata>;
   upload(key: string, body: Readable, contentType: string): Promise<StoredObject>;
   delete(key: string): Promise<void>;
-  downloadUrl(key: string, expiresInSeconds?: number): Promise<string>;
+  downloadUrl(key: string, expiresInSeconds?: number, options?: DownloadUrlOptions): Promise<string>;
 }

@@ -184,6 +184,11 @@ describe('health, exports, and media contracts', () => {
     expect((await controller.list(user)) as any[]).toMatchObject([{ sizeBytes: '10' }]);
     expect(await controller.create(user, { clipId: 'clip', format: 'MP4', aspectRatio: '9:16' } as any)).toMatchObject({ id: item.id });
     expect(await controller.download(user, item.id)).toEqual({ url: 'http://localhost/file', expiresInSeconds: 900 });
+    expect(storage.downloadUrl).toHaveBeenCalledWith('exports/clip.mp4', 900, {
+      disposition: 'attachment',
+      filename: 'Title.mp4',
+      contentType: 'video/mp4',
+    });
     expect(await controller.retry(user, item.id)).toEqual({ eventId: 'event' });
     await expect(controller.remove(user, item.id)).resolves.toBeUndefined();
     prisma.clip.findFirst.mockResolvedValueOnce(null);

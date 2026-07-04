@@ -340,6 +340,13 @@ export class ContentController {
     const caption = clip.captions?.[0];
     const captionStorageKey = isStorageKey(caption?.srtKey) ? caption.srtKey : undefined;
     const renderUrl = readyExport?.storageKey ? await this.storage.downloadUrl(readyExport.storageKey, 900) : undefined;
+    const downloadUrl = readyExport?.storageKey
+      ? await this.storage.downloadUrl(readyExport.storageKey, 900, {
+          disposition: 'attachment',
+          filename: clipDownloadFilename(clip),
+          contentType: 'video/mp4',
+        })
+      : undefined;
     const sourcePreviewUrl = renderUrl ? undefined : await this.sourcePreviewUrl(clip);
     const { video: _video, ...clipFields } = clip;
     return {
@@ -362,7 +369,7 @@ export class ContentController {
       thumbnailUrl: clip.thumbnailKey ? await this.storage.downloadUrl(clip.thumbnailKey, 900) : undefined,
       renderUrl,
       playbackUrl: renderUrl ?? sourcePreviewUrl,
-      downloadUrl: renderUrl,
+      downloadUrl,
       captionsUrl: captionStorageKey ? await this.storage.downloadUrl(captionStorageKey, 900) : undefined,
     };
   }
@@ -444,6 +451,11 @@ function serialize(value: unknown): unknown {
 
 function isStorageKey(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value);
+}
+
+function clipDownloadFilename(clip: Record<string, any>): string {
+  const base = typeof clip.title === 'string' && clip.title.trim() ? clip.title.trim() : 'picashorts-clip';
+  return /\.mp4$/i.test(base) ? base : `${base}.mp4`;
 }
 
 function appendMediaFragment(url: string, startSeconds?: number, endSeconds?: number): string {

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Badge, Button, Card, EmptyState, PageHeader, Progress, Skeleton, StatusBadge } from '@/components/ui';
 import { useCollection } from '@/hooks/use-resource';
 import { api, endpoints } from '@/lib/api';
+import { startFileDownload } from '@/lib/download';
 import type { ExportJob } from '@/lib/types';
 import { formatBytes, formatDate } from '@/lib/utils';
 
@@ -33,7 +34,7 @@ export default function ExportsPage() {
     setActionError('');
     try {
       const response = await api<DownloadResponse>(job.downloadUrl);
-      window.location.assign(response.url);
+      startFileDownload(response.url, exportFilename(job));
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : 'Não foi possível baixar a exportação.');
     } finally {
@@ -160,4 +161,12 @@ export default function ExportsPage() {
       )}
     </>
   );
+}
+
+function exportFilename(job: ExportJob): string {
+  const title = (job.clipTitle ?? `picashorts-export-${job.id.slice(0, 8)}`)
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /\.mp4$/i.test(title) ? title : `${title}.mp4`;
 }

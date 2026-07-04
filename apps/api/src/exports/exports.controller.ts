@@ -70,7 +70,14 @@ export class ExportsController {
         metadata: { exportId: item.id },
       },
     });
-    return { url: await this.storage.downloadUrl(item.storageKey, 900), expiresInSeconds: 900 };
+    return {
+      url: await this.storage.downloadUrl(item.storageKey, 900, {
+        disposition: 'attachment',
+        filename: exportFilename(item.clip.title),
+        contentType: 'video/mp4',
+      }),
+      expiresInSeconds: 900,
+    };
   }
 
   @Post(':id/retry')
@@ -145,4 +152,9 @@ export class ExportsController {
       }),
     ]);
   }
+}
+
+function exportFilename(title?: string | null): string {
+  const base = typeof title === 'string' && title.trim() ? title.trim() : 'picashorts-export';
+  return /\.mp4$/i.test(base) ? base : `${base}.mp4`;
 }

@@ -29,5 +29,16 @@ describe('R2StorageService release endpoints', () => {
     await service.delete('videos/source.mp4');
     expect(await service.downloadUrl('exports/clip.mp4', 5000)).toBe('http://localhost:9000/signed');
     expect(aws.signed).toHaveBeenCalledWith(aws.clients[1], expect.anything(), { expiresIn: 3600 });
+    expect(await service.downloadUrl('exports/café.mp4', 900, {
+      disposition: 'attachment',
+      filename: 'Café: corte final.mp4',
+      contentType: 'video/mp4',
+    })).toBe('http://localhost:9000/signed');
+    const signedCommand = aws.signed.mock.calls.at(-1)?.[1] as { input?: Record<string, unknown> };
+    expect(signedCommand.input).toMatchObject({
+      ResponseContentDisposition: expect.stringContaining('attachment; filename='),
+      ResponseContentType: 'video/mp4',
+    });
+    expect(String(signedCommand.input?.ResponseContentDisposition)).toContain("filename*=UTF-8''Caf%C3%A9-%20corte%20final.mp4");
   });
 });

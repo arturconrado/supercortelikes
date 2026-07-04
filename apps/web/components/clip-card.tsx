@@ -61,7 +61,7 @@ export function ClipCard({ clip, onPreview }: ClipCardProps) {
           </Button>
           {clip.downloadUrl && (
             <Button asChild size="sm" variant="ghost">
-              <a href={clip.downloadUrl} download>
+              <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}>
                 <Download className="size-3.5"/>
                 Baixar
               </a>
@@ -77,4 +77,12 @@ export function ClipCard({ clip, onPreview }: ClipCardProps) {
   }
 
   return <Link href={`/clips/${clip.id}`} className="group overflow-hidden rounded-2xl border border-white/[.08] bg-panel transition hover:border-white/[.16]">{media}{body}</Link>;
+}
+
+function clipDownloadFilename(clip: Clip): string {
+  const title = (clip.title ?? `picashorts-clip-${clip.id.slice(0, 8)}`)
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /\.mp4$/i.test(title) ? title : `${title}.mp4`;
 }
