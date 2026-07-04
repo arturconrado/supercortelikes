@@ -64,7 +64,7 @@ export class MediaStageProcessor {
       if (terminal) throw terminal;
       throw error;
     }
-    await this.persist(job, response);
+    await this.persist(job, response, video);
   }
 
   private async options(
@@ -105,8 +105,16 @@ export class MediaStageProcessor {
     return {};
   }
 
-  private async persist(job: PipelineJob, response: MediaStageResponse): Promise<void> {
-    if (job.stage === 'ingestion') return this.persistIngestion(job.videoId, response);
+  private async persist(
+    job: PipelineJob,
+    response: MediaStageResponse,
+    video: {
+      sourceUrl?: string | null;
+      storageKey: string;
+      mimeType?: string | null;
+    },
+  ): Promise<void> {
+    if (job.stage === 'ingestion') return this.persistIngestion(job.videoId, response, video);
     if (job.stage === 'transcription') return this.persistTranscription(job.videoId, response);
     if (job.stage === 'segmentation') return this.persistSegments(job.videoId, response);
     if (job.stage === 'scoring') return this.persistScores(job.videoId, response);
@@ -119,7 +127,15 @@ export class MediaStageProcessor {
     await this.persistExports(job.videoId, response);
   }
 
-  private async persistIngestion(videoId: string, response: MediaStageResponse): Promise<void> {
+  private async persistIngestion(
+    videoId: string,
+    response: MediaStageResponse,
+    video: {
+      sourceUrl?: string | null;
+      storageKey: string;
+      mimeType?: string | null;
+    },
+  ): Promise<void> {
     const metrics = response.metrics as {
       durationSeconds?: number;
       video?: { width?: number; height?: number; frameRate?: number; codec?: string };
@@ -129,6 +145,9 @@ export class MediaStageProcessor {
     };
     const sourceTitle = sanitizeVideoTitle(metrics.source?.title);
     const thumbnailKey = await this.uploadArtifact(response, 'source-thumbnail', `thumbnails/videos/${videoId}/source.jpg`, 'image/jpeg');
+    if (video.sourceUrl) {
+      await this.uploadArtifact(response, 'source-video', video.storageKey, this.artifactMediaType(response, 'source-video') ?? video.mimeType ?? 'video/mp4');
+    }
     await this.prisma.video.update({
       where: { id: videoId },
       data: {
@@ -415,6 +434,11 @@ export class MediaStageProcessor {
     const artifact = response.artifacts.find((value) => value.kind === kind);
     if (!artifact) return undefined;
     return this.uploadLocalFile(this.resolveArtifactPath(artifact.path), key, contentType);
+  }
+
+  private artifactMediaType(response: MediaStageResponse, kind: string): string | undefined {
+    const artifact = response.artifacts.find((value) => value.kind === kind);
+    return artifact?.media_type;
   }
 
   private async uploadLocalFile(path: string, key: string, contentType: string): Promise<string> {

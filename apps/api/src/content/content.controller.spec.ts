@@ -23,7 +23,12 @@ const clip = {
   captions: [],
   exports: [],
   seo: { description: 'Description', hashtags: ['#clipbr'], titles: ['SEO title'] },
-  video: { id: '44444444-4444-4444-8444-444444444444', workspaceId: user.workspaceId },
+  video: {
+    id: '44444444-4444-4444-8444-444444444444',
+    workspaceId: user.workspaceId,
+    storageKey: 'videos/video/source.mp4',
+    sourceUrl: null,
+  },
 };
 
 function prisma(overrides: Record<string, unknown> = {}) {
@@ -102,7 +107,16 @@ describe('ContentController', () => {
     const { controller } = makeController();
     await expect(controller.videoPipeline(user, clip.videoId)).resolves.toMatchObject({ progress: 13, run: { openDeadLetters: [{ id: 'dlq' }] } });
     await expect(controller.videoTranscript(user, clip.videoId)).resolves.toMatchObject({ language: 'pt', detectedLanguage: 'pt', durationSeconds: 20 });
-    await expect(controller.videoClips(user, clip.videoId)).resolves.toMatchObject([{ description: 'Description', hashtags: ['#clipbr'] }]);
+    const clips = await controller.videoClips(user, clip.videoId) as Array<Record<string, unknown>>;
+    expect(clips).toMatchObject([
+      {
+        description: 'Description',
+        hashtags: ['#clipbr'],
+        playbackUrl: 'https://storage.test/videos/video/source.mp4#t=0,20',
+      },
+    ]);
+    expect(clips[0]).not.toHaveProperty('renderUrl');
+    expect(clips[0]).not.toHaveProperty('downloadUrl');
   });
 
   it('retries open dead letters and reports missing retry work', async () => {

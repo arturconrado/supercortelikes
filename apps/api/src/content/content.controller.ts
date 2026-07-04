@@ -80,7 +80,7 @@ export class ContentController {
     const clips = await this.prisma.clip.findMany({
       where: { videoId: id },
       orderBy: { score: 'desc' },
-      include: { captions: true, exports: true, seo: true },
+      include: { captions: true, exports: true, seo: true, video: true },
     });
     return serialize(await Promise.all(clips.map((clip) => this.clipView(clip))));
   }
@@ -340,8 +340,10 @@ export class ContentController {
     const caption = clip.captions?.[0];
     const captionStorageKey = isStorageKey(caption?.srtKey) ? caption.srtKey : undefined;
     const renderUrl = readyExport?.storageKey ? await this.storage.downloadUrl(readyExport.storageKey, 900) : undefined;
+    const sourcePreviewUrl = renderUrl ? undefined : await this.sourcePreviewUrl(clip);
+    const { video: _video, ...clipFields } = clip;
     return {
-      ...clip,
+      ...clipFields,
       startSeconds: clip.startMs !== undefined ? Number(clip.startMs) / 1000 : undefined,
       endSeconds: clip.endMs !== undefined ? Number(clip.endMs) / 1000 : undefined,
       durationSeconds:
@@ -359,10 +361,19 @@ export class ContentController {
       })),
       thumbnailUrl: clip.thumbnailKey ? await this.storage.downloadUrl(clip.thumbnailKey, 900) : undefined,
       renderUrl,
-      playbackUrl: renderUrl,
+      playbackUrl: renderUrl ?? sourcePreviewUrl,
       downloadUrl: renderUrl,
       captionsUrl: captionStorageKey ? await this.storage.downloadUrl(captionStorageKey, 900) : undefined,
     };
+  }
+
+  private async sourcePreviewUrl(clip: Record<string, any>): Promise<string | undefined> {
+    const key = clip.video?.storageKey;
+    if (!isStorageKey(key)) return undefined;
+    const sourceUrl = await this.storage.downloadUrl(key, 900);
+    const startSeconds = clip.startMs !== undefined ? Number(clip.startMs) / 1000 : undefined;
+    const endSeconds = clip.endMs !== undefined ? Number(clip.endMs) / 1000 : undefined;
+    return appendMediaFragment(sourceUrl, startSeconds, endSeconds);
   }
 
   private async ensureExport(clipId: string, format: string, aspectRatio: string) {
@@ -433,4 +444,13 @@ function serialize(value: unknown): unknown {
 
 function isStorageKey(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value);
+}
+
+function appendMediaFragment(url: string, startSeconds?: number, endSeconds?: number): string {
+  if (startSeconds === undefined || endSeconds === undefined || endSeconds <= startSeconds) return url;
+  return `${url}#t=${formatMediaTime(startSeconds)},${formatMediaTime(endSeconds)}`;
+}
+
+function formatMediaTime(value: number): string {
+  return Math.max(0, value).toFixed(3).replace(/\.?0+$/, '');
 }
