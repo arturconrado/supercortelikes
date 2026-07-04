@@ -53,6 +53,7 @@ export default function ClipViewerPage() {
   const [savingTiming, setSavingTiming] = useState(false);
   const [savingCaptions, setSavingCaptions] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportRequested, setExportRequested] = useState(false);
   const [message, setMessage] = useState('');
 
   const caption = clip?.captions?.[0];
@@ -74,6 +75,28 @@ export default function ClipViewerPage() {
     setCaptionPosition(typeof style.position === 'string' ? style.position : 'bottom');
     setCaptionBackground(typeof style.background === 'boolean' ? style.background : true);
   }, [clip, caption?.style, caption?.template]);
+
+  useEffect(() => {
+    if (!exportRequested) return;
+    if (clip?.downloadUrl) {
+      setExportRequested(false);
+      setMessage('Exportação pronta. Você já pode baixar o MP4.');
+      return;
+    }
+    const timer = window.setInterval(async () => {
+      try {
+        const updated = await api<Clip>(`/clips/${id}`);
+        setData(updated);
+        if (updated.downloadUrl) {
+          setExportRequested(false);
+          setMessage('Exportação pronta. Você já pode baixar o MP4.');
+        }
+      } catch {
+        // Keep the current UI state; the next poll or a manual refresh can recover.
+      }
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [clip?.downloadUrl, exportRequested, id, setData]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -155,13 +178,17 @@ export default function ClipViewerPage() {
 
   async function createExport() {
     setExporting(true);
+    setExportRequested(false);
     setMessage('');
     try {
       await api(`/clips/${id}/export`, {
         method: 'POST',
         body: JSON.stringify({ format: 'MP4', aspectRatio: aspectRatio ?? clip?.aspectRatio ?? '9:16' }),
       });
-      setMessage('Exportação adicionada à fila. A página do vídeo mostrará o progresso.');
+      const updated = await api<Clip>(`/clips/${id}`);
+      setData(updated);
+      setExportRequested(!updated.downloadUrl);
+      setMessage(updated.downloadUrl ? 'Exportação pronta. Você já pode baixar o MP4.' : 'Exportação em processamento. Esta tela será atualizada automaticamente.');
       setActiveTab('export');
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : 'Não foi possível exportar.');
@@ -405,6 +432,12 @@ export default function ClipViewerPage() {
             <p className="mt-3 text-sm leading-6 text-zinc-500">
               Renderize em MP4 H.264 no formato selecionado. O download assinado aparecerá quando a exportação concluir.
             </p>
+            {exportRequested && !clip.downloadUrl && (
+              <div className="mt-4 flex items-center gap-2 rounded-xl border border-lime/20 bg-lime/10 px-3 py-2 text-sm text-lime">
+                <LoaderCircle className="size-4 animate-spin"/>
+                Renderizando. Esta tela atualiza automaticamente.
+              </div>
+            )}
             <div className="mt-5 flex flex-wrap gap-2">
               {clip.downloadUrl && (
                 <Button asChild variant="secondary">
