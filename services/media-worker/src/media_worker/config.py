@@ -51,6 +51,10 @@ class Settings:
     light_concurrent_jobs: int
     ffmpeg_preset: str
     ffmpeg_crf: int
+    ffmpeg_threads: int
+    ffmpeg_filter_threads: int
+    render_max_height: int
+    allow_full_batch_render: bool
     ytdlp_fragment_concurrency: int
     log_level: str
 
@@ -123,6 +127,10 @@ class Settings:
             ),
             ffmpeg_preset=os.getenv("FFMPEG_PRESET", "veryfast").strip() or "veryfast",
             ffmpeg_crf=max(16, min(35, int(os.getenv("FFMPEG_CRF", "22")))),
+            ffmpeg_threads=max(1, min(32, int(os.getenv("FFMPEG_THREADS", "2")))),
+            ffmpeg_filter_threads=max(1, min(16, int(os.getenv("FFMPEG_FILTER_THREADS", "1")))),
+            render_max_height=max(360, min(2160, int(os.getenv("RENDER_MAX_HEIGHT", "720")))),
+            allow_full_batch_render=_bool_env("ALLOW_FULL_BATCH_RENDER", False),
             ytdlp_fragment_concurrency=max(1, min(16, int(os.getenv("YTDLP_FRAGMENT_CONCURRENCY", "4")))),
             log_level=os.getenv("LOG_LEVEL", "info").lower(),
         )

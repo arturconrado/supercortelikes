@@ -262,9 +262,17 @@ class Pipeline:
     def _rendering(
         self, request: PipelineRequest, workspace: Workspace
     ) -> StageResponse:
-        source = self._ensure_source(request, workspace)
-        clips = workspace.read_json("clips/clips.json")["clips"]
-        captions = workspace.read_json("captions/manifest.json")["captions"]
+        source_workspace = self._source_workspace(request, workspace)
+        source = self._ensure_source(request, source_workspace)
+        clips = source_workspace.read_json("clips/clips.json")["clips"]
+        selected_indexes = self._selected_clip_indexes(request, len(clips))
+        selected_clips = [clips[index] for index in selected_indexes]
+        selected_clip_ids = {str(clip["id"]) for clip in selected_clips}
+        captions = [
+            caption
+            for caption in source_workspace.read_json("captions/manifest.json")["captions"]
+            if str(caption.get("clipId")) in selected_clip_ids
+        ]
         render_source = source
         if bool(request.options.get("smartReframe", False)):
             aspect = str(request.options.get("aspectRatio", "9:16"))
@@ -272,16 +280,20 @@ class Pipeline:
                 raise WorkerError(
                     "INVALID_ASPECT_RATIO", "Unsupported smart reframe aspect ratio"
                 )
-            analysis = analyze_focus(
-                source, str(request.options.get("detector", "auto")), self.settings
-            )
-            workspace.write_json("vision/focus.json", analysis)
+            analysis_path = source_workspace.path("vision/focus.json")
+            if analysis_path.is_file():
+                analysis = source_workspace.read_json("vision/focus.json")
+            else:
+                analysis = analyze_focus(
+                    source, str(request.options.get("detector", "auto")), self.settings
+                )
+                source_workspace.write_json("vision/focus.json", analysis)
             render_source = render_reframes(
                 source, analysis, [aspect], workspace.path("reframes"), self.settings
             )[0]
         outputs = render_clips(
             render_source,
-            clips,
+            selected_clips,
             captions,
             workspace.path("renders"),
             self.settings,
@@ -296,9 +308,21 @@ class Pipeline:
         return self._response(request, "rendering", artifacts, {"clips": len(outputs)})
 
     def _exports(self, request: PipelineRequest, workspace: Workspace) -> StageResponse:
+        source_workspace = self._source_workspace(request, workspace)
         renders = workspace.read_json("renders/manifest.json")["renders"]
-        captions = workspace.read_json("captions/manifest.json")["captions"]
-        files = [Path(value["path"]) for value in renders]
+        clips = source_workspace.read_json("clips/clips.json")["clips"]
+        selected_indexes = self._selected_clip_indexes(request, len(clips))
+        selected_clip_ids = {str(clips[index]["id"]) for index in selected_indexes}
+        captions = [
+            caption
+            for caption in source_workspace.read_json("captions/manifest.json")["captions"]
+            if str(caption.get("clipId")) in selected_clip_ids
+        ]
+        files = [
+            Path(value["path"])
+            for value in renders
+            if str(value.get("clipId")) in selected_clip_ids
+        ]
         files.extend(Path(value[kind]) for value in captions for kind in ("srt", "ass"))
         bucket = str(
             request.options.get("bucket")
@@ -338,6 +362,45 @@ class Pipeline:
                 "storage": uploaded,
             },
         )
+
+    def _source_workspace(self, request: PipelineRequest, workspace: Workspace) -> Workspace:
+        source_pipeline_run_id = str(
+            request.options.get("sourcePipelineRunId") or request.pipeline_run_id
+        )
+        if source_pipeline_run_id == request.pipeline_run_id:
+            return workspace
+        source_root = (self.settings.data_dir / source_pipeline_run_id).resolve()
+        if not source_root.exists():
+            raise WorkerError(
+                "RENDER_SOURCE_WORKSPACE_MISSING",
+                "The completed source pipeline workspace is not available for on-demand rendering",
+                status_code=409,
+                detail={"sourcePipelineRunId": source_pipeline_run_id},
+            )
+        return Workspace(self.settings.data_dir, source_pipeline_run_id)
+
+    def _selected_clip_indexes(self, request: PipelineRequest, clip_count: int) -> List[int]:
+        if "clipIndexes" in request.options and isinstance(request.options["clipIndexes"], list):
+            indexes = [int(value) for value in request.options["clipIndexes"]]
+        elif "clipIndex" in request.options:
+            indexes = [int(request.options["clipIndex"])]
+        elif self.settings.allow_full_batch_render:
+            indexes = list(range(clip_count))
+        else:
+            raise WorkerError(
+                "FULL_BATCH_RENDER_DISABLED",
+                "Rendering requires a selected clip; full batch rendering is disabled",
+                status_code=409,
+            )
+        unique = sorted(set(indexes))
+        if not unique or any(index < 0 or index >= clip_count for index in unique):
+            raise WorkerError(
+                "INVALID_RENDER_CLIP_INDEX",
+                "The requested clip index is not available for rendering",
+                status_code=422,
+                detail={"clipCount": clip_count, "clipIndexes": unique},
+            )
+        return unique
 
     def _ensure_source(self, request: PipelineRequest, workspace: Workspace) -> Path:
         source_dir = workspace.path("media")

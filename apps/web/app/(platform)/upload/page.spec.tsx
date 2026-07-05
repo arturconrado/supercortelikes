@@ -19,7 +19,7 @@ vi.mock('@/hooks/use-resource', () => ({
     data: {
       plan: 'FREE',
       usage: { minutes: 0, limit: 30, remaining: 30 },
-      limits: { maxUploadBytes: 5 * 1024 ** 3, exportResolution: '1080p', watermark: false },
+      limits: { maxUploadBytes: 5 * 1024 ** 3, exportResolution: '720p', watermark: false },
     },
   }),
 }));

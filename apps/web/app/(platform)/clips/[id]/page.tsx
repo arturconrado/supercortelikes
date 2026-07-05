@@ -204,6 +204,8 @@ export default function ClipViewerPage() {
   const source = clip.renderUrl ?? clip.playbackUrl;
   const sampleCaption = extractCaptionSample(captionCues);
   const captionSize = Math.max(18, Math.min(72, Number(captionFontSize) || 42));
+  const exportPending = exportRequested || ['QUEUED', 'PROCESSING', 'RENDERING'].includes((clip.status ?? '').toUpperCase());
+  const exportButtonLabel = clip.downloadUrl ? 'Gerar novamente' : exportPending ? 'Gerando MP4…' : 'Gerar e baixar';
 
   return (
     <>
@@ -225,9 +227,9 @@ export default function ClipViewerPage() {
                 </a>
               </Button>
             )}
-            <Button onClick={() => void createExport()} disabled={exporting}>
+            <Button onClick={() => void createExport()} disabled={exporting || (exportPending && !clip.downloadUrl)}>
               {exporting ? <LoaderCircle className="size-4 animate-spin"/> : <Sparkles className="size-4"/>}
-              Exportar
+              {exportButtonLabel}
             </Button>
           </div>
         }
@@ -432,7 +434,7 @@ export default function ClipViewerPage() {
             <p className="mt-3 text-sm leading-6 text-zinc-500">
               Renderize em MP4 H.264 no formato selecionado. O download assinado aparecerá quando a exportação concluir.
             </p>
-            {exportRequested && !clip.downloadUrl && (
+            {exportPending && !clip.downloadUrl && (
               <div className="mt-4 flex items-center gap-2 rounded-xl border border-lime/20 bg-lime/10 px-3 py-2 text-sm text-lime">
                 <LoaderCircle className="size-4 animate-spin"/>
                 Renderizando. Esta tela atualiza automaticamente.
@@ -444,9 +446,9 @@ export default function ClipViewerPage() {
                   <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}><Download className="size-4"/>Baixar MP4</a>
                 </Button>
               )}
-              <Button onClick={() => void createExport()} disabled={exporting}>
+              <Button onClick={() => void createExport()} disabled={exporting || (exportPending && !clip.downloadUrl)}>
                 {exporting ? <LoaderCircle className="size-4 animate-spin"/> : <Sparkles className="size-4"/>}
-                Renderizar/exportar
+                {exportButtonLabel}
               </Button>
             </div>
           </Card>

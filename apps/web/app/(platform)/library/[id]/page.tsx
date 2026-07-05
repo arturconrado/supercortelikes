@@ -252,15 +252,19 @@ export default function VideoPage() {
 
           <div className="mt-5 grid grid-cols-2 gap-2">
             {PIPELINE_STAGES.map((stage) => {
+              const onDemand = stage.key === 'RENDERING' || stage.key === 'EXPORTS';
               const currentIndex = PIPELINE_STAGES.findIndex((item) => item.key === video.currentStage);
               const stageIndex = PIPELINE_STAGES.findIndex((item) => item.key === stage.key);
               const pipelineStage = pipeline?.run?.stages.find((item) => item.stage === stage.key);
-              const done = pipelineStage?.status === 'SUCCEEDED' || status === 'SUCCEEDED' || rawClips.length > 0 || (currentIndex >= 0 && stageIndex < currentIndex);
+              const mainPipelineDone = rawClips.length > 0 || status === 'SUCCEEDED';
+              const done = pipelineStage?.status === 'SUCCEEDED' || (!onDemand && (mainPipelineDone || (currentIndex >= 0 && stageIndex < currentIndex)));
               const failed = pipelineStage?.status === 'FAILED' || pipelineStage?.status === 'DEAD_LETTERED';
               const active = video.currentStage === stage.key && processing;
+              const standby = onDemand && mainPipelineDone && !done && !failed && !active;
               return (
-                <div key={stage.key} className={cn('rounded-xl border px-3 py-2 text-xs', failed ? 'border-red-500/20 bg-red-500/[.08] text-red-200' : done ? 'border-emerald-500/15 bg-emerald-500/[.06] text-emerald-200' : active ? 'border-lime/20 bg-lime/[.08] text-lime' : 'border-white/[.06] bg-white/[.025] text-zinc-600')}>
+                <div key={stage.key} className={cn('rounded-xl border px-3 py-2 text-xs', failed ? 'border-red-500/20 bg-red-500/[.08] text-red-200' : done ? 'border-emerald-500/15 bg-emerald-500/[.06] text-emerald-200' : active ? 'border-lime/20 bg-lime/[.08] text-lime' : standby ? 'border-white/[.08] bg-white/[.035] text-zinc-400' : 'border-white/[.06] bg-white/[.025] text-zinc-600')}>
                   {stage.label}
+                  {standby && <span className="ml-1 text-[10px] text-zinc-600">· sob demanda</span>}
                 </div>
               );
             })}

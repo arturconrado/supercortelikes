@@ -26,6 +26,10 @@ export const pipelineJobSchema = z.object({
   tenantId: z.string().uuid().nullable().optional(),
   projectId: z.string().uuid().nullable().optional(),
   sourceObjectKey: z.string().min(1).optional(),
+  clipId: z.string().uuid().optional(),
+  exportId: z.string().uuid().optional(),
+  sourcePipelineRunId: z.string().uuid().optional(),
+  renderFingerprint: z.string().min(16).max(256).optional(),
   stage: z.enum(PIPELINE_STAGES),
   correlationId: z.string().uuid(),
   causationId: z.string().uuid(),
@@ -49,6 +53,7 @@ const eventRoutes: Readonly<Record<string, PipelineStageName>> = {
   'pipeline.scoring.completed.v1': 'clips',
   'pipeline.clips.completed.v1': 'captions',
   'pipeline.captions.completed.v1': 'rendering',
+  'clip.render.requested.v1': 'rendering',
   'pipeline.rendering.completed.v1': 'exports',
 };
 
@@ -92,6 +97,7 @@ export function queueJobOptions(queue: PipelineStageName, jobId: string, priorit
 }
 
 export function nextStage(stage: PipelineStageName): PipelineStageName | null {
+  if (stage === 'captions') return null;
   const index = PIPELINE_STAGES.indexOf(stage);
   return index === PIPELINE_STAGES.length - 1 ? null : PIPELINE_STAGES[index + 1];
 }

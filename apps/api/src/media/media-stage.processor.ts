@@ -21,6 +21,7 @@ export class MediaStageProcessor {
   private readonly transcriptionBatchSize: number;
   private readonly ffmpegPreset: string;
   private readonly ffmpegCrf: number;
+  private readonly renderMaxHeight: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -34,6 +35,7 @@ export class MediaStageProcessor {
     this.transcriptionBatchSize = config.get('MEDIA_TRANSCRIPTION_BATCH_SIZE', { infer: true });
     this.ffmpegPreset = config.get('FFMPEG_PRESET', { infer: true });
     this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
+    this.renderMaxHeight = config.get('RENDER_MAX_HEIGHT', { infer: true });
   }
 
   async process(job: PipelineJob): Promise<void> {
@@ -55,6 +57,7 @@ export class MediaStageProcessor {
     if (!video) throw new NotFoundException('Video not found for pipeline stage');
     const processingOptions = normalizeVideoProcessingOptions(video.processingOptions as never);
     const options = await this.options(job, video.storageBucket, processingOptions, video);
+    await this.markExportProcessing(job);
     let response: MediaStageResponse;
     try {
       response = await this.media.execute(
@@ -95,17 +98,35 @@ export class MediaStageProcessor {
     }
     if (stage === 'captions') return { template: 'podcast', wordsPerCue: 4 };
     if (stage === 'rendering') {
+      const render = await this.clipRenderContext(job);
       return {
         smartReframe: true,
-        aspectRatio: processing.aspectRatio,
+        aspectRatio: render.aspectRatio,
         targetPlatform: processing.targetPlatform,
         detector: 'opencv',
         preset: this.ffmpegPreset,
         crf: this.ffmpegCrf,
+        maxHeight: this.renderMaxHeight,
+        clipIndex: render.clipIndex,
+        clipId: job.clipId,
+        exportId: job.exportId,
+        sourcePipelineRunId: job.sourcePipelineRunId,
+        renderFingerprint: job.renderFingerprint,
         ...(await this.watermarkOptions(job.pipelineRunId, video)),
       };
     }
-    if (stage === 'exports') return { bucket };
+    if (stage === 'exports') {
+      const render = await this.clipRenderContext(job);
+      return {
+        bucket,
+        prefix: `exports/${job.videoId}/${job.exportId}`,
+        clipIndex: render.clipIndex,
+        clipId: job.clipId,
+        exportId: job.exportId,
+        sourcePipelineRunId: job.sourcePipelineRunId,
+        renderFingerprint: job.renderFingerprint,
+      };
+    }
     return {};
   }
 
@@ -125,10 +146,42 @@ export class MediaStageProcessor {
     if (job.stage === 'clips') return this.persistClips(job.videoId, response);
     if (job.stage === 'captions') return this.persistCaptions(job.videoId, response);
     if (job.stage === 'rendering') {
-      await this.prisma.clip.updateMany({ where: { videoId: job.videoId }, data: { status: 'RENDERING' } });
+      if (!job.clipId) throw new UnrecoverableError('On-demand render jobs require clipId');
+      await this.prisma.clip.update({ where: { id: job.clipId }, data: { status: 'RENDERING' } });
       return;
     }
-    await this.persistExports(job.videoId, response);
+    await this.persistExports(job, response);
+  }
+
+  private async markExportProcessing(job: PipelineJob): Promise<void> {
+    if (!job.exportId || (job.stage !== 'rendering' && job.stage !== 'exports')) return;
+    await this.prisma.export.updateMany({
+      where: { id: job.exportId, status: { in: ['QUEUED', 'PROCESSING'] } },
+      data: { status: 'PROCESSING', errorCode: null },
+    });
+  }
+
+  private async clipRenderContext(job: PipelineJob): Promise<{ clipIndex: number; aspectRatio: string }> {
+    if (!job.clipId || !job.exportId || !job.sourcePipelineRunId || !job.renderFingerprint) {
+      throw new UnrecoverableError('On-demand render jobs require clipId, exportId, sourcePipelineRunId and renderFingerprint');
+    }
+    const [clips, exportJob] = await Promise.all([
+      this.prisma.clip.findMany({
+        where: { videoId: job.videoId },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, aspectRatio: true },
+      }),
+      this.prisma.export.findFirst({
+        where: { id: job.exportId, clipId: job.clipId },
+        select: { aspectRatio: true, renderFingerprint: true },
+      }),
+    ]);
+    const clipIndex = clips.findIndex((clip) => clip.id === job.clipId);
+    if (clipIndex < 0 || !exportJob) throw new UnrecoverableError('On-demand render job references an unavailable clip/export');
+    if (exportJob.renderFingerprint && exportJob.renderFingerprint !== job.renderFingerprint) {
+      throw new UnrecoverableError('On-demand render job fingerprint no longer matches the export request');
+    }
+    return { clipIndex, aspectRatio: exportJob.aspectRatio ?? clips[clipIndex]!.aspectRatio };
   }
 
   private async persistIngestion(
@@ -372,7 +425,10 @@ export class MediaStageProcessor {
     }
   }
 
-  private async persistExports(videoId: string, response: MediaStageResponse): Promise<void> {
+  private async persistExports(job: PipelineJob, response: MediaStageResponse): Promise<void> {
+    if (!job.clipId || !job.exportId) {
+      throw new UnrecoverableError('On-demand export jobs require clipId and exportId');
+    }
     const metrics = response.metrics as {
       storage?: Array<{ key: string; bytes: number; mediaType: string }>;
     };
@@ -381,18 +437,18 @@ export class MediaStageProcessor {
       : await this.artifactJson<{
           storage: Array<{ key: string; bytes: number; mediaType: string }>;
         }>(response, 'export-manifest');
-    const clips = await this.prisma.clip.findMany({ where: { videoId }, orderBy: { createdAt: 'asc' }, include: { captions: true } });
+    const clips = await this.prisma.clip.findMany({ where: { videoId: job.videoId }, orderBy: { createdAt: 'asc' }, include: { captions: true } });
+    const targetClip = clips.find((clip) => clip.id === job.clipId);
+    if (!targetClip) throw new UnrecoverableError('On-demand export job references an unavailable clip');
+    let storedMp4 = false;
     for (const stored of value.storage) {
       const filename = stored.key.split('/').at(-1) ?? '';
       const match = /^clip-(\d{3})\.(mp4|srt|ass)$/.exec(filename);
       if (!match) continue;
       const clip = clips[Number(match[1]) - 1];
+      if (clip?.id !== targetClip.id) continue;
       if (!clip) continue;
       if (match[2] === 'mp4') {
-        const queued = await this.prisma.export.findFirst({
-          where: { clipId: clip.id, format: 'MP4', aspectRatio: clip.aspectRatio, status: { in: ['QUEUED', 'PROCESSING'] } },
-          orderBy: { createdAt: 'desc' },
-        });
         const data = {
           format: 'MP4',
           aspectRatio: clip.aspectRatio,
@@ -400,20 +456,12 @@ export class MediaStageProcessor {
           sizeBytes: BigInt(stored.bytes),
           status: 'READY' as const,
         };
-        if (queued) {
-          await this.prisma.export.update({
-            where: { id: queued.id },
-            data,
-          });
-        } else {
-          await this.prisma.export.create({
-            data: {
-              clipId: clip.id,
-              ...data,
-            },
-          });
-        }
+        await this.prisma.export.update({
+          where: { id: job.exportId },
+          data,
+        });
         await this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'READY' } });
+        storedMp4 = true;
       } else if (clip.captions[0]) {
         await this.prisma.captionTrack.update({
           where: { id: clip.captions[0].id },
@@ -421,6 +469,7 @@ export class MediaStageProcessor {
         });
       }
     }
+    if (!storedMp4) throw new UnrecoverableError('On-demand export did not upload the requested MP4');
   }
 
   private async artifactJson<T>(response: MediaStageResponse, kind: string): Promise<T> {

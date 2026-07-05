@@ -37,8 +37,8 @@ test('editor salva timing, formato, legendas, SEO e solicita export', async ({ p
     hashtags: ['#novo', '#viral'],
   });
 
-  await page.getByRole('button', { name: /Exportar/i }).click();
-  await expect(page.getByText('Exportação adicionada à fila.')).toBeVisible();
+  await page.getByRole('button', { name: /Gerar novamente|Gerar e baixar/i }).first().click();
+  await expect(page.getByText('Exportação pronta. Você já pode baixar o MP4.')).toBeVisible();
   expect(state.exportRequests[0]).toMatchObject({ format: 'MP4', aspectRatio: '4:5' });
 });
 

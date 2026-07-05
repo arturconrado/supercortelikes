@@ -473,6 +473,8 @@ model Export {
   aspectRatio String
   storageKey  String?
   sizeBytes   BigInt?
+  renderFingerprint String?
+  sourcePipelineRunId String?     @db.Uuid
   status      ExportStatus @default(QUEUED)
   errorCode   String?
   createdAt   DateTime     @default(now())
@@ -480,6 +482,7 @@ model Export {
   clip        Clip         @relation(fields: [clipId], references: [id], onDelete: Cascade)
 
   @@index([clipId, status])
+  @@index([clipId, renderFingerprint, status])
   @@index([status, createdAt])
   @@index([status, updatedAt])
   @@map("exports")

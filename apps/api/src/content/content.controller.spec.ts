@@ -99,13 +99,19 @@ function prisma(overrides: Record<string, unknown> = {}) {
 
 function makeController(db = prisma()) {
   const storage = { downloadUrl: vi.fn(async (key: string) => `https://storage.test/${key}`) };
-  return { db, storage, controller: new ContentController(db, { redrive: vi.fn().mockResolvedValue('event') } as any, storage as any) };
+  const renderRequests = { request: vi.fn().mockResolvedValue({ id: 'export', clipId: clip.id, format: 'MP4', aspectRatio: '9:16', status: 'QUEUED', sizeBytes: null }) };
+  return {
+    db,
+    storage,
+    renderRequests,
+    controller: new ContentController(db, { redrive: vi.fn().mockResolvedValue('event') } as any, storage as any, renderRequests as any),
+  };
 }
 
 describe('ContentController', () => {
   it('exposes pipeline, transcript and video clip state', async () => {
     const { controller } = makeController();
-    await expect(controller.videoPipeline(user, clip.videoId)).resolves.toMatchObject({ progress: 13, run: { openDeadLetters: [{ id: 'dlq' }] } });
+    await expect(controller.videoPipeline(user, clip.videoId)).resolves.toMatchObject({ progress: 17, run: { openDeadLetters: [{ id: 'dlq' }] } });
     await expect(controller.videoTranscript(user, clip.videoId)).resolves.toMatchObject({ language: 'pt', detectedLanguage: 'pt', durationSeconds: 20 });
     const clips = await controller.videoClips(user, clip.videoId) as Array<Record<string, unknown>>;
     expect(clips).toMatchObject([
@@ -141,11 +147,11 @@ describe('ContentController', () => {
   });
 
   it('creates render/export jobs and reuses existing jobs', async () => {
-    const { controller, db } = makeController();
+    const { controller, renderRequests } = makeController();
     await expect(controller.renderClip(user, clip.id, { aspectRatio: '1:1', force: true })).resolves.toMatchObject({ status: 'QUEUED' });
-    expect(db.outboxEvent.create).toHaveBeenCalled();
+    expect(renderRequests.request).toHaveBeenCalledWith(user, { clipId: clip.id, format: 'MP4', aspectRatio: '1:1', force: true });
 
-    db.export.findFirst.mockResolvedValueOnce({ id: 'ready', clipId: clip.id, format: 'MP4', aspectRatio: '9:16', status: 'READY', sizeBytes: 10n });
+    renderRequests.request.mockResolvedValueOnce({ id: 'ready', clipId: clip.id, format: 'MP4', aspectRatio: '9:16', status: 'READY', sizeBytes: '10' });
     await expect(controller.exportClip(user, clip.id, { format: 'MP4' })).resolves.toMatchObject({ id: 'ready', sizeBytes: '10' });
   });
 

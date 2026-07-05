@@ -43,7 +43,7 @@ export const PLAN_LIMITS: Record<CommercialPlan, PlanLimits> = {
     minutesPerMonth: 600,
     maxUploadBytes: 5 * GiB,
     maxVideoDurationSeconds: 60 * 60,
-    exportResolution: '1080p',
+    exportResolution: '720p',
     watermark: false,
     queuePriority: 10,
     maxConcurrentHeavyJobs: 1,
@@ -53,7 +53,7 @@ export const PLAN_LIMITS: Record<CommercialPlan, PlanLimits> = {
     minutesPerMonth: 2_000,
     maxUploadBytes: 5 * GiB,
     maxVideoDurationSeconds: 60 * 60,
-    exportResolution: '1080p',
+    exportResolution: '720p',
     watermark: false,
     queuePriority: 1,
     maxConcurrentHeavyJobs: 1,
@@ -81,7 +81,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     recommended: true,
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.PRO,
-    features: ['600 minutos/mês', 'Uploads até 5 GiB', 'Export 1080p', 'Sem marca d’água'],
+    features: ['600 minutos/mês', 'Uploads até 5 GiB', 'Export 720p', 'Sem marca d’água'],
   },
   {
     id: 'BUSINESS',
@@ -91,7 +91,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     interval: 'month',
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.BUSINESS,
-    features: ['2.000 minutos/mês', 'Fila prioritária', 'Export 1080p', 'Suporte prioritário'],
+    features: ['2.000 minutos/mês', 'Fila prioritária', 'Export 720p', 'Suporte prioritário'],
   },
 ];
 

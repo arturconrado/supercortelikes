@@ -48,7 +48,12 @@ describe('MediaStageProcessor persistence', () => {
       },
       seoMetadata: { create: vi.fn() },
       captionTrack: { deleteMany: vi.fn(), create: vi.fn(), update: vi.fn() },
-      export: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn(), update: vi.fn() },
+      export: {
+        findFirst: vi.fn().mockResolvedValue({ aspectRatio: '9:16', renderFingerprint: 'fingerprint' }),
+        create: vi.fn(),
+        updateMany: vi.fn(),
+        update: vi.fn(),
+      },
       $transaction: vi.fn(async (value: any) => typeof value === 'function' ? value(prisma) : Promise.all(value)),
     };
     media = {
@@ -77,17 +82,41 @@ describe('MediaStageProcessor persistence', () => {
       upload: vi.fn().mockResolvedValue({ etag: 'etag' }),
       downloadUrl: vi.fn(async (key: string) => `https://storage.test/${key}`),
     };
-    processor = new MediaStageProcessor(prisma, media, storage, { get: (key: string) => ({ MEDIA_WORKER_DATA_DIR: root, MEDIA_DIARIZATION_ENABLED: false, MEDIA_TRANSCRIPTION_BATCH_SIZE: 1 } as any)[key] } as any, usage);
+    processor = new MediaStageProcessor(
+      prisma,
+      media,
+      storage,
+      {
+        get: (key: string) => ({
+          MEDIA_WORKER_DATA_DIR: root,
+          MEDIA_DIARIZATION_ENABLED: false,
+          MEDIA_TRANSCRIPTION_BATCH_SIZE: 1,
+          FFMPEG_PRESET: 'veryfast',
+          FFMPEG_CRF: 22,
+          RENDER_MAX_HEIGHT: 720,
+        } as any)[key],
+      } as any,
+      usage,
+    );
   });
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
 
   const job = (stage: string) => ({ stage, videoId: 'video', pipelineRunId: 'run', stageExecutionId: 'execution' }) as any;
+  const renderJob = (stage: string) => ({
+    ...job(stage),
+    clipId: 'clip',
+    exportId: 'export',
+    sourcePipelineRunId: 'source-run',
+    renderFingerprint: 'fingerprint',
+  }) as any;
 
   it('persists every pipeline stage and passes release-safe options', async () => {
-    for (const stage of ['ingestion', 'transcription', 'segmentation', 'scoring', 'clips', 'captions', 'rendering', 'exports']) {
+    for (const stage of ['ingestion', 'transcription', 'segmentation', 'scoring', 'clips', 'captions']) {
       await processor.process(job(stage));
     }
+    await processor.process(renderJob('rendering'));
+    await processor.process(renderJob('exports'));
     expect(prisma.video.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ width: 640, videoCodec: 'h264' }) }));
     expect(usage.assertCanProcessVideo).toHaveBeenCalledWith('video');
     expect(usage.recordProcessingMinutes).toHaveBeenCalledWith('video');
@@ -97,9 +126,11 @@ describe('MediaStageProcessor persistence', () => {
     expect(prisma.clip.create).toHaveBeenCalled();
     expect(prisma.seoMetadata.create).toHaveBeenCalled();
     expect(prisma.captionTrack.create).toHaveBeenCalled();
-    expect(prisma.export.create).toHaveBeenCalled();
+    expect(prisma.export.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'export', status: { in: ['QUEUED', 'PROCESSING'] } } }));
+    expect(prisma.export.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'export' }, data: expect.objectContaining({ status: 'READY' }) }));
     expect(prisma.clip.update).toHaveBeenCalled();
     expect(media.execute).toHaveBeenCalledWith(expect.objectContaining({ stage: 'transcription' }), expect.anything(), expect.objectContaining({ diarize: false, batchSize: 1 }), undefined);
+    expect(media.execute).toHaveBeenCalledWith(expect.objectContaining({ stage: 'rendering' }), expect.anything(), expect.objectContaining({ clipIndex: 0, maxHeight: 720 }), undefined);
   });
 
   it('uses source URLs and rejects missing videos or unsafe artifacts', async () => {

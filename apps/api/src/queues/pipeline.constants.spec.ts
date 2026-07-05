@@ -27,11 +27,15 @@ describe('pipeline queue contracts', () => {
     expect(pipelineJobSchema.safeParse({ ...job, eventId: 'unsafe:id' }).success).toBe(false);
   });
 
-  it('routes the complete event chain through all eight queues', () => {
+  it('routes the main pipeline and on-demand render events', () => {
     expect(eventQueue('video.uploaded.v1')).toBe('ingestion');
-    for (let index = 0; index < PIPELINE_STAGES.length - 1; index += 1) {
+    const mainStages = PIPELINE_STAGES.slice(0, PIPELINE_STAGES.indexOf('captions'));
+    for (let index = 0; index < mainStages.length; index += 1) {
       expect(eventQueue(completedEventType(PIPELINE_STAGES[index]))).toBe(PIPELINE_STAGES[index + 1]);
     }
+    expect(eventQueue('clip.render.requested.v1')).toBe('rendering');
+    expect(eventQueue('pipeline.rendering.completed.v1')).toBe('exports');
+    expect(eventQueue('pipeline.captions.completed.v1')).toBe('rendering');
     expect(() => eventQueue('payload.selected.queue')).toThrow('Unsupported outbox event type');
   });
 
@@ -46,8 +50,9 @@ describe('pipeline queue contracts', () => {
     }
   });
 
-  it('walks stages in order and terminates after exports', () => {
+  it('walks the main stages in order and keeps render/export on demand', () => {
     expect(nextStage('ingestion')).toBe('transcription');
+    expect(nextStage('captions')).toBeNull();
     expect(nextStage('rendering')).toBe('exports');
     expect(nextStage('exports')).toBeNull();
   });

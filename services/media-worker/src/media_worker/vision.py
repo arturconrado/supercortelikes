@@ -108,7 +108,9 @@ def render_reframes(
         )
         crop_x = even(max(0, min(width - crop_width, focus_x - crop_width / 2)))
         crop_y = even(max(0, min(height - crop_height, focus_y - crop_height / 2)))
-        target_width, target_height = output_dimensions(ratio_width, ratio_height)
+        target_width, target_height = output_dimensions(
+            ratio_width, ratio_height, settings.render_max_height
+        )
         output = output_dir / ("reframe-%s.mp4" % aspect.replace(":", "x"))
         run_command(
             [
@@ -129,9 +131,13 @@ def render_reframes(
                 "-c:v",
                 "libx264",
                 "-preset",
-                "medium",
+                settings.ffmpeg_preset,
                 "-crf",
-                "20",
+                str(settings.ffmpeg_crf),
+                "-threads",
+                str(settings.ffmpeg_threads),
+                "-filter_threads",
+                str(settings.ffmpeg_filter_threads),
                 "-c:a",
                 "aac",
                 "-movflags",
@@ -154,10 +160,10 @@ def crop_dimensions(
     return even(width), even(width / desired)
 
 
-def output_dimensions(ratio_width: int, ratio_height: int) -> Tuple[int, int]:
+def output_dimensions(ratio_width: int, ratio_height: int, base: int = 720) -> Tuple[int, int]:
     if ratio_width / ratio_height < 1:
-        return even(1080), even(1080 * ratio_height / ratio_width)
-    return even(1920), even(1920 * ratio_height / ratio_width)
+        return even(base), even(base * ratio_height / ratio_width)
+    return even(base * ratio_width / ratio_height), even(base)
 
 
 def even(value: float) -> int:

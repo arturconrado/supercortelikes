@@ -150,6 +150,8 @@ def test_storage_and_redis_readiness_paths(monkeypatch):
             return None
 
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: S3Client()))
+    monkeypatch.setitem(sys.modules, "botocore", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "botocore.config", SimpleNamespace(Config=lambda **_kwargs: object()))
     assert worker_app._storage_ready() is True
     monkeypatch.setattr(worker_app, "settings", replace(base, s3_bucket=""))
     assert worker_app._storage_ready() is False

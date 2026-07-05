@@ -68,8 +68,11 @@ export class SettingsService {
       ...(input.fontFamily !== undefined ? { fontFamily: input.fontFamily } : {}),
       ...(input.watermarkText !== undefined ? { watermark: nextWatermark as Prisma.InputJsonObject } : {}),
     };
-    if (current) return this.prisma.brandKit.update({ where: { id: current.id }, data });
-    return this.prisma.brandKit.create({ data: { ...data, workspaceId: user.workspaceId } });
+    const kit = current
+      ? await this.prisma.brandKit.update({ where: { id: current.id }, data })
+      : await this.prisma.brandKit.create({ data: { ...data, workspaceId: user.workspaceId } });
+    await this.invalidateReadyClipExports(user.workspaceId);
+    return kit;
   }
 
   async updateBrandLogo(user: AuthenticatedUser, input: BrandLogoDto): Promise<unknown> {
@@ -84,15 +87,17 @@ export class SettingsService {
     };
     if (input.watermarkText?.trim()) watermark.text = input.watermarkText.trim();
     if (current) {
-      return this.prisma.brandKit.update({
+      const kit = await this.prisma.brandKit.update({
         where: { id: current.id },
         data: {
           ...(logoKey !== undefined ? { logoKey: logoKey.trim() || null } : {}),
           watermark: watermark as Prisma.InputJsonObject,
         },
       });
+      await this.invalidateReadyClipExports(user.workspaceId);
+      return kit;
     }
-    return this.prisma.brandKit.create({
+    const kit = await this.prisma.brandKit.create({
       data: {
         workspaceId: user.workspaceId,
         name: 'Default',
@@ -101,6 +106,15 @@ export class SettingsService {
         ...(logoKey ? { logoKey: logoKey.trim() } : {}),
         watermark: watermark as Prisma.InputJsonObject,
       },
+    });
+    await this.invalidateReadyClipExports(user.workspaceId);
+    return kit;
+  }
+
+  private async invalidateReadyClipExports(workspaceId: string): Promise<void> {
+    await this.prisma.clip.updateMany({
+      where: { status: 'READY', video: { workspaceId } },
+      data: { status: 'SUGGESTED' },
     });
   }
 

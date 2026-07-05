@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   Body,
@@ -18,11 +17,13 @@ import type { FastifyReply } from 'fastify';
 import { CurrentUser } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
+import { ClipRenderRequestService } from '../exports/clip-render-request.service';
 import { DeadLetterService } from '../queues/dead-letter.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 import { ClipExportDto, RenderClipDto, UpdateClipCaptionsDto, UpdateClipDto, UpdateClipTimingDto } from './content.dto';
 
-const PIPELINE_STAGE_COUNT = 8;
+const MAIN_PIPELINE_STAGE_COUNT = 6;
+const RENDER_PIPELINE_STAGE_COUNT = 2;
 const PIPELINE_EVENT_INTERVAL_MS = 3_500;
 const PIPELINE_EVENT_HEARTBEAT_MS = 15_000;
 
@@ -32,6 +33,7 @@ export class ContentController {
     private readonly prisma: PrismaService,
     private readonly deadLetters: DeadLetterService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    private readonly renderRequests: ClipRenderRequestService,
   ) {}
 
   @Get('videos')
@@ -190,12 +192,13 @@ export class ContentController {
     if (!video) throw new NotFoundException('Video not found');
     const run = video.pipelineRuns[0];
     const succeeded = run?.stages.filter((stage) => stage.status === 'SUCCEEDED').length ?? 0;
+    const stageCount = pipelineStageCount(run?.stages.map((stage) => stage.stage) ?? []);
     return {
       videoId: video.id,
       status: video.status,
       failureCode: video.failureCode,
       failureMessage: video.failureMessage,
-      progress: run?.status === 'SUCCEEDED' ? 100 : Math.round((succeeded / PIPELINE_STAGE_COUNT) * 100),
+      progress: run?.status === 'SUCCEEDED' ? 100 : Math.round((succeeded / stageCount) * 100),
       run: run
         ? {
             id: run.id,
@@ -291,7 +294,7 @@ export class ContentController {
         where: { id },
         data: {
           ...(input.title ? { title: input.title.trim() } : {}),
-          ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}),
+          ...(input.aspectRatio ? { aspectRatio: input.aspectRatio, status: 'SUGGESTED' as const } : {}),
           ...(input.status ? { status: input.status } : {}),
         },
       });
@@ -377,12 +380,12 @@ export class ContentController {
     @Body() input: RenderClipDto,
   ): Promise<unknown> {
     const clip = await this.ensureClip(id, user.workspaceId);
-    if (input.aspectRatio && input.aspectRatio !== clip.aspectRatio) {
-      await this.prisma.clip.update({ where: { id }, data: { aspectRatio: input.aspectRatio, status: 'SUGGESTED' } });
-    }
-    const exportJob = await this.ensureExport(id, 'MP4', input.aspectRatio ?? clip.aspectRatio);
-    if (exportJob.status !== 'READY') await this.queueRenderingRun(clip.videoId, input.force ?? false);
-    return serialize({ ...exportJob, sizeBytes: exportJob.sizeBytes?.toString() ?? null });
+    return serialize(await this.renderRequests.request(user, {
+      clipId: clip.id,
+      format: 'MP4',
+      aspectRatio: input.aspectRatio ?? clip.aspectRatio,
+      force: input.force ?? false,
+    }));
   }
 
   @Post('clips/:id/export')
@@ -392,9 +395,11 @@ export class ContentController {
     @Body() input: ClipExportDto,
   ): Promise<unknown> {
     const clip = await this.ensureClip(id, user.workspaceId);
-    const exportJob = await this.ensureExport(id, input.format ?? 'MP4', input.aspectRatio ?? clip.aspectRatio);
-    if (exportJob.status !== 'READY') await this.queueRenderingRun(clip.videoId, false);
-    return serialize({ ...exportJob, sizeBytes: exportJob.sizeBytes?.toString() ?? null });
+    return serialize(await this.renderRequests.request(user, {
+      clipId: clip.id,
+      format: input.format ?? 'MP4',
+      aspectRatio: input.aspectRatio ?? clip.aspectRatio,
+    }));
   }
 
   private async ensureClip(id: string, workspaceId: string) {
@@ -421,7 +426,14 @@ export class ContentController {
   }
 
   private async clipView(clip: Record<string, any>): Promise<Record<string, unknown>> {
-    const readyExport = clip.exports?.find((item: { status: string; storageKey?: string | null }) => item.status === 'READY' && item.storageKey);
+    const sortedExports = [...(clip.exports ?? [])].sort((left: { createdAt?: string | Date }, right: { createdAt?: string | Date }) =>
+      String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
+    );
+    const hasActiveExport = sortedExports.some((item: { status: string }) => ['QUEUED', 'PROCESSING'].includes(item.status));
+    const canUseReadyExport = clip.status === 'READY' && !hasActiveExport;
+    const readyExport = canUseReadyExport
+      ? sortedExports.find((item: { status: string; storageKey?: string | null }) => item.status === 'READY' && item.storageKey)
+      : undefined;
     const caption = clip.captions?.[0];
     const captionStorageKey = isStorageKey(caption?.srtKey) ? caption.srtKey : undefined;
     const renderUrl = readyExport?.storageKey ? await this.storage.downloadUrl(readyExport.storageKey, 900) : undefined;
@@ -468,66 +480,12 @@ export class ContentController {
     return appendMediaFragment(sourceUrl, startSeconds, endSeconds);
   }
 
-  private async ensureExport(clipId: string, format: string, aspectRatio: string) {
-    const existing = await this.prisma.export.findFirst({
-      where: { clipId, format, aspectRatio, status: { in: ['READY', 'QUEUED', 'PROCESSING'] } },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (existing) return existing;
-    await this.prisma.clip.update({ where: { id: clipId }, data: { status: 'RENDERING' } });
-    return this.prisma.export.create({ data: { clipId, format, aspectRatio, status: 'QUEUED' } });
-  }
+}
 
-  private async queueRenderingRun(videoId: string, force: boolean): Promise<void> {
-    if (!force) {
-      const active = await this.prisma.pipelineRun.findFirst({
-        where: { videoId, status: { in: ['PENDING', 'RUNNING'] }, currentStage: { in: ['RENDERING', 'EXPORTS'] } },
-      });
-      if (active) return;
-    }
-    const eventId = randomUUID();
-    const pipelineRunId = randomUUID();
-    const stageExecutionId = randomUUID();
-    const occurredAt = new Date();
-    const job = {
-      schemaVersion: 1,
-      eventId,
-      pipelineRunId,
-      stageExecutionId,
-      videoId,
-      stage: 'rendering',
-      correlationId: pipelineRunId,
-      causationId: eventId,
-      occurredAt: occurredAt.toISOString(),
-    };
-    await this.prisma.$transaction([
-      this.prisma.pipelineRun.create({
-        data: {
-          id: pipelineRunId,
-          videoId,
-          sourceEventId: eventId,
-          status: 'PENDING',
-          currentStage: 'RENDERING',
-        },
-      }),
-      this.prisma.stageExecution.create({
-        data: {
-          id: stageExecutionId,
-          pipelineRunId,
-          stage: 'RENDERING',
-          jobId: eventId,
-        },
-      }),
-      this.prisma.outboxEvent.create({
-        data: {
-          id: eventId,
-          aggregateId: videoId,
-          type: 'pipeline.captions.completed.v1',
-          payload: job as unknown as Prisma.InputJsonObject,
-        },
-      }),
-    ]);
-  }
+function pipelineStageCount(stages: string[]): number {
+  return stages.some((stage) => stage === 'RENDERING' || stage === 'EXPORTS') && stages.every((stage) => stage === 'RENDERING' || stage === 'EXPORTS')
+    ? RENDER_PIPELINE_STAGE_COUNT
+    : MAIN_PIPELINE_STAGE_COUNT;
 }
 
 function serialize(value: unknown): unknown {

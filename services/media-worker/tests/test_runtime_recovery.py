@@ -46,6 +46,10 @@ def test_runtime_tuning_environment(monkeypatch):
     monkeypatch.setenv("MEDIA_LIGHT_CONCURRENT_JOBS", "4")
     monkeypatch.setenv("FFMPEG_PRESET", "veryfast")
     monkeypatch.setenv("FFMPEG_CRF", "22")
+    monkeypatch.setenv("FFMPEG_THREADS", "2")
+    monkeypatch.setenv("FFMPEG_FILTER_THREADS", "1")
+    monkeypatch.setenv("RENDER_MAX_HEIGHT", "720")
+    monkeypatch.setenv("ALLOW_FULL_BATCH_RENDER", "false")
     monkeypatch.setenv("YTDLP_FRAGMENT_CONCURRENCY", "4")
 
     settings = Settings.from_env()
@@ -55,6 +59,10 @@ def test_runtime_tuning_environment(monkeypatch):
     assert settings.light_concurrent_jobs == 4
     assert settings.ffmpeg_preset == "veryfast"
     assert settings.ffmpeg_crf == 22
+    assert settings.ffmpeg_threads == 2
+    assert settings.ffmpeg_filter_threads == 1
+    assert settings.render_max_height == 720
+    assert settings.allow_full_batch_render is False
     assert settings.ytdlp_fragment_concurrency == 4
 
 
@@ -158,6 +166,8 @@ def test_rendering_builds_caption_and_watermark_commands(tmp_path, monkeypatch):
     result = render_clips(source, clips, captions, tmp_path / "renders", settings, {"watermarkPath": str(watermark), "watermarkPosition": "32:32", "preset": "fast", "crf": 22})
     assert result[0]["durationSeconds"] == 5
     assert "-filter_complex" in commands[0]
+    assert "-threads" in commands[0]
+    assert "-filter_threads" in commands[0]
     result = render_clips(source, clips, captions, tmp_path / "renders-plain", settings, {"watermarkText": "ClipBR AI"})
     assert "-vf" in commands[1]
     assert "drawtext" in ",".join(commands[1])

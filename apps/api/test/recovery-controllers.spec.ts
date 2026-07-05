@@ -130,6 +130,7 @@ describe('project and content controllers', () => {
   it('lists videos and exposes clip SEO, captions, and ready exports', async () => {
     const clip = {
       id: '44444444-4444-4444-8444-444444444444', startMs: 0n, endMs: 10_000n, score: 90,
+      status: 'READY',
       titleSuggestions: ['Title'], seo: { description: 'Description', hashtags: ['#clipbr'], titles: ['SEO title'] },
       captions: [{ id: 'caption', srtKey: 'exports/video/clip.srt' }],
       exports: [{ id: 'export', status: 'READY', storageKey: 'exports/video/clip.mp4' }],
@@ -144,7 +145,7 @@ describe('project and content controllers', () => {
       seoMetadata: { upsert: vi.fn().mockResolvedValue({}) },
     };
     const storage = { downloadUrl: vi.fn(async (key: string) => `https://storage.test/${key}`) };
-    const controller = new ContentController(prisma, { redrive: vi.fn() } as any, storage as any);
+    const controller = new ContentController(prisma, { redrive: vi.fn() } as any, storage as any, { request: vi.fn() } as any);
     expect((await controller.videos(user)) as any).toMatchObject({ total: 1, items: [{ clipsCount: 1 }] });
     expect((await controller.videoClips(user, '55555555-5555-4555-8555-555555555555')) as any[]).toMatchObject([{ hashtags: ['#clipbr'], downloadUrl: 'https://storage.test/exports/video/clip.mp4' }]);
     expect(await controller.clip(user, clip.id)).toMatchObject({ durationSeconds: 10 });
@@ -180,7 +181,8 @@ describe('health, exports, and media contracts', () => {
     };
     const storage: any = { downloadUrl: vi.fn().mockResolvedValue('http://localhost/file'), delete: vi.fn() };
     const deadLetters: any = { redrive: vi.fn().mockResolvedValue('event') };
-    const controller = new ExportsController(prisma, storage, deadLetters);
+    const renderRequests: any = { request: vi.fn().mockResolvedValue(item) };
+    const controller = new ExportsController(prisma, storage, deadLetters, renderRequests);
     expect((await controller.list(user)) as any[]).toMatchObject([{ sizeBytes: '10' }]);
     expect(await controller.create(user, { clipId: 'clip', format: 'MP4', aspectRatio: '9:16' } as any)).toMatchObject({ id: item.id });
     expect(await controller.download(user, item.id)).toEqual({ url: 'http://localhost/file', expiresInSeconds: 900 });
@@ -191,7 +193,7 @@ describe('health, exports, and media contracts', () => {
     });
     expect(await controller.retry(user, item.id)).toEqual({ eventId: 'event' });
     await expect(controller.remove(user, item.id)).resolves.toBeUndefined();
-    prisma.clip.findFirst.mockResolvedValueOnce(null);
+    renderRequests.request.mockRejectedValueOnce(new NotFoundException('Clip not found'));
     await expect(controller.create(user, { clipId: 'missing', format: 'MP4', aspectRatio: '9:16' } as any)).rejects.toBeInstanceOf(NotFoundException);
   });
 

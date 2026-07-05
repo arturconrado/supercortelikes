@@ -109,7 +109,7 @@ def test_youtube_download_configures_deno_runtime(tmp_path, monkeypatch):
     assert YoutubeDL.options["remote_components"] == {"ejs:github"}
     assert YoutubeDL.options["fragment_retries"] == 5
     assert YoutubeDL.options["extractor_retries"] == 3
-    assert YoutubeDL.options["concurrent_fragment_downloads"] == 2
+    assert YoutubeDL.options["concurrent_fragment_downloads"] == 4
     assert YoutubeDL.options["continuedl"] is True
     assert YoutubeDL.options["playlist_items"] == "1"
     assert "Mozilla/5.0" in YoutubeDL.options["http_headers"]["User-Agent"]

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from media_worker.config import Settings
+from media_worker.errors import WorkerError
 from media_worker.models import PipelineRequest, ReframeRequest
 from media_worker.pipeline import Pipeline
 
@@ -29,6 +30,7 @@ def test_pipeline_executes_every_stage_and_reframe(tmp_path, monkeypatch):
         s3_endpoint_url="http://storage",
         s3_access_key_id="access",
         s3_secret_access_key="secret",
+        allow_full_batch_render=True,
     )
     pipeline = Pipeline(settings)
 
@@ -125,10 +127,25 @@ def test_rendering_rejects_invalid_aspect_ratio(tmp_path, monkeypatch):
     workspace.mkdir(parents=True)
     (workspace / "source.mp4").write_bytes(b"video")
     (tmp_path / "pipeline-123" / "clips").mkdir()
-    (tmp_path / "pipeline-123" / "clips" / "clips.json").write_text('{"clips": []}')
+    (tmp_path / "pipeline-123" / "clips" / "clips.json").write_text('{"clips": [{"id": "clip-001", "start": 0, "end": 5}]}')
     (tmp_path / "pipeline-123" / "captions").mkdir()
     (tmp_path / "pipeline-123" / "captions" / "manifest.json").write_text('{"captions": []}')
     body = request()
-    body.options = {"smartReframe": True, "aspectRatio": "2:3"}
+    body.options = {"smartReframe": True, "aspectRatio": "2:3", "clipIndex": 0}
     with pytest.raises(Exception, match="Unsupported smart reframe"):
         pipeline.execute("rendering", body)
+
+
+def test_rendering_requires_selected_clip_by_default(tmp_path):
+    pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path))
+    workspace = tmp_path / "pipeline-123" / "media"
+    workspace.mkdir(parents=True)
+    (workspace / "source.mp4").write_bytes(b"video")
+    (tmp_path / "pipeline-123" / "clips").mkdir()
+    (tmp_path / "pipeline-123" / "clips" / "clips.json").write_text('{"clips": [{"id": "clip-001", "start": 0, "end": 5}]}')
+    (tmp_path / "pipeline-123" / "captions").mkdir()
+    (tmp_path / "pipeline-123" / "captions" / "manifest.json").write_text('{"captions": []}')
+
+    with pytest.raises(WorkerError) as error:
+        pipeline.execute("rendering", request())
+    assert error.value.code == "FULL_BATCH_RENDER_DISABLED"

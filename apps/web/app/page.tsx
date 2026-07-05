@@ -16,7 +16,7 @@ const steps = [
 
 const plans = [
   ['FREE', 'Teste o fluxo com marca d’água', 'R$ 0'],
-  ['PRO', 'Mais minutos, 1080p e sem marca d’água', 'BRL/mês'],
+  ['PRO', 'Mais minutos, export 720p e sem marca d’água', 'BRL/mês'],
   ['BUSINESS', 'Prioridade maior para equipes e volume', 'Sob consulta'],
 ];
 

@@ -84,6 +84,10 @@ def render_clips(
             command.extend(["-vf", ",".join(filters)])
         command.extend(
             [
+                "-threads",
+                str(settings.ffmpeg_threads),
+                "-filter_threads",
+                str(settings.ffmpeg_filter_threads),
                 "-c:v",
                 "libx264",
                 "-preset",

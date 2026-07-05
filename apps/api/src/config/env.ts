@@ -65,6 +65,10 @@ const environmentSchema = z.object({
     .enum(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'])
     .default('veryfast'),
   FFMPEG_CRF: z.coerce.number().int().min(16).max(35).default(22),
+  FFMPEG_THREADS: z.coerce.number().int().min(1).max(32).default(2),
+  FFMPEG_FILTER_THREADS: z.coerce.number().int().min(1).max(16).default(1),
+  RENDER_MAX_HEIGHT: z.coerce.number().int().min(360).max(2160).default(720),
+  ALLOW_FULL_BATCH_RENDER: booleanString,
   YTDLP_FRAGMENT_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
   ENABLE_AI: booleanString,
   ENABLE_WHISPERX: booleanString,

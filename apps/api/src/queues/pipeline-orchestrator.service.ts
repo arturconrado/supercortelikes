@@ -64,6 +64,10 @@ export class PipelineOrchestratorService {
         pipelineRunId: job.pipelineRunId,
         stageExecutionId,
         videoId: job.videoId,
+        ...(job.clipId ? { clipId: job.clipId } : {}),
+        ...(job.exportId ? { exportId: job.exportId } : {}),
+        ...(job.sourcePipelineRunId ? { sourcePipelineRunId: job.sourcePipelineRunId } : {}),
+        ...(job.renderFingerprint ? { renderFingerprint: job.renderFingerprint } : {}),
         stage: following,
         correlationId: job.correlationId,
         causationId: job.eventId,
@@ -108,7 +112,7 @@ export class PipelineOrchestratorService {
   async fail(jobInput: PipelineJob, error: unknown, options: { deadLettered?: boolean } = {}): Promise<void> {
     const job = pipelineJobSchema.parse(jobInput);
     const stageStatus = options.deadLettered === false ? 'FAILED' : 'DEAD_LETTERED';
-    await this.prisma.$transaction([
+    const operations: Prisma.PrismaPromise<unknown>[] = [
       this.prisma.stageExecution.update({
         where: { id: job.stageExecutionId },
         data: {
@@ -127,7 +131,19 @@ export class PipelineOrchestratorService {
           failureMessage: safeErrorMessage(error),
         },
       }),
-    ]);
+    ];
+    if (job.exportId) {
+      operations.push(
+        this.prisma.export.updateMany({
+          where: { id: job.exportId, status: { in: ['QUEUED', 'PROCESSING'] } },
+          data: {
+            status: 'FAILED',
+            errorCode: errorCode(error),
+          },
+        }),
+      );
+    }
+    await this.prisma.$transaction(operations);
   }
 }
 
