@@ -33,6 +33,18 @@ export class MetricsService {
     labelNames: ['queue', 'state'] as const,
     registers: [this.registry],
   });
+  readonly stageExecutions = new Gauge({
+    name: 'clipbr_pipeline_stage_executions',
+    help: 'Pipeline stage executions by stage and status',
+    labelNames: ['stage', 'status'] as const,
+    registers: [this.registry],
+  });
+  readonly exportJobs = new Gauge({
+    name: 'clipbr_export_jobs',
+    help: 'Export jobs by status',
+    labelNames: ['status'] as const,
+    registers: [this.registry],
+  });
 
   constructor() {
     collectDefaultMetrics({ register: this.registry, prefix: 'clipbr_' });

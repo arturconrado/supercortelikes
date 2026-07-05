@@ -47,12 +47,18 @@ class Settings:
     ytdlp_proxy: str
     ytdlp_user_agent: str
     max_concurrent_jobs: int
+    heavy_concurrent_jobs: int
+    light_concurrent_jobs: int
+    ffmpeg_preset: str
+    ffmpeg_crf: int
+    ytdlp_fragment_concurrency: int
     log_level: str
 
     @classmethod
     def from_env(cls) -> "Settings":
         ai_required = _bool_env("AI_REQUIRED", False)
         enable_ai = _bool_env("ENABLE_AI", ai_required)
+        legacy_concurrency = max(1, int(os.getenv("MEDIA_MAX_CONCURRENT_JOBS", "1")))
         settings = cls(
             data_dir=Path(os.getenv("MEDIA_WORKER_DATA_DIR", "/data"))
             .expanduser()
@@ -102,7 +108,22 @@ class Settings:
             ytdlp_cookies_file=os.getenv("YTDLP_COOKIES_FILE", "").strip(),
             ytdlp_proxy=os.getenv("YTDLP_PROXY", "").strip(),
             ytdlp_user_agent=os.getenv("YTDLP_USER_AGENT", "").strip(),
-            max_concurrent_jobs=max(1, int(os.getenv("MEDIA_MAX_CONCURRENT_JOBS", "1"))),
+            max_concurrent_jobs=legacy_concurrency,
+            heavy_concurrent_jobs=max(
+                1, int(os.getenv("MEDIA_HEAVY_CONCURRENT_JOBS", str(legacy_concurrency)))
+            ),
+            light_concurrent_jobs=max(
+                1,
+                int(
+                    os.getenv(
+                        "MEDIA_LIGHT_CONCURRENT_JOBS",
+                        str(max(legacy_concurrency, 4 if legacy_concurrency == 1 else legacy_concurrency)),
+                    )
+                ),
+            ),
+            ffmpeg_preset=os.getenv("FFMPEG_PRESET", "veryfast").strip() or "veryfast",
+            ffmpeg_crf=max(16, min(35, int(os.getenv("FFMPEG_CRF", "22")))),
+            ytdlp_fragment_concurrency=max(1, min(16, int(os.getenv("YTDLP_FRAGMENT_CONCURRENCY", "4")))),
             log_level=os.getenv("LOG_LEVEL", "info").lower(),
         )
         settings.validate()

@@ -31,7 +31,18 @@ describe('environment validation', () => {
       REFRESH_TOKEN_SECRET: 'abcdefghijklmnopqrstuvwxyz123456', ENABLE_AI: 'true', ENABLE_WHISPERX: 'true',
       UPLOAD_MODE: 'direct', RENDER_GIT_COMMIT: 'abcdef1234',
     });
-    expect(config).toMatchObject({ APP_ENV: 'production', UPLOAD_MODE: 'direct', ENABLE_AI: true, BUILD_SHA: 'abcdef1234' });
+    expect(config).toMatchObject({
+      APP_ENV: 'production',
+      UPLOAD_MODE: 'direct',
+      ENABLE_AI: true,
+      BUILD_SHA: 'abcdef1234',
+      OUTBOX_BATCH_SIZE: 50,
+      FFMPEG_PRESET: 'veryfast',
+      FFMPEG_CRF: 22,
+      YTDLP_FRAGMENT_CONCURRENCY: 4,
+      MEDIA_HEAVY_CONCURRENT_JOBS: 2,
+      MEDIA_LIGHT_CONCURRENT_JOBS: 4,
+    });
   });
 
   it('rejects Turnstile bypass tokens in production by default', () => {

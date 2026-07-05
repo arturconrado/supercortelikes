@@ -41,7 +41,8 @@ function makeController() {
     $queryRaw: vi.fn().mockResolvedValue([{ day: new Date('2026-07-04T00:00:00Z'), events: 1n, costCents: 0n }]),
   };
   const storage = { downloadUrl: vi.fn(async (key: string) => `https://storage.test/${key}`) };
-  return { controller: new AnalyticsController(prisma as never, storage as never), storage };
+  const config = { get: vi.fn(() => 30) };
+  return { controller: new AnalyticsController(prisma as never, storage as never, config as never), storage };
 }
 
 describe('AnalyticsController', () => {

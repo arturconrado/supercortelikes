@@ -162,7 +162,7 @@ def _download_with_ytdlp(uri: str, target_dir: Path, settings: Settings) -> Path
         'fragment_retries': 5,
         'extractor_retries': 3,
         'file_access_retries': 3,
-        'concurrent_fragment_downloads': 2,
+        'concurrent_fragment_downloads': settings.ytdlp_fragment_concurrency,
         'continuedl': True,
         'overwrites': False,
         'restrictfilenames': True,

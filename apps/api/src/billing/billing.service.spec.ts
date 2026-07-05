@@ -9,6 +9,7 @@ const config = {
     MERCADO_PAGO_WEBHOOK_SECRET: 'webhook-secret-123456',
     PUBLIC_APP_URL: 'https://picashorts.com',
     PUBLIC_API_URL: 'https://api.picashorts.com',
+    ANALYTICS_CACHE_TTL_SECONDS: 30,
   }[key])),
 } as any;
 
@@ -33,7 +34,10 @@ function fixture() {
     },
     $transaction: vi.fn(async (values: unknown[]) => Promise.all(values)),
   };
-  const usage = { current: vi.fn().mockResolvedValue({ plan: 'FREE', status: 'FREE', limits: {}, usage: {}, version: 'test' }) };
+  const usage = {
+    current: vi.fn().mockResolvedValue({ plan: 'FREE', status: 'FREE', limits: {}, usage: {}, version: 'test' }),
+    invalidateWorkspace: vi.fn(),
+  };
   return { service: new BillingService(prisma, usage as any, config), prisma, usage };
 }
 

@@ -2,6 +2,7 @@ import { HttpException, Injectable, PayloadTooLargeException, UnauthorizedExcept
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type Plan, type Subscription } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { TtlCache } from '../common/ttl-cache';
 import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { commercialPlan, limitsFor, PLAN_VERSION, type CommercialPlan, type PlanLimits } from './entitlements';
@@ -25,16 +26,26 @@ export interface UsageSnapshot {
 @Injectable()
 export class UsageService {
   private readonly emailVerificationRequired: boolean;
+  private readonly currentCache: TtlCache<UsageSnapshot>;
 
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService<Environment, true>,
   ) {
     this.emailVerificationRequired = config.get('EMAIL_VERIFICATION_REQUIRED', { infer: true });
+    this.currentCache = new TtlCache(config.get('ANALYTICS_CACHE_TTL_SECONDS', { infer: true }) * 1000);
   }
 
   async current(actor: AuthenticatedUser): Promise<UsageSnapshot> {
-    return this.snapshot(actor.workspaceId);
+    const cached = this.currentCache.get(actor.workspaceId);
+    if (cached) return cached;
+    const snapshot = await this.snapshot(actor.workspaceId);
+    this.currentCache.set(actor.workspaceId, snapshot);
+    return snapshot;
+  }
+
+  invalidateWorkspace(workspaceId: string): void {
+    this.currentCache.delete(workspaceId);
   }
 
   async snapshot(workspaceId: string, now = new Date()): Promise<UsageSnapshot> {
@@ -136,6 +147,7 @@ export class UsageService {
       },
       update: { quantity },
     });
+    this.currentCache.delete(video.workspaceId);
   }
 
   async queuePriorityForVideo(videoId: string): Promise<number> {

@@ -253,6 +253,7 @@ model Video {
 
   @@index([status, createdAt])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, status, createdAt])
   @@index([projectId, createdAt])
   @@map("videos")
 }
@@ -290,6 +291,7 @@ model OutboxEvent {
   lastError   String?
 
   @@index([publishedAt, availableAt, createdAt])
+  @@index([publishedAt, lockedAt, availableAt, createdAt])
   @@map("outbox_events")
 }
 
@@ -311,6 +313,8 @@ model PipelineRun {
 
   @@index([status, createdAt])
   @@index([videoId, createdAt])
+  @@index([videoId, status, createdAt])
+  @@index([status, currentStage, createdAt])
   @@map("pipeline_runs")
 }
 
@@ -332,6 +336,7 @@ model StageExecution {
 
   @@unique([pipelineRunId, stage])
   @@index([status, updatedAt])
+  @@index([pipelineRunId, status, updatedAt])
   @@map("stage_executions")
 }
 
@@ -354,6 +359,7 @@ model DeadLetterJob {
 
   @@unique([originalQueue, originalJobId])
   @@index([status, createdAt])
+  @@index([pipelineRunId, status, createdAt])
   @@map("dead_letter_jobs")
 }
 
@@ -438,6 +444,7 @@ model Clip {
   seo              SeoMetadata?
 
   @@index([videoId, score])
+  @@index([videoId, status, createdAt])
   @@map("clips")
 }
 
@@ -473,6 +480,8 @@ model Export {
   clip        Clip         @relation(fields: [clipId], references: [id], onDelete: Cascade)
 
   @@index([clipId, status])
+  @@index([status, createdAt])
+  @@index([status, updatedAt])
   @@map("exports")
 }
 

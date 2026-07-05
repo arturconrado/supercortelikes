@@ -20,6 +20,10 @@ www.{$APP_DOMAIN} {
 {$APP_DOMAIN} {
 	encode zstd gzip
 	import secure_headers
+	@next_static path /_next/static/*
+	header @next_static Cache-Control "public, max-age=31536000, immutable"
+	@asset_files path *.css *.js *.mjs *.woff *.woff2 *.ico *.png *.jpg *.jpeg *.webp *.svg
+	header @asset_files Cache-Control "public, max-age=86400"
 	reverse_proxy web:3000 {
 		transport http {
 			dial_timeout 10s

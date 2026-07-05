@@ -3,10 +3,11 @@
 import { ArrowLeft, CheckCircle2, Clock3, Film, LoaderCircle, Pencil, Scissors, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ClipCard } from '@/components/clip-card';
 import { Alert, Badge, Button, Card, EmptyState, Input, Modal, PageHeader, Progress, Skeleton, StatusBadge } from '@/components/ui';
 import { useCollection, useResource } from '@/hooks/use-resource';
+import { useVideoEvents, type PipelineEventSnapshot } from '@/hooks/use-video-events';
 import { api } from '@/lib/api';
 import type { Clip, Video } from '@/lib/types';
 import { cn, formatBytes, formatDate, formatDuration } from '@/lib/utils';
@@ -65,7 +66,7 @@ export default function VideoPage() {
   const clipsResource = useCollection<Clip>(`/videos/${id}/clips`);
   const { data: video, loading, error, refresh, setData: setVideo } = videoResource;
   const { refresh: refreshClips } = clipsResource;
-  const { refresh: refreshPipeline } = pipelineResource;
+  const { refresh: refreshPipeline, setData: setPipeline } = pipelineResource;
   const rawClips = clipsResource.data;
   const [clipFilter, setClipFilter] = useState<'ALL' | 'HIGH_SCORE' | 'READY' | 'VERTICAL'>('ALL');
   const [clipSort, setClipSort] = useState<'SCORE' | 'DURATION' | 'RECENT'>('SCORE');
@@ -94,13 +95,23 @@ export default function VideoPage() {
     if (video && !editingTitle) setTitleDraft(video.title ?? video.originalFilename);
   }, [video, editingTitle]);
 
+  const handlePipelineEvent = useCallback((snapshot: PipelineEventSnapshot<PipelineSnapshot>) => {
+    setPipeline(snapshot.pipeline);
+    setLastPipelineRefreshAt(new Date(snapshot.generatedAt));
+    if (snapshot.clipsCount !== rawClips.length || snapshot.readyExportsCount > 0) {
+      void Promise.all([refresh(), refreshClips()]);
+    }
+  }, [rawClips.length, refresh, refreshClips, setPipeline]);
+
+  const realtime = useVideoEvents<PipelineSnapshot>(id, Boolean(video && isProcessing(video, rawClips)), handlePipelineEvent);
+
   useEffect(() => {
-    if (!video || !isProcessing(video, rawClips)) return;
+    if (!video || !isProcessing(video, rawClips) || realtime.connected) return;
     const timer = window.setInterval(() => {
       void Promise.all([refresh(), refreshPipeline(), refreshClips()]).finally(() => setLastPipelineRefreshAt(new Date()));
     }, 3500);
     return () => window.clearInterval(timer);
-  }, [video, rawClips.length, refresh, refreshPipeline, refreshClips]);
+  }, [video, rawClips, realtime.connected, refresh, refreshPipeline, refreshClips]);
 
   useEffect(() => {
     if (pipelineResource.data) setLastPipelineRefreshAt(new Date());
@@ -144,6 +155,13 @@ export default function VideoPage() {
   const openErrors = pipeline?.run?.openDeadLetters ?? [];
   const displayTitle = video.title ?? video.originalFilename;
   const activity = pipeline?.run?.stages ?? [];
+  const liveStatusText = processing
+    ? realtime.connected
+      ? 'Tempo real ativo: recebendo eventos do pipeline, logs e exports.'
+      : realtime.error
+        ? 'Tempo real indisponível; usando polling seguro a cada 3,5s.'
+        : 'Conectando ao tempo real do pipeline…'
+    : 'Último estado carregado.';
 
   return (
     <>
@@ -216,8 +234,8 @@ export default function VideoPage() {
             </div>
             <Progress value={progress}/>
             <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-zinc-600">
-              <span>{processing ? 'Polling ativo: consultando API, filas e cortes a cada 3,5s.' : 'Último estado carregado.'}</span>
-              <span>{lastPipelineRefreshAt ? `Atualizado ${lastPipelineRefreshAt.toLocaleTimeString('pt-BR')}` : 'Aguardando primeiro log…'}</span>
+              <span>{liveStatusText}</span>
+              <span>{(realtime.lastEventAt ?? lastPipelineRefreshAt) ? `Atualizado ${(realtime.lastEventAt ?? lastPipelineRefreshAt)!.toLocaleTimeString('pt-BR')}` : 'Aguardando primeiro log…'}</span>
             </div>
           </div>
 

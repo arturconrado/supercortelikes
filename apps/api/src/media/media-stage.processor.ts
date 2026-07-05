@@ -19,6 +19,8 @@ export class MediaStageProcessor {
   private readonly dataRoot: string;
   private readonly diarizationEnabled: boolean;
   private readonly transcriptionBatchSize: number;
+  private readonly ffmpegPreset: string;
+  private readonly ffmpegCrf: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -30,6 +32,8 @@ export class MediaStageProcessor {
     this.dataRoot = resolve(config.get('MEDIA_WORKER_DATA_DIR', { infer: true }));
     this.diarizationEnabled = config.get('MEDIA_DIARIZATION_ENABLED', { infer: true });
     this.transcriptionBatchSize = config.get('MEDIA_TRANSCRIPTION_BATCH_SIZE', { infer: true });
+    this.ffmpegPreset = config.get('FFMPEG_PRESET', { infer: true });
+    this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
   }
 
   async process(job: PipelineJob): Promise<void> {
@@ -96,8 +100,8 @@ export class MediaStageProcessor {
         aspectRatio: processing.aspectRatio,
         targetPlatform: processing.targetPlatform,
         detector: 'opencv',
-        preset: 'veryfast',
-        crf: 23,
+        preset: this.ffmpegPreset,
+        crf: this.ffmpegCrf,
         ...(await this.watermarkOptions(job.pipelineRunId, video)),
       };
     }

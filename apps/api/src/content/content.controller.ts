@@ -11,8 +11,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { FastifyReply } from 'fastify';
 import { CurrentUser } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
@@ -21,6 +23,8 @@ import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 import { ClipExportDto, RenderClipDto, UpdateClipCaptionsDto, UpdateClipDto, UpdateClipTimingDto } from './content.dto';
 
 const PIPELINE_STAGE_COUNT = 8;
+const PIPELINE_EVENT_INTERVAL_MS = 3_500;
+const PIPELINE_EVENT_HEARTBEAT_MS = 15_000;
 
 @Controller()
 export class ContentController {
@@ -90,8 +94,84 @@ export class ContentController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<unknown> {
+    return serialize(await this.pipelineSnapshot(user.workspaceId, id));
+  }
+
+  @Get('videos/:id/events')
+  async videoEvents(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    await this.ensureVideoOwnership(id, user.workspaceId);
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'X-Accel-Buffering': 'no',
+    });
+
+    let closed = false;
+    let lastStageStatusKey = '';
+    const timers: { snapshot?: ReturnType<typeof setInterval>; heartbeat?: ReturnType<typeof setInterval> } = {};
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      if (timers.snapshot) clearInterval(timers.snapshot);
+      if (timers.heartbeat) clearInterval(timers.heartbeat);
+    };
+    const write = (event: string, data: unknown) => {
+      if (closed || reply.raw.destroyed) return;
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(serialize(data))}\n\n`);
+    };
+    const writeSnapshot = async () => {
+      try {
+        const snapshot = await this.videoEventSnapshot(user.workspaceId, id);
+        write('pipeline.snapshot', snapshot);
+        const stageStatusKey = snapshot.pipeline.run?.stages.map((stage) => `${stage.stage}:${stage.status}`).join('|') ?? '';
+        if (stageStatusKey && stageStatusKey !== lastStageStatusKey) {
+          lastStageStatusKey = stageStatusKey;
+          write('stage.progress', {
+            generatedAt: snapshot.generatedAt,
+            currentStage: snapshot.pipeline.run?.currentStage ?? null,
+            progress: snapshot.pipeline.progress,
+            status: snapshot.pipeline.status,
+          });
+        }
+        if (snapshot.readyExportsCount > 0) {
+          write('export.ready', { generatedAt: snapshot.generatedAt, readyExportsCount: snapshot.readyExportsCount });
+        }
+      } catch (error) {
+        write('stage.failed', {
+          generatedAt: new Date().toISOString(),
+          message: error instanceof Error ? error.message : 'Unable to stream pipeline events',
+        });
+        cleanup();
+      }
+    };
+    timers.snapshot = setInterval(() => void writeSnapshot(), PIPELINE_EVENT_INTERVAL_MS);
+    timers.heartbeat = setInterval(() => {
+      if (!closed && !reply.raw.destroyed) reply.raw.write(`: heartbeat ${new Date().toISOString()}\n\n`);
+    }, PIPELINE_EVENT_HEARTBEAT_MS);
+
+    reply.raw.on('close', cleanup);
+    reply.raw.on('error', cleanup);
+    await writeSnapshot();
+  }
+
+  private async videoEventSnapshot(workspaceId: string, id: string) {
+    const [pipeline, clipsCount, readyExportsCount] = await Promise.all([
+      this.pipelineSnapshot(workspaceId, id),
+      this.prisma.clip.count({ where: { videoId: id, video: { workspaceId } } }),
+      this.prisma.export.count({ where: { status: 'READY', clip: { videoId: id, video: { workspaceId } } } }),
+    ]);
+    return { generatedAt: new Date().toISOString(), pipeline, clipsCount, readyExportsCount };
+  }
+
+  private async pipelineSnapshot(workspaceId: string, id: string) {
     const video = await this.prisma.video.findFirst({
-      where: { id, workspaceId: user.workspaceId },
+      where: { id, workspaceId },
       select: {
         id: true,
         status: true,
@@ -110,7 +190,7 @@ export class ContentController {
     if (!video) throw new NotFoundException('Video not found');
     const run = video.pipelineRuns[0];
     const succeeded = run?.stages.filter((stage) => stage.status === 'SUCCEEDED').length ?? 0;
-    return serialize({
+    return {
       videoId: video.id,
       status: video.status,
       failureCode: video.failureCode,
@@ -145,7 +225,7 @@ export class ContentController {
             })),
           }
         : null,
-    });
+    };
   }
 
   @Get('videos/:id/transcript')
@@ -324,6 +404,11 @@ export class ContentController {
     });
     if (!clip) throw new NotFoundException('Clip not found');
     return clip;
+  }
+
+  private async ensureVideoOwnership(id: string, workspaceId: string): Promise<void> {
+    const video = await this.prisma.video.findFirst({ where: { id, workspaceId }, select: { id: true } });
+    if (!video) throw new NotFoundException('Video not found');
   }
 
   private async fullClip(id: string, workspaceId: string): Promise<Record<string, unknown>> {

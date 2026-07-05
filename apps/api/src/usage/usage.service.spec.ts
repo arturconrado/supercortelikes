@@ -4,7 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { UsageService } from './usage.service';
 
 const actor = { userId: '11111111-1111-4111-8111-111111111111', workspaceId: '22222222-2222-4222-8222-222222222222', email: 'ana@clipbr.test' };
-const config = (required = false) => ({ get: vi.fn((key: string) => key === 'EMAIL_VERIFICATION_REQUIRED' ? required : undefined) }) as any;
+const config = (required = false) => ({
+  get: vi.fn((key: string) => {
+    if (key === 'EMAIL_VERIFICATION_REQUIRED') return required;
+    if (key === 'ANALYTICS_CACHE_TTL_SECONDS') return 30;
+    return undefined;
+  }),
+}) as any;
 const aggregateSequence = (usedMinutes = 120, topUpMinutes = 0) => vi.fn()
   .mockResolvedValueOnce({ _sum: { quantity: new Prisma.Decimal(usedMinutes) } })
   .mockResolvedValueOnce({ _sum: { quantity: new Prisma.Decimal(topUpMinutes) } })

@@ -21,10 +21,18 @@ export class MetricsController {
   }
 
   private async collectOperationalMetrics(): Promise<void> {
-    const [unpublished, deadLetters, queues] = await Promise.all([
+    const [unpublished, deadLetters, queues, stages, exports] = await Promise.all([
       this.prisma.outboxEvent.count({ where: { publishedAt: null } }),
       this.prisma.deadLetterJob.count({ where: { status: 'OPEN' } }),
       this.queues.diagnostics(),
+      this.prisma.stageExecution.groupBy({
+        by: ['stage', 'status'],
+        _count: { _all: true },
+      }),
+      this.prisma.export.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+      }),
     ]);
     this.metrics.outboxUnpublished.set(unpublished);
     this.metrics.deadLettersOpen.set(deadLetters);
@@ -33,6 +41,12 @@ export class MetricsController {
       this.metrics.queueJobs.set({ queue, state: 'active' }, values.active);
       this.metrics.queueJobs.set({ queue, state: 'delayed' }, values.delayed);
       this.metrics.queueJobs.set({ queue, state: 'failed' }, values.failed);
+    }
+    for (const item of stages) {
+      this.metrics.stageExecutions.set({ stage: item.stage, status: item.status }, item._count._all);
+    }
+    for (const item of exports) {
+      this.metrics.exportJobs.set({ status: item.status }, item._count._all);
     }
   }
 }

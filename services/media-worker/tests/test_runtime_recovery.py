@@ -40,6 +40,24 @@ def test_production_configuration_fails_closed_and_accepts_complete_runtime():
         ).validate()
 
 
+def test_runtime_tuning_environment(monkeypatch):
+    monkeypatch.setenv("MEDIA_MAX_CONCURRENT_JOBS", "2")
+    monkeypatch.setenv("MEDIA_HEAVY_CONCURRENT_JOBS", "2")
+    monkeypatch.setenv("MEDIA_LIGHT_CONCURRENT_JOBS", "4")
+    monkeypatch.setenv("FFMPEG_PRESET", "veryfast")
+    monkeypatch.setenv("FFMPEG_CRF", "22")
+    monkeypatch.setenv("YTDLP_FRAGMENT_CONCURRENCY", "4")
+
+    settings = Settings.from_env()
+
+    assert settings.max_concurrent_jobs == 2
+    assert settings.heavy_concurrent_jobs == 2
+    assert settings.light_concurrent_jobs == 4
+    assert settings.ffmpeg_preset == "veryfast"
+    assert settings.ffmpeg_crf == 22
+    assert settings.ytdlp_fragment_concurrency == 4
+
+
 def test_process_runner_success_json_and_failures(monkeypatch):
     assert require_binary("python3")
     assert run_command(["python3", "-c", "print('ok')"]).strip() == b"ok"
@@ -74,6 +92,8 @@ def test_storage_upload_and_error_paths(tmp_path, monkeypatch):
 
     fake_boto = SimpleNamespace(client=lambda *_args, **_kwargs: Client())
     monkeypatch.setitem(sys.modules, "boto3", fake_boto)
+    monkeypatch.setitem(sys.modules, "botocore", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "botocore.config", SimpleNamespace(Config=lambda **_kwargs: object()))
     result = upload_file(path, "bucket", "exports/clip.mp4", settings)
     assert result == {"bucket": "bucket", "key": "exports/clip.mp4", "etag": "etag", "bytes": 5, "mediaType": "video/mp4"}
     with pytest.raises(WorkerError, match="not configured"):

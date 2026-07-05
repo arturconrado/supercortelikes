@@ -7,6 +7,8 @@ const booleanString = z
 
 const optionalSecret = z.preprocess((value) => (value === '' ? undefined : value), z.string().min(1).optional());
 const optionalUrl = z.preprocess((value) => (value === '' ? undefined : value), z.string().url().optional());
+const pipelineConcurrencyDefault =
+  '{"ingestion":4,"transcription":2,"segmentation":3,"scoring":4,"clips":3,"captions":3,"rendering":2,"exports":3}';
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -47,13 +49,23 @@ const environmentSchema = z.object({
   REDIS_URL: z.string().url(),
   QUEUE_PREFIX: z.string().regex(/^[A-Za-z0-9_-]+$/).default('picashorts'),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
-  OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(50),
+  PIPELINE_STAGE_CONCURRENCY_JSON: z.string().default(pipelineConcurrencyDefault),
+  PIPELINE_EVENT_RETENTION_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+  ANALYTICS_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3_600).default(30),
   MEDIA_WORKER_URL: z.string().url().default('http://localhost:8000'),
   MEDIA_WORKER_TOKEN: optionalSecret,
   MEDIA_WORKER_DATA_DIR: z.string().default('/data'),
   MEDIA_WORKER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(8 * 60 * 60 * 1000).default(7_200_000),
   MEDIA_DIARIZATION_ENABLED: booleanString,
   MEDIA_TRANSCRIPTION_BATCH_SIZE: z.coerce.number().int().min(1).max(64).default(16),
+  MEDIA_HEAVY_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(2),
+  MEDIA_LIGHT_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(16).default(4),
+  FFMPEG_PRESET: z
+    .enum(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'])
+    .default('veryfast'),
+  FFMPEG_CRF: z.coerce.number().int().min(16).max(35).default(22),
+  YTDLP_FRAGMENT_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
   ENABLE_AI: booleanString,
   ENABLE_WHISPERX: booleanString,
   ENABLE_OPENCV: booleanString,

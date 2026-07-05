@@ -24,6 +24,11 @@ curl -fsS "https://api.${APP_DOMAIN}/health/ready"
 printf '\n'
 curl -fsS "https://api.${APP_DOMAIN}/health/pipeline"
 printf '\n'
+sse_status="$(curl -fsS -o /dev/null -w '%{http_code}' "https://api.${APP_DOMAIN}/videos/00000000-0000-4000-8000-000000000000/events" || true)"
+case "${sse_status}" in
+  401|403) ;;
+  *) echo "Expected authenticated SSE endpoint to reject anonymous access, got HTTP ${sse_status}" >&2; exit 1 ;;
+esac
 curl -fsSI "https://${APP_DOMAIN}" >/dev/null
 www_location="$(curl -fsSI "https://www.${APP_DOMAIN}" | awk 'BEGIN{IGNORECASE=1} /^location:/ {print $2}' | tr -d '\r')"
 case "${www_location}" in

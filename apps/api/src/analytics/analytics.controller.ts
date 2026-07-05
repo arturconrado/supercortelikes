@@ -1,7 +1,10 @@
 import { Controller, Get, Inject } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { CurrentUser } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { TtlCache } from '../common/ttl-cache';
+import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 
@@ -30,14 +33,22 @@ type RecentProjectSummary = {
 
 @Controller('analytics')
 export class AnalyticsController {
+  private readonly cache: TtlCache<unknown>;
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
-  ) {}
+    config: ConfigService<Environment, true>,
+  ) {
+    this.cache = new TtlCache(config.get('ANALYTICS_CACHE_TTL_SECONDS', { infer: true }) * 1000);
+  }
 
   @Get(['summary', 'overview'])
   async summary(@CurrentUser() user: AuthenticatedUser): Promise<Record<string, unknown>> {
     const workspaceId = user.workspaceId;
+    const cacheKey = `summary:${workspaceId}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached as Record<string, unknown>;
     const [videos, clips, exportsReady, usage, pipelines, downloads, recentVideos, recentProjects] = await Promise.all([
       this.prisma.video.count({ where: { workspaceId } }),
       this.prisma.clip.count({ where: { video: { workspaceId } } }),
@@ -78,7 +89,7 @@ export class AnalyticsController {
         },
       }),
     ]);
-    return serialize({
+    const payload = serialize({
       videos,
       clips,
       exportsReady,
@@ -121,16 +132,26 @@ export class AnalyticsController {
             : 'READY',
       })),
     });
+    this.cache.set(cacheKey, payload);
+    return payload;
   }
 
   @Get()
   async overview(@CurrentUser() user: AuthenticatedUser): Promise<Record<string, unknown>> {
+    const cacheKey = `overview:${user.workspaceId}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached as Record<string, unknown>;
     const [summary, activity] = await Promise.all([this.summary(user), this.timeseries(user)]);
-    return serialize({ ...summary, activity });
+    const payload = serialize({ ...summary, activity });
+    this.cache.set(cacheKey, payload);
+    return payload;
   }
 
   @Get('timeseries')
   async timeseries(@CurrentUser() user: AuthenticatedUser): Promise<unknown> {
+    const cacheKey = `timeseries:${user.workspaceId}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached;
     const rows = await this.prisma.$queryRaw<Array<{ day: Date; events: bigint; costCents: bigint }>>(Prisma.sql`
       SELECT date_trunc('day', "createdAt") AS day,
              COUNT(*)::bigint AS events,
@@ -141,11 +162,13 @@ export class AnalyticsController {
       GROUP BY 1
       ORDER BY 1 ASC
     `);
-    return rows.map((row) => ({
+    const payload = rows.map((row) => ({
       day: row.day.toISOString().slice(0, 10),
       events: row.events.toString(),
       costCents: row.costCents.toString(),
     }));
+    this.cache.set(cacheKey, payload);
+    return payload;
   }
 }
 

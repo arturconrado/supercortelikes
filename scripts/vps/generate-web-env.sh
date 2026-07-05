@@ -125,7 +125,10 @@ tmp_file="$(mktemp)"
   printf 'REDIS_PASSWORD=%s\n' "${REDIS_PASSWORD:-$(random_hex)}"
   printf 'QUEUE_PREFIX=%s\n' "${QUEUE_PREFIX:-clipbr-vps}"
   printf 'OUTBOX_POLL_INTERVAL_MS=%s\n' "${OUTBOX_POLL_INTERVAL_MS:-1000}"
-  printf 'OUTBOX_BATCH_SIZE=%s\n' "${OUTBOX_BATCH_SIZE:-20}"
+  printf 'OUTBOX_BATCH_SIZE=%s\n' "${OUTBOX_BATCH_SIZE:-50}"
+  printf 'PIPELINE_STAGE_CONCURRENCY_JSON=%s\n' "${PIPELINE_STAGE_CONCURRENCY_JSON:-{\"ingestion\":4,\"transcription\":2,\"segmentation\":3,\"scoring\":4,\"clips\":3,\"captions\":3,\"rendering\":2,\"exports\":3}}"
+  printf 'PIPELINE_EVENT_RETENTION_SECONDS=%s\n' "${PIPELINE_EVENT_RETENTION_SECONDS:-300}"
+  printf 'ANALYTICS_CACHE_TTL_SECONDS=%s\n' "${ANALYTICS_CACHE_TTL_SECONDS:-30}"
   printf '\n'
   printf 'S3_REGION=%s\n' "${S3_REGION:-us-east-1}"
   printf 'S3_BUCKET=%s\n' "${S3_BUCKET:-clipbr-videos}"
@@ -144,7 +147,12 @@ tmp_file="$(mktemp)"
   printf 'MEDIA_WORKER_TOKEN=%s\n' "${MEDIA_WORKER_TOKEN:-$(random_base64)}"
   printf '\n'
   printf 'MEDIA_WORKER_TIMEOUT_MS=%s\n' "${MEDIA_WORKER_TIMEOUT_MS:-7200000}"
-  printf 'MEDIA_MAX_CONCURRENT_JOBS=1\n'
+  printf 'MEDIA_MAX_CONCURRENT_JOBS=%s\n' "${MEDIA_MAX_CONCURRENT_JOBS:-2}"
+  printf 'MEDIA_HEAVY_CONCURRENT_JOBS=%s\n' "${MEDIA_HEAVY_CONCURRENT_JOBS:-2}"
+  printf 'MEDIA_LIGHT_CONCURRENT_JOBS=%s\n' "${MEDIA_LIGHT_CONCURRENT_JOBS:-4}"
+  printf 'FFMPEG_PRESET=%s\n' "${FFMPEG_PRESET:-veryfast}"
+  printf 'FFMPEG_CRF=%s\n' "${FFMPEG_CRF:-22}"
+  printf 'YTDLP_FRAGMENT_CONCURRENCY=%s\n' "${YTDLP_FRAGMENT_CONCURRENCY:-4}"
   printf 'ENABLE_AI=true\n'
   printf 'ENABLE_WHISPERX=true\n'
   printf 'ENABLE_OPENCV=true\n'

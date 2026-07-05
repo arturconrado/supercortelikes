@@ -216,7 +216,11 @@ describe('health, exports, and media contracts', () => {
   it('starts all workers and maintains a database-backed heartbeat', async () => {
     const factory = { create: vi.fn() };
     const processor = { process: vi.fn() };
-    new MediaWorkersService(factory as any, processor as any).onApplicationBootstrap();
+    new MediaWorkersService(
+      factory as any,
+      processor as any,
+      config({ PIPELINE_STAGE_CONCURRENCY_JSON: '{"ingestion":4,"transcription":2,"segmentation":3,"scoring":4,"clips":3,"captions":3,"rendering":2,"exports":3}' }),
+    ).onApplicationBootstrap();
     expect(factory.create).toHaveBeenCalledTimes(8);
     const heartbeat = new WorkerHeartbeatService({ $queryRaw: vi.fn() } as any, { heartbeat: vi.fn() } as any);
     await heartbeat.refresh();

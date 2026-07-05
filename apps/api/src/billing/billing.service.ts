@@ -3,6 +3,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException, 
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type Plan, type SubscriptionStatus } from '@prisma/client';
 import type { Environment } from '../config/env';
+import { TtlCache } from '../common/ttl-cache';
 import { PrismaService } from '../database/prisma.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { CheckoutDto, TopUpDto } from './billing.dto';
@@ -26,6 +27,7 @@ export class BillingService {
   private readonly webhookSecret?: string;
   private readonly appUrl: string;
   private readonly apiUrl: string;
+  private readonly currentCache: TtlCache<unknown>;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -36,6 +38,7 @@ export class BillingService {
     this.webhookSecret = config.get('MERCADO_PAGO_WEBHOOK_SECRET', { infer: true });
     this.appUrl = config.get('PUBLIC_APP_URL', { infer: true });
     this.apiUrl = config.get('PUBLIC_API_URL', { infer: true });
+    this.currentCache = new TtlCache(config.get('ANALYTICS_CACHE_TTL_SECONDS', { infer: true }) * 1000);
   }
 
   plans(): unknown {
@@ -210,12 +213,14 @@ export class BillingService {
   }
 
   async current(user: AuthenticatedUser): Promise<unknown> {
+    const cached = this.currentCache.get(user.workspaceId);
+    if (cached) return cached;
     const subscription = await this.prisma.subscription.findFirst({
       where: { workspaceId: user.workspaceId },
       orderBy: { createdAt: 'desc' },
     });
     const usage = await this.usage.current(user);
-    return {
+    const payload = {
       ...(subscription ?? { plan: usage.plan, status: usage.status }),
       plan: subscription?.plan ?? usage.plan,
       status: subscription?.status ?? usage.status,
@@ -224,6 +229,8 @@ export class BillingService {
       graceUntil: usage.graceUntil,
       version: usage.version,
     };
+    this.currentCache.set(user.workspaceId, payload);
+    return payload;
   }
 
   async cancel(user: AuthenticatedUser): Promise<void> {
@@ -239,6 +246,8 @@ export class BillingService {
       where: { id: subscription.id },
       data: { status: 'CANCELLED', cancelAtPeriodEnd: true },
     });
+    this.currentCache.delete(user.workspaceId);
+    this.usage.invalidateWorkspace(user.workspaceId);
   }
 
   verifyWebhook(signature: string | undefined, requestId: string | undefined, dataId: string): void {
@@ -316,6 +325,8 @@ export class BillingService {
           data: { status: 'PROCESSED', processedAt: new Date(), payload: resource as Prisma.InputJsonObject },
         }),
       ]);
+      this.currentCache.delete(workspaceId);
+      this.usage.invalidateWorkspace(workspaceId);
     } catch (error) {
       await this.prisma.billingWebhookEvent.update({
         where: { providerEventId },
@@ -376,6 +387,8 @@ export class BillingService {
       );
     }
     await this.prisma.$transaction(operations);
+    this.currentCache.delete(workspaceId);
+    this.usage.invalidateWorkspace(workspaceId);
   }
 
   private async request<T>(path: string, body?: unknown, method = 'POST', idempotencyKey?: string): Promise<T> {

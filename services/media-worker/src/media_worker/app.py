@@ -24,7 +24,9 @@ settings = Settings.from_env()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 pipeline = Pipeline(settings)
-stage_capacity = threading.BoundedSemaphore(settings.max_concurrent_jobs)
+HEAVY_STAGES = {"transcription", "rendering", "reframe"}
+heavy_stage_capacity = threading.BoundedSemaphore(settings.heavy_concurrent_jobs)
+light_stage_capacity = threading.BoundedSemaphore(settings.light_concurrent_jobs)
 app = FastAPI(
     title="PicaShorts Media Worker",
     version=__version__,
@@ -217,8 +219,14 @@ def _redis_ready() -> bool:
         return False
 
 
+def _capacity_for(stage: str) -> threading.BoundedSemaphore:
+    if stage in HEAVY_STAGES:
+        return heavy_stage_capacity
+    return light_stage_capacity
+
+
 def _run_stage(stage: str, body: PipelineRequest):
-    with stage_capacity:
+    with _capacity_for(stage):
         try:
             result = pipeline.execute(stage, body)
             if stage == "exports" and not settings.retain_downloads:
@@ -231,7 +239,7 @@ def _run_stage(stage: str, body: PipelineRequest):
 
 
 def _run_reframe(body: ReframeRequest):
-    with stage_capacity:
+    with _capacity_for("reframe"):
         try:
             return pipeline.reframe(body)
         finally:
