@@ -205,6 +205,11 @@ jobs:
           EMAIL_FROM: noreply@example.com
           TURNSTILE_SECRET_KEY: turnstile_secret
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: turnstile_site
+          GRAFANA_PUBLIC_URL: https://grafana.example.com
+          GRAFANA_ADMIN_USER: admin
+          GRAFANA_ADMIN_PASSWORD: grafana_admin_password
+          GRAFANA_BASIC_AUTH_USER: admin
+          GRAFANA_BASIC_AUTH_PASSWORD_HASH: grafana_basic_auth_hash
           MIGRATION_IMAGE: ghcr.io/example/clipbr-migration:test
           API_IMAGE: ghcr.io/example/clipbr-api:test
           WEB_IMAGE: ghcr.io/example/clipbr-web:test
