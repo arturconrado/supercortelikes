@@ -46,6 +46,17 @@ fi
 : "${VPS_DATA_DIR:=/srv/clipbr/data}"
 : "${VPS_BACKUP_DIR:=/srv/clipbr/backups}"
 
+if [[ "${APP_ENV:-production}" == "production" ]]; then
+  if [[ "${DEPLOY_SOURCE:-}" != "github-actions" || -z "${DEPLOY_GITHUB_RUN_ID:-}" ]]; then
+    if [[ "${ALLOW_MANUAL_PRODUCTION_DEPLOY:-false}" != "true" ]]; then
+      echo "Production deploys must run through GitHub Actions. Re-run the VPS CI/CD workflow instead of deploying from a shell." >&2
+      echo "Break-glass only: set ALLOW_MANUAL_PRODUCTION_DEPLOY=true with an incident note." >&2
+      exit 1
+    fi
+    echo "WARNING: manual production deploy allowed by ALLOW_MANUAL_PRODUCTION_DEPLOY=true" >&2
+  fi
+fi
+
 if [[ "${APP_ENV:-production}" == "production" && -n "${TURNSTILE_BYPASS_TOKEN:-}" && "${ALLOW_TURNSTILE_BYPASS_IN_PRODUCTION:-false}" != "true" ]]; then
   echo "TURNSTILE_BYPASS_TOKEN is set in production. Clear it, or set ALLOW_TURNSTILE_BYPASS_IN_PRODUCTION=true only for a private smoke window." >&2
   exit 1

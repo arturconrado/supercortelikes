@@ -186,6 +186,8 @@ https://api.DOMINIO.com/api/mercado-pago/webhook
 
 ## 5. Deploy
 
+Produção deve subir sempre pela esteira do GitHub Actions. Os scripts locais continuam existindo para validação não-produtiva e emergência operacional, mas `APP_ENV=production` bloqueia deploy manual por padrão.
+
 Antes do deploy, rode o preflight:
 
 ```bash
@@ -200,15 +202,12 @@ Para o perfil barato, mantenha no `.env.production`:
 VPS_SIZE_PROFILE=budget
 ```
 
-```bash
-npm run vps:deploy
-```
+O deploy produtivo normal é pelo workflow `VPS CI/CD`:
 
-Equivalente:
+- para subir rapidamente a aplicação: `workflow_dispatch` com `deploy=true` e `release_gate=false`;
+- para release real: `workflow_dispatch` ou push na `main` com `release_gate=true`, smoke/E2E e observação habilitados.
 
-```bash
-docker compose --env-file .env.production -f docker-compose.vps.yml -p clipbr-vps up --build --detach --wait
-```
+Não rode `npm run vps:deploy` diretamente em produção como rotina. O script vai recusar quando `APP_ENV=production` não vier marcado pela GitHub Actions.
 
 O Compose sobe:
 
@@ -313,7 +312,7 @@ Secrets opcionais:
 
 Vars recomendadas em nível de repositório ou organização, não apenas no environment:
 
-- `VPS_DEPLOY_ENABLED=false` inicialmente. Troque para `true` só depois do primeiro deploy manual passar.
+- `VPS_DEPLOY_ENABLED=false` inicialmente. Troque para `true` só depois do primeiro deploy pela esteira passar.
 - `VPS_APP_DIR=/srv/clipbr/app`.
 - `VPS_USER=clipbr`.
 - `VPS_SSH_PORT=22`.
@@ -386,9 +385,14 @@ Primeiro deploy recomendado:
 6. Rode `run_5g=true` fora de horário de pico.
 7. Só depois defina `VPS_DEPLOY_ENABLED=true`.
 
-Deploy manual equivalente, caso você queira testar direto na VPS com imagens já publicadas:
+### Break-glass manual
+
+Deploy manual em produção é reservado para incidente, rollback emergencial ou indisponibilidade da GitHub Actions. Mesmo nesse caso, registre a razão do incidente e prefira voltar para a esteira assim que possível.
+
+O comando abaixo só passa em `APP_ENV=production` quando `ALLOW_MANUAL_PRODUCTION_DEPLOY=true` estiver definido explicitamente:
 
 ```bash
+ALLOW_MANUAL_PRODUCTION_DEPLOY=true \
 API_IMAGE=ghcr.io/ORG/REPO/api:SHA \
 MIGRATION_IMAGE=ghcr.io/ORG/REPO/migration:SHA \
 WEB_IMAGE=ghcr.io/ORG/REPO/web:SHA \

@@ -184,7 +184,7 @@ DIGITALOCEAN_DOMAIN=DOMINIO.com
 DIGITALOCEAN_MANAGE_DNS=false
 ```
 
-Mantenha `VPS_DEPLOY_ENABLED=false` até o primeiro deploy manual passar.
+Mantenha `VPS_DEPLOY_ENABLED=false` até o primeiro deploy pela esteira passar.
 
 Modos DigitalOcean do workflow:
 
