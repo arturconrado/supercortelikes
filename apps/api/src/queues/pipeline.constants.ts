@@ -52,7 +52,6 @@ const eventRoutes: Readonly<Record<string, PipelineStageName>> = {
   'pipeline.segmentation.completed.v1': 'scoring',
   'pipeline.scoring.completed.v1': 'clips',
   'pipeline.clips.completed.v1': 'captions',
-  'pipeline.captions.completed.v1': 'rendering',
   'clip.render.requested.v1': 'rendering',
   'pipeline.rendering.completed.v1': 'exports',
 };

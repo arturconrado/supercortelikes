@@ -35,7 +35,7 @@ describe('pipeline queue contracts', () => {
     }
     expect(eventQueue('clip.render.requested.v1')).toBe('rendering');
     expect(eventQueue('pipeline.rendering.completed.v1')).toBe('exports');
-    expect(eventQueue('pipeline.captions.completed.v1')).toBe('rendering');
+    expect(() => eventQueue('pipeline.captions.completed.v1')).toThrow('Unsupported outbox event type');
     expect(() => eventQueue('payload.selected.queue')).toThrow('Unsupported outbox event type');
   });
 

@@ -407,6 +407,19 @@ async function waitForPipeline(videoId) {
   throw new Error(`Pipeline did not finish within ${timeoutMs}ms`);
 }
 
+async function waitForExport(exportId) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const item = await prisma.export.findUnique({ where: { id: exportId } });
+    if (item?.status === 'FAILED') {
+      throw new Error(`Export ${exportId} failed: ${item.errorCode ?? 'UNKNOWN'} ${item.errorMessage ?? ''}`);
+    }
+    if (item?.status === 'READY' && item.storageKey) return item;
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error(`Export ${exportId} did not become READY within ${timeoutMs}ms`);
+}
+
 async function contentAndExportChecks(accessToken, projectId, videoId, pipelineRunId) {
   const [video, project, library, transcript, segments, scores, deadLetters, unpublished, usageEvents] = await Promise.all([
     api(`/videos/${videoId}`, { headers: authHeaders(accessToken) }),
@@ -436,18 +449,25 @@ async function contentAndExportChecks(accessToken, projectId, videoId, pipelineR
   assert(Array.isArray(clip.hashtags) && clip.hashtags.length > 0, 'Clip hashtags were not persisted');
   assert(Array.isArray(clip.titleSuggestions) && clip.titleSuggestions.length > 0, 'Clip title suggestions were not persisted');
   assert(Array.isArray(clip.captions) && clip.captions.length > 0, 'Caption tracks were not persisted');
-  const readyExport = clip.exports?.find((item) => item.status === 'READY');
-  assert(readyExport, 'Ready export was not persisted');
 
   const clipDetail = await api(`/clips/${clip.id}`, { headers: authHeaders(accessToken) });
   assert(clipDetail.description && Array.isArray(clipDetail.hashtags), 'Clip detail does not expose SEO metadata');
+  assert(clipDetail.playbackUrl || clipDetail.thumbnailUrl, 'Clip detail should expose preview media before export');
+
+  const requestedExport = await api('/exports', {
+    method: 'POST',
+    headers: jsonHeaders(accessToken),
+    body: jsonBody({ clipId: clip.id, format: 'MP4', aspectRatio: '9:16' }),
+  }, 201);
+  assert(requestedExport.id && ['QUEUED', 'PROCESSING', 'READY'].includes(requestedExport.status), 'On-demand export was not queued');
+  const readyExport = await waitForExport(requestedExport.id);
 
   const exportReplay = await api('/exports', {
     method: 'POST',
     headers: jsonHeaders(accessToken),
     body: jsonBody({ clipId: clip.id, format: 'MP4', aspectRatio: '9:16' }),
   }, 201);
-  assert(exportReplay.id === readyExport.id, 'Export create should return the ready automatic export');
+  assert(exportReplay.id === readyExport.id, 'Export create should reuse the ready on-demand export');
 
   const exports = await api('/exports', { headers: authHeaders(accessToken) });
   assert(Array.isArray(exports) && exports.some((item) => item.id === readyExport.id), 'Exports list does not include the ready export');
@@ -462,7 +482,7 @@ async function contentAndExportChecks(accessToken, projectId, videoId, pipelineR
   const stream = probe.skipped ? undefined : probe.streams?.[0];
   if (!probe.skipped) {
     assert(stream?.codec_name === 'h264', `Unexpected exported codec: ${JSON.stringify(stream)}`);
-    assert(stream.width === 1080 && stream.height === 1920, `Unexpected exported dimensions: ${JSON.stringify(stream)}`);
+    assert(stream.width === 720 && stream.height === 1280, `Unexpected exported dimensions: ${JSON.stringify(stream)}`);
   }
 
   return {
