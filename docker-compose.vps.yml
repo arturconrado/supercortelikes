@@ -84,6 +84,7 @@ x-api-environment: &api-environment
   OTEL_SERVICE_NAME: clipbr-api
   LOG_LEVEL: ${LOG_LEVEL:-info}
   BUILD_SHA: ${BUILD_SHA:-vps-local}
+  OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
 
 x-worker-environment: &worker-environment
   APP_ENV: production
@@ -130,6 +131,7 @@ x-worker-environment: &worker-environment
   MPLCONFIGDIR: /data/models/matplotlib
   YOLO_CONFIG_DIR: /data/models
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  MEDIA_WORKER_METRICS_ENABLED: ${MEDIA_WORKER_METRICS_ENABLED:-true}
 
 services:
   caddy:
@@ -138,6 +140,8 @@ services:
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required}
       CADDY_EMAIL: ${CADDY_EMAIL:?CADDY_EMAIL is required}
+      GRAFANA_BASIC_AUTH_USER: ${GRAFANA_BASIC_AUTH_USER:?GRAFANA_BASIC_AUTH_USER is required}
+      GRAFANA_BASIC_AUTH_PASSWORD_HASH: ${GRAFANA_BASIC_AUTH_PASSWORD_HASH:?GRAFANA_BASIC_AUTH_PASSWORD_HASH is required}
     ports:
       - "80:80"
       - "443:443"
@@ -149,6 +153,7 @@ services:
       web: { condition: service_healthy }
       api: { condition: service_healthy }
       minio: { condition: service_healthy }
+      grafana: { condition: service_started }
 
   postgres:
     image: postgres:17-alpine
@@ -312,6 +317,111 @@ services:
       timeout: 8s
       retries: 24
       start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    user: "0"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/observability/vps/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/vps/rules.yml:/etc/prometheus/rules.yml:ro
+      - ${VPS_DATA_DIR:-/srv/clipbr/data}/observability/prometheus:/prometheus
+    depends_on:
+      api: { condition: service_healthy }
+      media-worker: { condition: service_healthy }
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    user: "0"
+    environment:
+      GF_SERVER_ROOT_URL: ${GRAFANA_PUBLIC_URL:-https://grafana.${APP_DOMAIN:?APP_DOMAIN is required}}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_LOG_MODE: console
+    volumes:
+      - ${VPS_DATA_DIR:-/srv/clipbr/data}/observability/grafana:/var/lib/grafana
+      - ./infra/observability/vps/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/vps/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus: { condition: service_started }
+      loki: { condition: service_started }
+    healthcheck:
+      test: [CMD-SHELL, 'wget -qO- http://127.0.0.1:3000/api/health | grep -q "ok"']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    user: "0"
+    command: [-config.file=/etc/loki/loki.yml]
+    volumes:
+      - ./infra/observability/vps/loki.yml:/etc/loki/loki.yml:ro
+      - ${VPS_DATA_DIR:-/srv/clipbr/data}/observability/loki:/loki
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    restart: unless-stopped
+    command: [-config.file=/etc/promtail/promtail.yml]
+    volumes:
+      - ./infra/observability/vps/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki: { condition: service_started }
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --docker_only=true
+      - --store_container_labels=false
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    depends_on:
+      redis: { condition: service_healthy }
 
   backup:
     profiles: [backup]

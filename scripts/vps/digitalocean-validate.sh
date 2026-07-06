@@ -190,6 +190,10 @@ if [[ "${DIGITALOCEAN_MANAGE_DNS}" == "true" ]]; then
     echo "Missing A record api.${DIGITALOCEAN_DOMAIN} -> ${droplet_ip}." >&2
     exit 1
   }
+  dns_record_exists "${records_json}" "grafana" "${droplet_ip}" || {
+    echo "Missing A record grafana.${DIGITALOCEAN_DOMAIN} -> ${droplet_ip}." >&2
+    exit 1
+  }
   dns_record_exists "${records_json}" "storage" "${droplet_ip}" || {
     echo "Missing A record storage.${DIGITALOCEAN_DOMAIN} -> ${droplet_ip}." >&2
     exit 1

@@ -20,6 +20,13 @@ def test_liveness_contract():
     assert response.json()["service"] == "media-worker"
 
 
+def test_metrics_endpoint_is_prometheus_compatible():
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+    assert "media_worker_" in response.text
+
+
 def test_unknown_stage_returns_stable_error_contract():
     response = client.post(
         "/v1/stages/unknown",

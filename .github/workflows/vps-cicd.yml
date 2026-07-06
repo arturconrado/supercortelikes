@@ -384,17 +384,16 @@ jobs:
           ssh -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
             "cd ${remote_dir} && set -a && . ${remote_env} && set +a && rm -f ${remote_env} && bash scripts/vps/deploy-registry.sh"
 
-      - name: Optional VPS product smoke
-        if: github.event_name == 'workflow_dispatch' && (inputs.run_product_e2e == 'true' || inputs.run_5g == 'true')
+      - name: VPS production smoke
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST || steps.digitalocean.outputs.droplet_ip }}
           VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER || 'clipbr' }}
           VPS_SSH_PORT: ${{ vars.VPS_SSH_PORT || '22' }}
           VPS_APP_DIR: ${{ vars.VPS_APP_DIR || '/srv/clipbr/app' }}
-          RUN_PRODUCT_E2E: ${{ inputs.run_product_e2e }}
-          RUN_5G: ${{ inputs.run_5g }}
-          OBSERVE_SECONDS: ${{ inputs.observe_seconds || '120' }}
+          RUN_PRODUCT_E2E: ${{ github.event_name == 'workflow_dispatch' && inputs.run_product_e2e || 'false' }}
+          RUN_5G: ${{ github.event_name == 'workflow_dispatch' && inputs.run_5g || 'false' }}
+          OBSERVE_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.observe_seconds || vars.VPS_SMOKE_OBSERVE_SECONDS || '120' }}
           PRODUCT_E2E_EMAIL: ${{ secrets.VPS_PRODUCT_E2E_EMAIL }}
           PRODUCT_E2E_PASSWORD: ${{ secrets.VPS_PRODUCT_E2E_PASSWORD }}
           PRODUCT_E2E_TURNSTILE_TOKEN: ${{ secrets.VPS_PRODUCT_E2E_TURNSTILE_TOKEN }}

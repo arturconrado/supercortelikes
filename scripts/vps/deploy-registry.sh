@@ -63,6 +63,9 @@ mkdir -p \
   "${VPS_DATA_DIR}/media" \
   "${VPS_DATA_DIR}/caddy/data" \
   "${VPS_DATA_DIR}/caddy/config" \
+  "${VPS_DATA_DIR}/observability/prometheus" \
+  "${VPS_DATA_DIR}/observability/grafana" \
+  "${VPS_DATA_DIR}/observability/loki" \
   "${VPS_BACKUP_DIR}"
 
 # The media-worker image runs as uid/gid 10001. Bind-mounted media data must be
@@ -91,7 +94,7 @@ docker compose "${compose_args[@]}" up --detach --wait --no-build
 docker compose "${compose_args[@]}" ps
 
 echo "Waiting for public TLS endpoints..."
-for endpoint in "https://api.${APP_DOMAIN}/health/ready" "https://api.${APP_DOMAIN}/health/pipeline" "https://${APP_DOMAIN}"; do
+for endpoint in "https://api.${APP_DOMAIN}/health/ready" "https://api.${APP_DOMAIN}/health/pipeline" "https://${APP_DOMAIN}" "https://storage.${APP_DOMAIN}/minio/health/live"; do
   for attempt in $(seq 1 60); do
     if curl -fsS "${endpoint}" >/dev/null; then
       echo "OK ${endpoint}"
@@ -105,6 +108,18 @@ for endpoint in "https://api.${APP_DOMAIN}/health/ready" "https://api.${APP_DOMA
     sleep 5
   done
 done
+
+grafana_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://grafana.${APP_DOMAIN}" || true)"
+case "${grafana_status}" in
+  401|302|200) echo "OK https://grafana.${APP_DOMAIN} auth flow HTTP ${grafana_status}" ;;
+  *) echo "Expected Grafana public endpoint to respond with auth/login flow, got HTTP ${grafana_status}" >&2; exit 1 ;;
+esac
+
+metrics_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://api.${APP_DOMAIN}/metrics" || true)"
+case "${metrics_status}" in
+  404) echo "OK public API /metrics is blocked" ;;
+  *) echo "Expected public API /metrics to stay blocked with 404, got HTTP ${metrics_status}" >&2; exit 1 ;;
+esac
 
 if [[ "${OBSERVE_READY_SECONDS}" != "0" ]]; then
   echo "Observing containers for ${OBSERVE_READY_SECONDS}s..."

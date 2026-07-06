@@ -153,7 +153,7 @@ esac
 
 if [[ -n "${APP_DOMAIN}" ]] && command -v getent >/dev/null 2>&1; then
   public_ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-  for host in "${APP_DOMAIN}" "www.${APP_DOMAIN}" "api.${APP_DOMAIN}" "storage.${APP_DOMAIN}"; do
+  for host in "${APP_DOMAIN}" "www.${APP_DOMAIN}" "api.${APP_DOMAIN}" "grafana.${APP_DOMAIN}" "storage.${APP_DOMAIN}"; do
     resolved="$(getent ahostsv4 "${host}" 2>/dev/null | awk '{ print $1; exit }')"
     if [[ -z "${resolved}" ]]; then
       warn "DNS does not resolve ${host} yet"

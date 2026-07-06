@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
+import { MetricsService } from '../observability/metrics.service';
 import type { PipelineJob } from '../queues/pipeline.constants';
 import { limitsFor } from '../usage/entitlements';
 
@@ -27,6 +28,7 @@ export class ClipRenderRequestService {
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService<Environment, true>,
+    @Optional() private readonly metrics?: MetricsService,
   ) {
     this.ffmpegPreset = config.get('FFMPEG_PRESET', { infer: true });
     this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
@@ -34,6 +36,24 @@ export class ClipRenderRequestService {
   }
 
   async request(user: AuthenticatedUser, input: RenderRequestInput): Promise<Record<string, unknown>> {
+    const startedAt = process.hrtime.bigint();
+    let result = 'queued';
+    try {
+      const output = await this.requestInternal(user, input);
+      result = output.result;
+      return output.response;
+    } catch (error) {
+      result = 'failed';
+      throw error;
+    } finally {
+      this.recordRenderRequest(result, startedAt);
+    }
+  }
+
+  private async requestInternal(
+    user: AuthenticatedUser,
+    input: RenderRequestInput,
+  ): Promise<{ response: Record<string, unknown>; result: 'cache' | 'queued' }> {
     const clip = await this.prisma.clip.findFirst({
       where: { id: input.clipId, video: { workspaceId: user.workspaceId } },
       include: {
@@ -96,7 +116,7 @@ export class ClipRenderRequestService {
         },
         orderBy: { createdAt: 'desc' },
       });
-      if (existing) return exportResponse(existing);
+      if (existing) return { response: exportResponse(existing), result: 'cache' };
     }
 
     const eventId = randomUUID();
@@ -157,7 +177,7 @@ export class ClipRenderRequestService {
         },
       }),
     ]);
-    return exportResponse(created);
+    return { response: exportResponse(created), result: 'queued' };
   }
 
   private async findSourcePipelineRun(videoId: string): Promise<{ id: string }> {
@@ -171,6 +191,11 @@ export class ClipRenderRequestService {
     });
     if (!run) throw new ConflictException('O vídeo ainda não concluiu cortes e legendas para exportação.');
     return run;
+  }
+
+  private recordRenderRequest(result: string, startedAt: bigint): void {
+    this.metrics?.renderRequests.inc({ result });
+    this.metrics?.renderRequestDuration.observe({ result }, Number(process.hrtime.bigint() - startedAt) / 1_000_000_000);
   }
 }
 

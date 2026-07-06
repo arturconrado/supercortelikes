@@ -49,6 +49,22 @@ api.{$APP_DOMAIN} {
 	}
 }
 
+grafana.{$APP_DOMAIN} {
+	encode zstd gzip
+	import secure_headers
+	basic_auth {
+		{$GRAFANA_BASIC_AUTH_USER} {$GRAFANA_BASIC_AUTH_PASSWORD_HASH}
+	}
+	reverse_proxy grafana:3000 {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 120s
+			read_timeout 2h
+			write_timeout 2h
+		}
+	}
+}
+
 storage.{$APP_DOMAIN} {
 	import secure_headers
 	reverse_proxy minio:9000 {

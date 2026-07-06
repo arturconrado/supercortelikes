@@ -99,11 +99,12 @@ Substitua `DOMINIO.com` pelo domínio real:
 ```txt
 DOMINIO.com          A      VPS_IP
 api.DOMINIO.com      A      VPS_IP
+grafana.DOMINIO.com  A      VPS_IP
 storage.DOMINIO.com  A      VPS_IP
 www.DOMINIO.com      CNAME  DOMINIO.com
 ```
 
-Se usar Cloudflare, mantenha `storage.DOMINIO.com` em DNS-only. Proxy/CDN na frente do endpoint S3 costuma quebrar ou limitar uploads grandes.
+Se usar Cloudflare, mantenha `storage.DOMINIO.com` em DNS-only. Proxy/CDN na frente do endpoint S3 costuma quebrar ou limitar uploads grandes. `grafana.DOMINIO.com` pode ficar proxied, porque só recebe tráfego HTTP normal pelo Caddy.
 
 ## 3. Provisionamento inicial
 
@@ -159,6 +160,23 @@ Edite `.env.production`:
 - mantenha `POSTGRES_LOCAL_PORT=55432`, exposto apenas em `127.0.0.1`, para o smoke consultar o banco;
 - confirme `S3_PUBLIC_ENDPOINT=https://storage.DOMINIO.com`;
 - confirme `S3_CORS_ALLOWED_ORIGINS_JSON='["https://DOMINIO.com"]'`.
+- confirme `GRAFANA_PUBLIC_URL=https://grafana.DOMINIO.com`;
+- defina `GRAFANA_ADMIN_PASSWORD` com uma senha forte;
+- defina `GRAFANA_BASIC_AUTH_USER` e `GRAFANA_BASIC_AUTH_PASSWORD_HASH`.
+
+Gere o hash do Basic Auth do Caddy assim:
+
+```bash
+docker run --rm caddy:2.10-alpine caddy hash-password --plaintext 'SUA_SENHA_FORTE'
+```
+
+Use a saída em `GRAFANA_BASIC_AUTH_PASSWORD_HASH`. Se editar o `.env.production` manualmente, coloque o hash entre aspas simples, porque hashes bcrypt têm `$`:
+
+```env
+GRAFANA_BASIC_AUTH_PASSWORD_HASH='$2a$14$...'
+```
+
+O script `scripts/vps/generate-web-env.sh` já grava esse valor com quoting seguro. O acesso ao Grafana terá duas camadas: Basic Auth do Caddy e login nativo do Grafana.
 
 Webhook Mercado Pago:
 
@@ -204,8 +222,11 @@ O Compose sobe:
 - `minio`;
 - `minio-init`;
 - `migrate`.
+- `prometheus`, `grafana`, `loki`, `promtail`, `cadvisor`, `node-exporter`, `postgres-exporter` e `redis-exporter`.
 
 PostgreSQL, Redis e MinIO não expõem portas públicas. O MinIO console fica desligado; se precisar inspecionar storage, use `docker compose exec minio`/`mc` ou SSH tunnel temporário.
+
+Grafana fica público somente via Caddy em `https://grafana.DOMINIO.com`. Prometheus, Loki, exporters e `/metrics` não são expostos diretamente para a internet.
 
 Para migrar de MinIO local para DigitalOcean Spaces depois do primeiro lançamento:
 
@@ -298,6 +319,7 @@ Vars recomendadas em nível de repositório ou organização, não apenas no env
 - `VPS_SSH_PORT=22`.
 - `VPS_PUBLIC_API_URL=https://api.DOMINIO.com`.
 - `VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY=<site-key>`.
+- `VPS_SMOKE_OBSERVE_SECONDS=120`. O deploy executa smoke básico sempre; aumente para `600` quando quiser observar 10 minutos sem restart no go-live.
 - `NEXT_PUBLIC_TERMS_VERSION=terms-2026-06`.
 - `NEXT_PUBLIC_PRIVACY_VERSION=privacy-2026-06`.
 - `DIGITALOCEAN_MODE=validate` para usar Droplet existente já preparado; `adopt` para usar Droplet existente e rodar bootstrap; `provision` só para criar Droplet novo.
@@ -551,7 +573,8 @@ Se os cookies expirarem, o worker volta a informar que o YouTube recusou a impor
 Só declarar lançamento comercial quando:
 
 - DNS e TLS finais estiverem verdes;
-- `/metrics` continuar bloqueado publicamente e acessível somente por túnel/rede interna se necessário;
+- `https://grafana.DOMINIO.com` abrir de fora da VPS pedindo Basic Auth e depois login do Grafana;
+- `/metrics` continuar bloqueado publicamente em `https://api.DOMINIO.com/metrics` com 404;
 - Mercado Pago real estiver validado com webhook assinado;
 - Resend estiver entregando e-mail;
 - Turnstile estiver bloqueando abuso;

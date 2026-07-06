@@ -166,6 +166,7 @@ if [[ "${DIGITALOCEAN_MANAGE_DNS}" == "true" ]]; then
 
   upsert_a_record "${DIGITALOCEAN_DOMAIN}" "@" "${droplet_ip}"
   upsert_a_record "${DIGITALOCEAN_DOMAIN}" "api" "${droplet_ip}"
+  upsert_a_record "${DIGITALOCEAN_DOMAIN}" "grafana" "${droplet_ip}"
   upsert_a_record "${DIGITALOCEAN_DOMAIN}" "storage" "${droplet_ip}"
 fi
 

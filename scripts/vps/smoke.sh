@@ -36,6 +36,16 @@ case "${www_location}" in
   *) echo "Expected https://www.${APP_DOMAIN} to redirect to https://${APP_DOMAIN}, got: ${www_location:-<missing>}" >&2; exit 1 ;;
 esac
 curl -fsS "https://storage.${APP_DOMAIN}/minio/health/live" >/dev/null
+grafana_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://grafana.${APP_DOMAIN}" || true)"
+case "${grafana_status}" in
+  401|302|200) ;;
+  *) echo "Expected Grafana public endpoint to respond with auth/login flow, got HTTP ${grafana_status}" >&2; exit 1 ;;
+esac
+metrics_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://api.${APP_DOMAIN}/metrics" || true)"
+case "${metrics_status}" in
+  404) ;;
+  *) echo "Expected public API /metrics to stay blocked with 404, got HTTP ${metrics_status}" >&2; exit 1 ;;
+esac
 
 if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
   if [[ "${EMAIL_VERIFICATION_REQUIRED:-false}" == "true" && -z "${PRODUCT_E2E_EMAIL:-}" ]]; then

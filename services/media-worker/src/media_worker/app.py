@@ -8,13 +8,14 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from . import __version__
 from .config import Settings
 from .errors import WorkerError
 from .logging_config import configure_logging
 from .memory import release_runtime_memory
+from .metrics import metrics_payload, observe_stage
 from .models import PipelineRequest, ReframeRequest, SeoRequest
 from .pipeline import Pipeline, STAGES
 from .seo import generate_seo
@@ -225,25 +226,31 @@ def _capacity_for(stage: str) -> threading.BoundedSemaphore:
     return light_stage_capacity
 
 
+def _capacity_kind(stage: str) -> str:
+    return "heavy" if stage in HEAVY_STAGES else "light"
+
+
 def _run_stage(stage: str, body: PipelineRequest):
     with _capacity_for(stage):
-        try:
-            result = pipeline.execute(stage, body)
-            if stage == "exports" and not settings.retain_downloads:
-                shutil.rmtree(
-                    settings.data_dir / body.pipeline_run_id, ignore_errors=True
-                )
-            return result
-        finally:
-            release_runtime_memory()
+        with observe_stage(stage, _capacity_kind(stage)):
+            try:
+                result = pipeline.execute(stage, body)
+                if stage == "exports" and not settings.retain_downloads:
+                    shutil.rmtree(
+                        settings.data_dir / body.pipeline_run_id, ignore_errors=True
+                    )
+                return result
+            finally:
+                release_runtime_memory()
 
 
 def _run_reframe(body: ReframeRequest):
     with _capacity_for("reframe"):
-        try:
-            return pipeline.reframe(body)
-        finally:
-            release_runtime_memory()
+        with observe_stage("reframe", "heavy"):
+            try:
+                return pipeline.reframe(body)
+            finally:
+                release_runtime_memory()
 
 
 @app.post("/v1/stages/{stage}", dependencies=[Depends(authorize)])
@@ -264,6 +271,17 @@ async def execute_reframe(body: ReframeRequest) -> Dict[str, Any]:
 
 @app.post("/v1/seo", dependencies=[Depends(authorize)])
 async def execute_seo(body: SeoRequest) -> Dict[str, Any]:
-    return await run_in_threadpool(
-        generate_seo, body.transcript, body.subject, body.audience
-    )
+    return await run_in_threadpool(_run_seo, body)
+
+
+def _run_seo(body: SeoRequest) -> Dict[str, Any]:
+    with observe_stage("seo", "light"):
+        return generate_seo(body.transcript, body.subject, body.audience)
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    if not settings.metrics_enabled:
+        return Response(status_code=404)
+    body, content_type = metrics_payload()
+    return Response(content=body, media_type=content_type)

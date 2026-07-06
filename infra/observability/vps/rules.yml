@@ -1,0 +1,74 @@
+groups:
+  - name: picashorts-vps
+    rules:
+      - alert: PicashortsApiDown
+        expr: up{job="picashorts-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: PicaShorts API indisponível
+
+      - alert: PicashortsMediaWorkerDown
+        expr: up{job="picashorts-media-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Media-worker indisponível
+
+      - alert: PicashortsOpenDLQ
+        expr: clipbr_dead_letters_open > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: DLQ aberta no pipeline
+
+      - alert: PicashortsOutboxBacklog
+        expr: clipbr_outbox_unpublished > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbox com eventos pendentes
+
+      - alert: PicashortsRenderingBacklog
+        expr: clipbr_queue_jobs{queue="rendering",state="waiting"} > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Fila de render acumulada
+
+      - alert: PicashortsLongRunningRender
+        expr: clipbr_export_jobs{status="PROCESSING"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Export/render processando há muito tempo
+
+      - alert: PicashortsContainerRestarting
+        expr: increase(container_start_time_seconds{name!=""}[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Container reiniciado recentemente
+
+      - alert: PicashortsHighMemory
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Uso de memória acima de 85%
+
+      - alert: PicashortsDiskAlmostFull
+        expr: (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Disco acima de 80%

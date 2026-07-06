@@ -13,6 +13,25 @@ random_hex() {
   openssl rand -hex 24 | tr -d '\n'
 }
 
+hash_caddy_password() {
+  local password="$1"
+  if command -v caddy >/dev/null 2>&1; then
+    caddy hash-password --plaintext "${password}"
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    docker run --rm caddy:2.10-alpine caddy hash-password --plaintext "${password}"
+    return 0
+  fi
+  return 1
+}
+
+env_quote() {
+  local value="$1"
+  value="${value//\'/\'\\\'\'}"
+  printf "'%s'" "${value}"
+}
+
 is_ipv4() {
   [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 }
@@ -58,17 +77,41 @@ build_sha="$(git -C "${ROOT_DIR}" rev-parse --short=12 HEAD 2>/dev/null || echo 
 email_verification_required="${EMAIL_VERIFICATION_REQUIRED:-true}"
 turnstile_required="${TURNSTILE_REQUIRED:-true}"
 next_public_turnstile_site_key="${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}"
+grafana_admin_password="${GRAFANA_ADMIN_PASSWORD:-}"
+grafana_basic_auth_user="${GRAFANA_BASIC_AUTH_USER:-admin}"
+grafana_basic_auth_password_hash="${GRAFANA_BASIC_AUTH_PASSWORD_HASH:-}"
+generated_grafana_admin_password=""
+generated_grafana_basic_auth_password=""
 
 if [[ "${VPS_EXPOSURE_PROFILE}" == "smoke" ]]; then
   email_verification_required="${EMAIL_VERIFICATION_REQUIRED:-false}"
   turnstile_required="${TURNSTILE_REQUIRED:-false}"
   next_public_turnstile_site_key="${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-disabled}"
+  if [[ -z "${grafana_admin_password}" ]]; then
+    generated_grafana_admin_password="$(random_hex)"
+    grafana_admin_password="${generated_grafana_admin_password}"
+  fi
+  if [[ -z "${grafana_basic_auth_password_hash}" ]]; then
+    generated_grafana_basic_auth_password="${GRAFANA_BASIC_AUTH_PASSWORD:-$(random_hex)}"
+    if ! grafana_basic_auth_password_hash="$(hash_caddy_password "${generated_grafana_basic_auth_password}")"; then
+      echo "GRAFANA_BASIC_AUTH_PASSWORD_HASH is required because caddy/docker is unavailable to generate a hash." >&2
+      exit 1
+    fi
+  fi
 else
   require_external MERCADO_PAGO_ACCESS_TOKEN
   require_external MERCADO_PAGO_WEBHOOK_SECRET
   require_external RESEND_API_KEY
   require_external TURNSTILE_SECRET_KEY
   require_external NEXT_PUBLIC_TURNSTILE_SITE_KEY
+  require_external GRAFANA_ADMIN_PASSWORD
+  if [[ -z "${grafana_basic_auth_password_hash}" ]]; then
+    require_external GRAFANA_BASIC_AUTH_PASSWORD
+    if ! grafana_basic_auth_password_hash="$(hash_caddy_password "${GRAFANA_BASIC_AUTH_PASSWORD}")"; then
+      echo "Could not generate GRAFANA_BASIC_AUTH_PASSWORD_HASH. Install caddy or docker, or set GRAFANA_BASIC_AUTH_PASSWORD_HASH." >&2
+      exit 1
+    fi
+  fi
 fi
 
 llm_provider="${LLM_PROVIDER:-openrouter}"
@@ -100,7 +143,8 @@ tmp_file="$(mktemp)"
   printf 'CORS_ORIGIN=https://%s\n' "${app_domain}"
   printf 'CORS_ORIGINS=https://%s\n' "${app_domain}"
   printf 'S3_PUBLIC_ENDPOINT=https://storage.%s\n' "${app_domain}"
-  printf 'S3_CORS_ALLOWED_ORIGINS_JSON=%s\n' "'[\"https://${app_domain}\"]'"
+  printf 'S3_CORS_ALLOWED_ORIGINS_JSON=%s\n' "$(env_quote "[\"https://${app_domain}\"]")"
+  printf 'GRAFANA_PUBLIC_URL=https://grafana.%s\n' "${app_domain}"
   printf '\n'
   printf 'VPS_PROVIDER=%s\n' "${VPS_PROVIDER:-digitalocean}"
   printf 'VPS_SIZE_PROFILE=%s\n' "${VPS_SIZE_PROFILE:-budget}"
@@ -126,7 +170,7 @@ tmp_file="$(mktemp)"
   printf 'QUEUE_PREFIX=%s\n' "${QUEUE_PREFIX:-clipbr-vps}"
   printf 'OUTBOX_POLL_INTERVAL_MS=%s\n' "${OUTBOX_POLL_INTERVAL_MS:-1000}"
   printf 'OUTBOX_BATCH_SIZE=%s\n' "${OUTBOX_BATCH_SIZE:-50}"
-  printf 'PIPELINE_STAGE_CONCURRENCY_JSON=%s\n' "${PIPELINE_STAGE_CONCURRENCY_JSON:-{\"ingestion\":4,\"transcription\":2,\"segmentation\":3,\"scoring\":4,\"clips\":3,\"captions\":3,\"rendering\":2,\"exports\":3}}"
+  printf 'PIPELINE_STAGE_CONCURRENCY_JSON=%s\n' "$(env_quote "${PIPELINE_STAGE_CONCURRENCY_JSON:-{\"ingestion\":4,\"transcription\":2,\"segmentation\":3,\"scoring\":4,\"clips\":3,\"captions\":3,\"rendering\":2,\"exports\":3}}")"
   printf 'PIPELINE_EVENT_RETENTION_SECONDS=%s\n' "${PIPELINE_EVENT_RETENTION_SECONDS:-300}"
   printf 'ANALYTICS_CACHE_TTL_SECONDS=%s\n' "${ANALYTICS_CACHE_TTL_SECONDS:-30}"
   printf '\n'
@@ -186,6 +230,14 @@ tmp_file="$(mktemp)"
   printf '\n'
   printf 'OTEL_EXPORTER_OTLP_ENDPOINT=%s\n' "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
   printf 'OTEL_SERVICE_NAME=clipbr-api\n'
+  printf 'OBSERVABILITY_ENABLED=%s\n' "${OBSERVABILITY_ENABLED:-true}"
+  printf 'MEDIA_WORKER_METRICS_ENABLED=%s\n' "${MEDIA_WORKER_METRICS_ENABLED:-true}"
+  printf 'PROMETHEUS_RETENTION=%s\n' "${PROMETHEUS_RETENTION:-15d}"
+  printf 'LOKI_RETENTION=%s\n' "${LOKI_RETENTION:-168h}"
+  printf 'GRAFANA_ADMIN_USER=%s\n' "${GRAFANA_ADMIN_USER:-admin}"
+  printf 'GRAFANA_ADMIN_PASSWORD=%s\n' "${grafana_admin_password}"
+  printf 'GRAFANA_BASIC_AUTH_USER=%s\n' "${grafana_basic_auth_user}"
+  printf 'GRAFANA_BASIC_AUTH_PASSWORD_HASH=%s\n' "$(env_quote "${grafana_basic_auth_password_hash}")"
   printf 'VPS_BACKUP_GPG_RECIPIENT=%s\n' "${VPS_BACKUP_GPG_RECIPIENT:-}"
 } > "${tmp_file}"
 
@@ -197,4 +249,13 @@ echo "APP_DOMAIN=${app_domain}"
 echo "PUBLIC_APP_URL=https://${app_domain}"
 echo "PUBLIC_API_URL=https://api.${app_domain}"
 echo "S3_PUBLIC_ENDPOINT=https://storage.${app_domain}"
+echo "GRAFANA_PUBLIC_URL=https://grafana.${app_domain}"
 echo "Profile=${VPS_EXPOSURE_PROFILE}"
+if [[ -n "${generated_grafana_basic_auth_password}" ]]; then
+  echo "Generated Grafana Basic Auth user=${grafana_basic_auth_user}"
+  echo "Generated Grafana Basic Auth password=${generated_grafana_basic_auth_password}"
+fi
+if [[ -n "${generated_grafana_admin_password}" ]]; then
+  echo "Generated Grafana admin user=${GRAFANA_ADMIN_USER:-admin}"
+  echo "Generated Grafana admin password=${generated_grafana_admin_password}"
+fi
