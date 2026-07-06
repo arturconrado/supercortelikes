@@ -329,6 +329,7 @@ Vars recomendadas em nível de repositório ou organização, não apenas no env
 - `DIGITALOCEAN_RESIZE_ENABLED=true` para redimensionar Droplet existente antes do deploy quando ele estiver abaixo do perfil mínimo.
 - `DIGITALOCEAN_RESIZE_DISK=true` para expandir também o disco. Essa operação é permanente na DigitalOcean.
 - `CLOUDFLARE_DNS_ENABLED=true` para o workflow criar/atualizar DNS automaticamente.
+- `CLOUDFLARE_DNS_REQUIRED=false`. Defina `true` somente se falha de reconciliação DNS deve bloquear deploy.
 - `CLOUDFLARE_ZONE_NAME=DOMINIO.com`.
 - `CLOUDFLARE_ZONE_ID=<zone-id>`, opcional se `CLOUDFLARE_ZONE_NAME` estiver definido.
 - `CLOUDFLARE_PROXIED=false` no primeiro deploy. Mantenha `storage.DOMINIO.com` sempre DNS-only para uploads grandes.

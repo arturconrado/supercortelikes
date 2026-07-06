@@ -247,6 +247,7 @@ jobs:
 
       - name: Configure Cloudflare DNS
         if: vars.CLOUDFLARE_DNS_ENABLED == 'true'
+        continue-on-error: ${{ vars.CLOUDFLARE_DNS_REQUIRED != 'true' }}
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

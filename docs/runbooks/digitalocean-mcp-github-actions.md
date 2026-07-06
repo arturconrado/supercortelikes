@@ -182,6 +182,7 @@ DIGITALOCEAN_SSH_KEY_IDS=<id-ou-fingerprint-da-chave-ssh-na-digitalocean>
 DIGITALOCEAN_FIREWALL_NAME=<firewall-existente-se-houver>
 DIGITALOCEAN_DOMAIN=DOMINIO.com
 DIGITALOCEAN_MANAGE_DNS=false
+CLOUDFLARE_DNS_REQUIRED=false
 ```
 
 Push na `main` faz deploy pela esteira quando o gate passa. Use `VPS_AUTO_DEPLOY_DISABLED=true` apenas para pausar temporariamente esse deploy automático.
