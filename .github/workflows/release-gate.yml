@@ -125,10 +125,24 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm install --global npm@11.12.1 && npm ci && npm run db:generate
       - name: Run 5 GiB direct-upload regression without a processing worker
+        shell: bash
         run: |
-          docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite up --build --detach --wait
-          node scripts/acceptance/direct-upload-5g.mjs
-          docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite down --volumes --remove-orphans
+          status=0
+          cleanup() {
+            if [[ "${status}" != "0" ]]; then
+              df -h || true
+              docker system df || true
+              docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite ps || true
+              docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite logs --tail=200 api minio postgres redis || true
+            fi
+            docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite down --volumes --remove-orphans || true
+          }
+          trap cleanup EXIT
+          docker compose -f docker-compose.local.yml -p clipbr-five-gib-gate --profile local-lite up --build --detach --wait || status=$?
+          if [[ "${status}" == "0" ]]; then
+            node scripts/acceptance/direct-upload-5g.mjs || status=$?
+          fi
+          exit "${status}"
       - name: Start isolated full stack
         run: docker compose -f docker-compose.local.yml -p clipbr-option-a-gate --profile local-full up --build --detach --wait
       - name: Generate deterministic media fixture
