@@ -96,7 +96,6 @@ export class ClipRenderRequestService {
             language: clip.captions[0].language,
             cues: clip.captions[0].editedCues ?? clip.captions[0].cues,
             style: clip.captions[0].style,
-            updatedAt: clip.captions[0].updatedAt.toISOString(),
           }
         : null,
       watermark: watermarkFingerprintPayload(clip.video.workspace),

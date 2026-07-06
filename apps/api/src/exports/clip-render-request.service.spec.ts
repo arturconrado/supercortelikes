@@ -90,6 +90,35 @@ describe('ClipRenderRequestService', () => {
     }));
   });
 
+  it('keeps the render fingerprint stable when only caption storage metadata changes', async () => {
+    const ready = { id: 'ready', clipId: clip.id, status: 'READY', sizeBytes: 10n };
+    const firstDb = prisma({ export: { findFirst: vi.fn().mockResolvedValue(ready), create: vi.fn() } });
+    const secondDb = prisma({
+      clip: {
+        findFirst: vi.fn().mockResolvedValue({
+          ...clip,
+          captions: [
+            {
+              ...clip.captions[0],
+              updatedAt: new Date('2026-07-01T00:05:00.000Z'),
+              srtKey: 'captions/rendered.srt',
+              assKey: 'captions/rendered.ass',
+            },
+          ],
+        }),
+        update: vi.fn(),
+      },
+      export: { findFirst: vi.fn().mockResolvedValue(ready), create: vi.fn() },
+    });
+
+    await service(firstDb).request(user, { clipId: clip.id, aspectRatio: '9:16' });
+    await service(secondDb).request(user, { clipId: clip.id, aspectRatio: '9:16' });
+
+    expect(secondDb.export.findFirst.mock.calls[0][0].where.renderFingerprint).toBe(
+      firstDb.export.findFirst.mock.calls[0][0].where.renderFingerprint,
+    );
+  });
+
   it('creates a queued export and routes only the requested clip to rendering', async () => {
     const db = prisma();
     const result = await service(db).request(user, { clipId: clip.id, aspectRatio: '1:1', force: true });
