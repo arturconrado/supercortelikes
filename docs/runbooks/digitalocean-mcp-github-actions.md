@@ -165,7 +165,7 @@ VPS_PRODUCT_E2E_TURNSTILE_TOKEN=<token bypass temporário se usado>
 Vars de repositório/organização:
 
 ```txt
-VPS_DEPLOY_ENABLED=false
+VPS_AUTO_DEPLOY_DISABLED=false
 VPS_USER=clipbr
 VPS_APP_DIR=/srv/clipbr/app
 VPS_SSH_PORT=22
@@ -184,7 +184,7 @@ DIGITALOCEAN_DOMAIN=DOMINIO.com
 DIGITALOCEAN_MANAGE_DNS=false
 ```
 
-Mantenha `VPS_DEPLOY_ENABLED=false` até o primeiro deploy pela esteira passar.
+Push na `main` faz deploy pela esteira quando o gate passa. Use `VPS_AUTO_DEPLOY_DISABLED=true` apenas para pausar temporariamente esse deploy automático.
 
 Modos DigitalOcean do workflow:
 
@@ -234,10 +234,10 @@ run_product_e2e=false
 run_5g=true
 ```
 
-Só depois altere:
+Se precisar pausar temporariamente o deploy automático da `main`, altere:
 
 ```txt
-VPS_DEPLOY_ENABLED=true
+VPS_AUTO_DEPLOY_DISABLED=true
 ```
 
 ## 8. Responsabilidade de cada ferramenta

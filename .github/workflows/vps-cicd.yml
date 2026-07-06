@@ -70,7 +70,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.release_gate == 'false' && needs.gate.result == 'skipped')
       ) &&
       (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_AUTO_DEPLOY_DISABLED != 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
       )
     needs: gate
@@ -112,7 +112,7 @@ jobs:
 
       - name: Validate VPS deploy build variables
         if: |
-          (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_AUTO_DEPLOY_DISABLED != 'true') ||
           (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
         shell: bash
         env:
@@ -189,7 +189,7 @@ jobs:
       needs.build-images.result == 'success' &&
       github.event_name != 'pull_request' &&
       (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_DEPLOY_ENABLED == 'true') ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.VPS_AUTO_DEPLOY_DISABLED != 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.deploy == 'true')
       )
     needs: build-images

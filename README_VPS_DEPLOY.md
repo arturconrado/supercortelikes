@@ -243,7 +243,7 @@ A esteira genérica fica em `.github/workflows/vps-cicd.yml`.
 Ela funciona assim:
 
 1. Pull request roda o `release-gate.yml`.
-2. Push na `main` roda o gate. Ele só cria imagens `migration`, `api`, `web` e `media-worker` no GHCR quando `VPS_DEPLOY_ENABLED=true`.
+2. Push na `main` roda o gate completo e, se passar, cria imagens `migration`, `api`, `web` e `media-worker` no GHCR e faz deploy na VPS.
 3. `workflow_dispatch` permite deploy manual de um SHA/tag e smoke opcional.
 4. Para rodar apenas a aplicação, use `workflow_dispatch` com `deploy=true` e `release_gate=false`. Esse modo pula E2E, regressão 5 GiB, scans e observação longa; ele apenas cria/publica as imagens e faz deploy na VPS.
 5. A VPS não compila a aplicação; ela apenas recebe o repositório, baixa as imagens e executa `docker compose up --wait` com `docker-compose.vps.yml` + `docker-compose.vps.images.yml`.
@@ -312,7 +312,7 @@ Secrets opcionais:
 
 Vars recomendadas em nível de repositório ou organização, não apenas no environment:
 
-- `VPS_DEPLOY_ENABLED=false` inicialmente. Troque para `true` só depois do primeiro deploy pela esteira passar.
+- `VPS_AUTO_DEPLOY_DISABLED=false`. Defina `true` apenas para pausar temporariamente deploy automático da `main`.
 - `VPS_APP_DIR=/srv/clipbr/app`.
 - `VPS_USER=clipbr`.
 - `VPS_SSH_PORT=22`.
@@ -380,10 +380,10 @@ Primeiro deploy recomendado:
 1. Identifique o Droplet existente e configure `DIGITALOCEAN_DROPLET_ID` ou `DIGITALOCEAN_DROPLET_NAME`.
 2. Aponte DNS e aguarde propagação.
 3. Configure secrets/vars no GitHub.
-4. Para apenas subir a aplicação rapidamente, rode `VPS CI/CD` manualmente com `deploy=true`, `release_gate=false`, `digitalocean_mode=validate`, `run_product_e2e=false` e `run_5g=false`.
-5. Para validar release, rode novamente com `release_gate=true` e `run_product_e2e=true`.
-6. Rode `run_5g=true` fora de horário de pico.
-7. Só depois defina `VPS_DEPLOY_ENABLED=true`.
+4. Faça push na `main` para rodar gate, build e deploy pela esteira.
+5. Se precisar validar rapidamente um SHA específico, rode `VPS CI/CD` manualmente com `deploy=true`, `release_gate=false`, `digitalocean_mode=validate`, `run_product_e2e=false` e `run_5g=false`.
+6. Para release completo manual, rode com `release_gate=true` e `run_product_e2e=true`.
+7. Rode `run_5g=true` fora de horário de pico.
 
 ### Break-glass manual
 
