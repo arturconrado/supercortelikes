@@ -319,6 +319,7 @@ Vars recomendadas em nível de repositório ou organização, não apenas no env
 - `VPS_PUBLIC_API_URL=https://api.DOMINIO.com`.
 - `VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY=<site-key>`.
 - `VPS_SMOKE_OBSERVE_SECONDS=120`. O deploy executa smoke básico sempre; aumente para `600` quando quiser observar 10 minutos sem restart no go-live.
+- `REQUIRE_GRAFANA_PUBLIC_ENDPOINT=false`. Defina `true` quando o DNS `grafana.DOMINIO.com` estiver obrigatório no deploy/smoke.
 - `NEXT_PUBLIC_TERMS_VERSION=terms-2026-06`.
 - `NEXT_PUBLIC_PRIVACY_VERSION=privacy-2026-06`.
 - `DIGITALOCEAN_MODE=validate` para usar Droplet existente já preparado; `adopt` para usar Droplet existente e rodar bootstrap; `provision` só para criar Droplet novo.

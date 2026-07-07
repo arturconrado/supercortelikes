@@ -36,11 +36,16 @@ case "${www_location}" in
   *) echo "Expected https://www.${APP_DOMAIN} to redirect to https://${APP_DOMAIN}, got: ${www_location:-<missing>}" >&2; exit 1 ;;
 esac
 curl -fsS "https://storage.${APP_DOMAIN}/minio/health/live" >/dev/null
-grafana_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://grafana.${APP_DOMAIN}" || true)"
-case "${grafana_status}" in
-  401|302|200) ;;
-  *) echo "Expected Grafana public endpoint to respond with auth/login flow, got HTTP ${grafana_status}" >&2; exit 1 ;;
-esac
+grafana_host="grafana.${APP_DOMAIN}"
+if [[ "${REQUIRE_GRAFANA_PUBLIC_ENDPOINT:-false}" != "true" ]] && ! timeout 5 getent hosts "${grafana_host}" >/dev/null 2>&1; then
+  echo "Skipping https://${grafana_host}: DNS is not resolving yet. Set REQUIRE_GRAFANA_PUBLIC_ENDPOINT=true to make this blocking."
+else
+  grafana_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://${grafana_host}" || true)"
+  case "${grafana_status}" in
+    401|302|200) ;;
+    *) echo "Expected Grafana public endpoint to respond with auth/login flow, got HTTP ${grafana_status}" >&2; exit 1 ;;
+  esac
+fi
 metrics_status="$(curl -sS -o /dev/null -w '%{http_code}' "https://api.${APP_DOMAIN}/metrics" || true)"
 case "${metrics_status}" in
   404) ;;
