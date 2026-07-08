@@ -46,6 +46,10 @@ fi
 : "${VPS_DATA_DIR:=/srv/clipbr/data}"
 : "${VPS_BACKUP_DIR:=/srv/clipbr/backups}"
 
+# shellcheck disable=SC1091
+. "${ROOT_DIR}/scripts/vps/observability-env.sh"
+ensure_observability_env
+
 if [[ "${APP_ENV:-production}" == "production" ]]; then
   if [[ "${DEPLOY_SOURCE:-}" != "github-actions" || -z "${DEPLOY_GITHUB_RUN_ID:-}" ]]; then
     if [[ "${ALLOW_MANUAL_PRODUCTION_DEPLOY:-false}" != "true" ]]; then
