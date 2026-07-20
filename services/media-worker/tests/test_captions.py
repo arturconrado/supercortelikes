@@ -29,6 +29,17 @@ def test_caption_output_contains_word_timing_and_karaoke():
     assert "{\\k60}MUNDO" in ass
 
 
+def test_caption_templates_use_five_distinct_bundled_font_families():
+    assert {name: template["font"] for name, template in TEMPLATES.items()} == {
+        "podcast": "Montserrat ExtraBold",
+        "business": "Liberation Sans",
+        "finance": "Nimbus Mono PS",
+        "marketing": "Nimbus Sans Narrow",
+        "motivational": "URW Bookman",
+    }
+    assert len({template["font"] for template in TEMPLATES.values()}) == 5
+
+
 def test_editor_style_and_text_cues_are_applied_to_ass_output():
     cues = normalize_cues([{"start": 0.2, "end": 1.2, "text": "Texto editado"}], 2.0)
     style = caption_style("marketing", {
@@ -41,7 +52,7 @@ def test_editor_style_and_text_cues_are_applied_to_ass_output():
     ass = render_ass(cues, style, "marketing")
     assert "&H006633FF" in ass
     assert "&H0099FF33" in ass
-    assert "Poppins ExtraBold,44" in ass
+    assert "Nimbus Sans Narrow,44" in ass
     assert ",3,0,0,5,70,70,0,1" in ass
     assert "TEXTO" in ass and "EDITADO" in ass
 

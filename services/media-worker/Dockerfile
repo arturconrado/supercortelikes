@@ -14,7 +14,7 @@ ARG DENO_VERSION=2.3.0
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg libglib2.0-0 libgl1 patchelf unzip \
+    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg fontconfig fonts-liberation2 fonts-montserrat fonts-urw-base35 libglib2.0-0 libgl1 patchelf unzip \
     && case "$TARGETARCH" in \
       amd64) DENO_ARCH="x86_64" ;; \
       arm64) DENO_ARCH="aarch64" ;; \
@@ -26,6 +26,11 @@ RUN apt-get update \
     && chmod +x /usr/local/bin/deno \
     && ffmpeg -version >/dev/null \
     && ffprobe -version >/dev/null \
+    && test "$(fc-match -f '%{family[0]}' 'Montserrat ExtraBold')" = "Montserrat" \
+    && test "$(fc-match -f '%{family[0]}' 'Liberation Sans')" = "Liberation Sans" \
+    && test "$(fc-match -f '%{family[0]}' 'Nimbus Mono PS')" = "Nimbus Mono PS" \
+    && test "$(fc-match -f '%{family[0]}' 'Nimbus Sans Narrow')" = "Nimbus Sans Narrow" \
+    && test "$(fc-match -f '%{family[0]}' 'URW Bookman')" = "URW Bookman" \
     && deno --version >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 
