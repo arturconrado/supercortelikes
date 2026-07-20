@@ -12,7 +12,6 @@ import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 import { UsageService } from '../usage/usage.service';
 import { MediaWorkerClient, type MediaStageResponse } from './media-worker.client';
 import { normalizeVideoProcessingOptions } from '../videos/video-processing-options';
-import { limitsFor } from '../usage/entitlements';
 
 @Injectable()
 export class MediaStageProcessor {
@@ -44,11 +43,10 @@ export class MediaStageProcessor {
       include: {
         workspace: {
           select: {
-            plan: true,
             brandKits: {
               orderBy: { createdAt: 'asc' },
               take: 1,
-              select: { name: true, logoKey: true, watermark: true },
+              select: { logoKey: true, watermark: true },
             },
           },
         },
@@ -80,8 +78,7 @@ export class MediaStageProcessor {
     processing: ReturnType<typeof normalizeVideoProcessingOptions>,
     video?: {
       workspace?: {
-        plan: Parameters<typeof limitsFor>[0];
-        brandKits: Array<{ name: string; logoKey: string | null; watermark: Prisma.JsonValue | null }>;
+        brandKits: Array<{ logoKey: string | null; watermark: Prisma.JsonValue | null }>;
       } | null;
     },
   ): Promise<Record<string, unknown>> {
@@ -562,13 +559,12 @@ export class MediaStageProcessor {
     pipelineRunId: string,
     video?: {
       workspace?: {
-        plan: Parameters<typeof limitsFor>[0];
-        brandKits: Array<{ name: string; logoKey: string | null; watermark: Prisma.JsonValue | null }>;
+        brandKits: Array<{ logoKey: string | null; watermark: Prisma.JsonValue | null }>;
       } | null;
     },
   ): Promise<Record<string, unknown>> {
     const workspace = video?.workspace;
-    if (!workspace || !limitsFor(workspace.plan).watermark) return {};
+    if (!workspace) return {};
     const kit = workspace.brandKits[0];
     const config = (kit?.watermark && typeof kit.watermark === 'object' && !Array.isArray(kit.watermark)
       ? kit.watermark
@@ -576,6 +572,7 @@ export class MediaStageProcessor {
     const position = typeof config.position === 'string' ? config.position : 'W-w-32:H-h-32';
     const opacity = typeof config.opacity === 'number' ? Math.max(0.1, Math.min(1, config.opacity)) : 0.75;
     const logoWidth = typeof config.size === 'number' ? Math.max(48, Math.min(420, config.size)) : 180;
+    const text = typeof config.text === 'string' ? config.text.trim() : '';
     if (kit?.logoKey) {
       try {
         const watermarkPath = await this.materializeBrandLogo(pipelineRunId, kit.logoKey);
@@ -586,10 +583,10 @@ export class MediaStageProcessor {
           watermarkLogoWidth: logoWidth,
         };
       } catch {
-        // Fall back to text watermark if the configured object is temporarily unavailable.
+        // An explicitly configured text may still be used when the custom logo is unavailable.
       }
     }
-    const text = typeof config.text === 'string' && config.text.trim() ? config.text.trim() : kit?.name || 'PicaShorts';
+    if (!text) return {};
     return {
       watermarkText: text,
       watermarkTextPosition: textWatermarkPosition(position),

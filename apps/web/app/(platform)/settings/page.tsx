@@ -207,7 +207,7 @@ function BrandForm() {
   return (
     <Card className="max-w-3xl p-5 sm:p-7">
       <h2 className="text-lg font-bold text-white">Identidade visual</h2>
-      <p className="mt-1 text-sm text-zinc-500">Essas definições serão aplicadas aos próximos renders e marcas d’água do plano Free.</p>
+      <p className="mt-1 text-sm text-zinc-500">Os exports saem sem marca da plataforma. Adicione abaixo apenas uma marca própria, se quiser.</p>
       <form onSubmit={submit} className="mt-7 space-y-5">
         <FormMessage message={message} error={failed}/>
 
@@ -281,13 +281,15 @@ function BrandForm() {
                 className="max-h-16 max-w-[180px] rounded-lg object-contain"
                 style={{ opacity: form.watermarkOpacity }}
               />
-            ) : (
+            ) : form.watermarkText.trim() ? (
               <span
                 className="rounded-lg bg-black/35 px-3 py-1 text-sm font-bold"
                 style={{ color: form.primaryColor, opacity: form.watermarkOpacity, fontFamily: form.fontFamily || undefined }}
               >
-                {form.watermarkText || form.name || 'PicaShorts'}
+                {form.watermarkText}
               </span>
+            ) : (
+              <span className="text-sm text-zinc-600">Nenhuma marca aplicada</span>
             )}
           </div>
         </div>

@@ -69,7 +69,7 @@ export const defaultUsage = {
     maxUploadBytes: 5368709120,
     maxVideoDurationSeconds: 3600,
     exportResolution: '720p',
-    watermark: true,
+    watermark: false,
     queuePriority: 1,
     maxConcurrentHeavyJobs: 1,
     graceDays: 3,

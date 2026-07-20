@@ -1,6 +1,6 @@
 import type { Plan } from '@prisma/client';
 
-export const PLAN_VERSION = '2026-06-ga-v1';
+export const PLAN_VERSION = '2026-07-watermark-free-v2';
 export const GiB = 1024 ** 3;
 
 export type CommercialPlan = Exclude<Plan, 'ENTERPRISE'>;
@@ -10,6 +10,7 @@ export interface PlanLimits {
   maxUploadBytes: number;
   maxVideoDurationSeconds: number;
   exportResolution: '720p' | '1080p';
+  /** Whether the platform forces its own watermark onto exports. */
   watermark: boolean;
   queuePriority: number;
   maxConcurrentHeavyJobs: number;
@@ -34,7 +35,7 @@ export const PLAN_LIMITS: Record<CommercialPlan, PlanLimits> = {
     maxUploadBytes: 5 * GiB,
     maxVideoDurationSeconds: 60 * 60,
     exportResolution: '720p',
-    watermark: true,
+    watermark: false,
     queuePriority: 20,
     maxConcurrentHeavyJobs: 1,
     graceDays: 0,
@@ -70,7 +71,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     interval: 'month',
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.FREE,
-    features: ['60 minutos/mês', 'Uploads até 5 GiB', 'Export 720p', 'Marca d’água'],
+    features: ['60 minutos/mês', 'Uploads até 5 GiB', 'Export 720p', 'Sem marca d’água'],
   },
   {
     id: 'PRO',

@@ -7,9 +7,8 @@ import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { MetricsService } from '../observability/metrics.service';
 import type { PipelineJob } from '../queues/pipeline.constants';
-import { limitsFor } from '../usage/entitlements';
 
-const RENDER_CACHE_VERSION = 'clip-render-720p-v4-bundled-caption-fonts';
+const RENDER_CACHE_VERSION = 'clip-render-720p-v5-no-platform-watermark';
 const REUSABLE_EXPORT_STATUSES = ['READY', 'QUEUED', 'PROCESSING'] as const;
 
 type RenderRequestInput = {
@@ -62,7 +61,6 @@ export class ClipRenderRequestService {
           include: {
             workspace: {
               select: {
-                plan: true,
                 brandKits: {
                   orderBy: { createdAt: 'asc' },
                   take: 1,
@@ -204,15 +202,20 @@ function exportResponse(item: { sizeBytes?: bigint | number | null } & Record<st
 
 function watermarkFingerprintPayload(
   workspace: {
-    plan: Parameters<typeof limitsFor>[0];
     brandKits: Array<{ id: string; logoKey: string | null; watermark: Prisma.JsonValue | null; updatedAt: Date }>;
   } | null,
 ): unknown {
-  if (!workspace || !limitsFor(workspace.plan).watermark) return false;
+  if (!workspace) return false;
   const kit = workspace.brandKits[0];
-  return kit
-    ? { logoKey: kit.logoKey, watermark: kit.watermark, updatedAt: kit.updatedAt.toISOString() }
-    : { text: 'PicaShorts' };
+  if (!kit) return false;
+  const watermark = jsonRecord(kit.watermark);
+  const text = typeof watermark.text === 'string' ? watermark.text.trim() : '';
+  if (!kit.logoKey && !text) return false;
+  return { logoKey: kit.logoKey, watermark: kit.watermark, updatedAt: kit.updatedAt.toISOString() };
+}
+
+function jsonRecord(value: Prisma.JsonValue | null): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 function renderFingerprint(payload: unknown): string {
