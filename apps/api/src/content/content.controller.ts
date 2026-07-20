@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Inject,
   NotFoundException,
   Param,
@@ -12,10 +13,12 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import type { FastifyReply } from 'fastify';
 import { CurrentUser } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
+import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { ClipRenderRequestService } from '../exports/clip-render-request.service';
 import { DeadLetterService } from '../queues/dead-letter.service';
@@ -34,6 +37,7 @@ export class ContentController {
     private readonly deadLetters: DeadLetterService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
     private readonly renderRequests: ClipRenderRequestService,
+    private readonly config: ConfigService<Environment, true>,
   ) {}
 
   @Get('videos')
@@ -103,16 +107,12 @@ export class ContentController {
   async videoEvents(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Headers('origin') origin: string | undefined,
     @Res() reply: FastifyReply,
   ): Promise<void> {
     await this.ensureVideoOwnership(id, user.workspaceId);
     reply.hijack();
-    reply.raw.writeHead(200, {
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'X-Accel-Buffering': 'no',
-    });
+    reply.raw.writeHead(200, sseResponseHeaders(origin, this.config.get('CORS_ORIGINS', { infer: true })));
 
     let closed = false;
     let lastStageStatusKey = '';
@@ -327,7 +327,10 @@ export class ContentController {
     @Body() input: UpdateClipTimingDto,
   ): Promise<unknown> {
     if (input.endSeconds <= input.startSeconds) throw new BadRequestException('Clip end must be greater than start');
-    await this.ensureClip(id, user.workspaceId);
+    const clip = await this.ensureClip(id, user.workspaceId);
+    if (clip.video.durationMs && BigInt(Math.round(input.endSeconds * 1000)) > clip.video.durationMs) {
+      throw new BadRequestException('Clip end cannot exceed the source video duration');
+    }
     await this.prisma.clip.update({
       where: { id },
       data: {
@@ -480,6 +483,17 @@ export class ContentController {
     return appendMediaFragment(sourceUrl, startSeconds, endSeconds);
   }
 
+}
+
+export function sseResponseHeaders(origin: string | undefined, allowedOrigins: string[]): Record<string, string> {
+  return {
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'X-Accel-Buffering': 'no',
+    Vary: 'Origin',
+    ...(origin && allowedOrigins.includes(origin) ? { 'Access-Control-Allow-Origin': origin } : {}),
+  };
 }
 
 function pipelineStageCount(stages: string[]): number {

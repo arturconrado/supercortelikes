@@ -42,6 +42,15 @@ def render_clips(
             str(source),
         ]
         filters = []
+        smart_crops = options.get("smartCrops")
+        smart_crop_value = (
+            smart_crops.get(str(clip["id"]))
+            if isinstance(smart_crops, Mapping)
+            else options.get("smartCrop")
+        )
+        smart_crop = _smart_crop_filter(smart_crop_value)
+        if smart_crop:
+            filters.append(smart_crop)
         if caption:
             filters.append("ass='%s'" % _filter_escape(Path(str(caption["ass"]))))
         if watermark_text:
@@ -126,6 +135,36 @@ def _filter_escape(path: Path) -> str:
         .replace("'", "'\\''")
         .replace("[", "\\[")
         .replace("]", "\\]")
+    )
+
+
+def _smart_crop_filter(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, Mapping):
+        raise WorkerError("INVALID_SMART_CROP", "Smart crop geometry is invalid")
+    names = ("width", "height", "x", "y", "targetWidth", "targetHeight")
+    try:
+        geometry = {name: int(value[name]) for name in names}
+    except (KeyError, TypeError, ValueError) as error:
+        raise WorkerError("INVALID_SMART_CROP", "Smart crop geometry is incomplete") from error
+    if (
+        geometry["width"] < 2
+        or geometry["height"] < 2
+        or geometry["targetWidth"] < 2
+        or geometry["targetHeight"] < 2
+        or geometry["x"] < 0
+        or geometry["y"] < 0
+        or any(number > 10_000 for number in geometry.values())
+    ):
+        raise WorkerError("INVALID_SMART_CROP", "Smart crop geometry is outside supported bounds")
+    return "crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos" % (
+        geometry["width"],
+        geometry["height"],
+        geometry["x"],
+        geometry["y"],
+        geometry["targetWidth"],
+        geometry["targetHeight"],
     )
 
 

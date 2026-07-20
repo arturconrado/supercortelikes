@@ -7,6 +7,7 @@ test('editor salva timing, formato, legendas, SEO e solicita export', async ({ p
 
   await page.goto('/clips/clip-1');
   await expect(page.getByRole('heading', { name: 'Gancho forte para Reels' })).toBeVisible();
+  await expect(page.locator('video track[kind="captions"]')).toHaveAttribute('src', /^data:text\/vtt;charset=utf-8,/);
 
   await page.getByLabel('Início (s)').fill('10');
   await page.getByLabel('Fim (s)').fill('35');

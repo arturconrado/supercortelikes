@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { assertRegisterContract, createMockState, loginInBrowser, mockClipbrApi } from './fixtures';
 
 test('cadastro mostra qualidade de senha e envia o contrato correto', async ({ page }) => {
-  const state = await mockClipbrApi(page, createMockState());
+  const state = await mockClipbrApi(page, createMockState({ meDelayMs: 250 }));
   await page.goto('/register');
   await page.getByLabel('Nome').fill('Ana Demo');
   await page.getByLabel('E-mail').fill('ana@clipbr.test');
@@ -24,7 +24,7 @@ test('importa URL, redireciona para vídeo, mostra cortes, preview e editor', as
   await page.getByRole('button', { name: /^Importar$/ }).click();
 
   await expect(page).toHaveURL(/\/library\/video-1$/);
-  await expect(page.getByText('Processamento')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Processamento' })).toBeVisible();
   await expect(page.getByText('Cortes encontrados')).toBeVisible();
   await expect(page.getByText('Gancho forte para Reels')).toBeVisible();
   expect(state.importRequests[0]).toMatchObject({

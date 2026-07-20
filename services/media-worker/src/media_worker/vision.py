@@ -1,6 +1,6 @@
 import statistics
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .config import Settings
 from .errors import DependencyUnavailable, WorkerError
@@ -12,7 +12,12 @@ ASPECTS = {"9:16": (9, 16), "1:1": (1, 1), "4:5": (4, 5), "16:9": (16, 9)}
 
 
 def analyze_focus(
-    path: Path, detector: str, settings: Settings, sample_seconds: float = 0.75
+    path: Path,
+    detector: str,
+    settings: Settings,
+    sample_seconds: float = 0.75,
+    start_seconds: float = 0.0,
+    end_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     try:
         import cv2
@@ -27,16 +32,22 @@ def analyze_focus(
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     step = max(1, round(fps * sample_seconds))
+    start_frame = max(0, round(start_seconds * fps))
+    end_frame = round(end_seconds * fps) if end_seconds is not None else None
+    if start_frame:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     backend, detect = _detector(detector, cv2, settings)
     samples: List[Dict[str, Any]] = []
-    frame_index = 0
+    frame_index = start_frame
     previous_gray = None
     try:
         while True:
+            if end_frame is not None and frame_index > end_frame:
+                break
             ok, frame = capture.read()
             if not ok:
                 break
-            if frame_index % step == 0:
+            if (frame_index - start_frame) % step == 0:
                 boxes = detect(frame)
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 activity = _motion_activity(previous_gray, gray, boxes)
@@ -87,6 +98,29 @@ def analyze_focus(
         },
         "detectionRate": round(len(detected) / len(samples), 4),
         "activeSpeakerMethod": "face-region-motion",
+        "range": {"start": start_seconds, "end": end_seconds},
+    }
+
+
+def smart_crop_geometry(
+    analysis: Dict[str, Any], aspect: str, max_height: int = 720
+) -> Dict[str, int]:
+    if aspect not in ASPECTS:
+        raise WorkerError("INVALID_ASPECT_RATIO", "Unsupported smart reframe aspect ratio")
+    width, height = int(analysis["width"]), int(analysis["height"])
+    focus_x, focus_y = float(analysis["focus"]["x"]), float(analysis["focus"]["y"])
+    ratio_width, ratio_height = ASPECTS[aspect]
+    crop_width, crop_height = crop_dimensions(width, height, ratio_width, ratio_height)
+    crop_x = even_coordinate(max(0, min(width - crop_width, focus_x - crop_width / 2)))
+    crop_y = even_coordinate(max(0, min(height - crop_height, focus_y - crop_height / 2)))
+    target_width, target_height = output_dimensions(ratio_width, ratio_height, max_height)
+    return {
+        "x": crop_x,
+        "y": crop_y,
+        "width": crop_width,
+        "height": crop_height,
+        "targetWidth": target_width,
+        "targetHeight": target_height,
     }
 
 
@@ -99,18 +133,8 @@ def render_reframes(
 ) -> List[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
-    width, height = int(analysis["width"]), int(analysis["height"])
-    focus_x, focus_y = float(analysis["focus"]["x"]), float(analysis["focus"]["y"])
     for aspect in aspect_ratios:
-        ratio_width, ratio_height = ASPECTS[aspect]
-        crop_width, crop_height = crop_dimensions(
-            width, height, ratio_width, ratio_height
-        )
-        crop_x = even(max(0, min(width - crop_width, focus_x - crop_width / 2)))
-        crop_y = even(max(0, min(height - crop_height, focus_y - crop_height / 2)))
-        target_width, target_height = output_dimensions(
-            ratio_width, ratio_height, settings.render_max_height
-        )
+        geometry = smart_crop_geometry(analysis, aspect, settings.render_max_height)
         output = output_dir / ("reframe-%s.mp4" % aspect.replace(":", "x"))
         run_command(
             [
@@ -121,12 +145,12 @@ def render_reframes(
                 "-vf",
                 "crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos"
                 % (
-                    crop_width,
-                    crop_height,
-                    crop_x,
-                    crop_y,
-                    target_width,
-                    target_height,
+                    geometry["width"],
+                    geometry["height"],
+                    geometry["x"],
+                    geometry["y"],
+                    geometry["targetWidth"],
+                    geometry["targetHeight"],
                 ),
                 "-c:v",
                 "libx264",
@@ -168,6 +192,10 @@ def output_dimensions(ratio_width: int, ratio_height: int, base: int = 720) -> T
 
 def even(value: float) -> int:
     return max(2, int(value) // 2 * 2)
+
+
+def even_coordinate(value: float) -> int:
+    return max(0, int(value) // 2 * 2)
 
 
 def _weighted_center(

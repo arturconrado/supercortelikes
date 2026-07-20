@@ -108,6 +108,8 @@ export class MediaStageProcessor {
         crf: this.ffmpegCrf,
         maxHeight: this.renderMaxHeight,
         clipIndex: render.clipIndex,
+        clipOverride: render.clipOverride,
+        ...(render.captionOverride ? { captionOverride: render.captionOverride } : {}),
         clipId: job.clipId,
         exportId: job.exportId,
         sourcePipelineRunId: job.sourcePipelineRunId,
@@ -161,7 +163,12 @@ export class MediaStageProcessor {
     });
   }
 
-  private async clipRenderContext(job: PipelineJob): Promise<{ clipIndex: number; aspectRatio: string }> {
+  private async clipRenderContext(job: PipelineJob): Promise<{
+    clipIndex: number;
+    aspectRatio: string;
+    clipOverride: { clipIndex: number; start: number; end: number };
+    captionOverride?: { template: string; cues: Prisma.JsonValue; style: Prisma.JsonValue | null };
+  }> {
     if (!job.clipId || !job.exportId || !job.sourcePipelineRunId || !job.renderFingerprint) {
       throw new UnrecoverableError('On-demand render jobs require clipId, exportId, sourcePipelineRunId and renderFingerprint');
     }
@@ -169,7 +176,17 @@ export class MediaStageProcessor {
       this.prisma.clip.findMany({
         where: { videoId: job.videoId },
         orderBy: { createdAt: 'asc' },
-        select: { id: true, aspectRatio: true },
+        select: {
+          id: true,
+          aspectRatio: true,
+          startMs: true,
+          endMs: true,
+          captions: {
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+            select: { template: true, cues: true, editedCues: true, style: true },
+          },
+        },
       }),
       this.prisma.export.findFirst({
         where: { id: job.exportId, clipId: job.clipId },
@@ -181,7 +198,26 @@ export class MediaStageProcessor {
     if (exportJob.renderFingerprint && exportJob.renderFingerprint !== job.renderFingerprint) {
       throw new UnrecoverableError('On-demand render job fingerprint no longer matches the export request');
     }
-    return { clipIndex, aspectRatio: exportJob.aspectRatio ?? clips[clipIndex]!.aspectRatio };
+    const clip = clips[clipIndex]!;
+    const caption = clip.captions[0];
+    return {
+      clipIndex,
+      aspectRatio: exportJob.aspectRatio ?? clip.aspectRatio,
+      clipOverride: {
+        clipIndex,
+        start: Number(clip.startMs) / 1000,
+        end: Number(clip.endMs) / 1000,
+      },
+      ...(caption
+        ? {
+            captionOverride: {
+              template: caption.template,
+              cues: caption.editedCues ?? caption.cues,
+              style: caption.style,
+            },
+          }
+        : {}),
+    };
   }
 
   private async persistIngestion(
@@ -441,6 +477,8 @@ export class MediaStageProcessor {
     const targetClip = clips.find((clip) => clip.id === job.clipId);
     if (!targetClip) throw new UnrecoverableError('On-demand export job references an unavailable clip');
     let storedMp4 = false;
+    let storedSrt = false;
+    let storedAss = false;
     for (const stored of value.storage) {
       const filename = stored.key.split('/').at(-1) ?? '';
       const match = /^clip-(\d{3})\.(mp4|srt|ass)$/.exec(filename);
@@ -463,11 +501,22 @@ export class MediaStageProcessor {
         await this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'READY' } });
         storedMp4 = true;
       } else if (clip.captions[0]) {
+        if (match[2] === 'srt') storedSrt = true;
+        if (match[2] === 'ass') storedAss = true;
         await this.prisma.captionTrack.update({
           where: { id: clip.captions[0].id },
           data: match[2] === 'srt' ? { srtKey: stored.key } : { assKey: stored.key },
         });
       }
+    }
+    if (targetClip.captions[0] && (!storedSrt || !storedAss)) {
+      await this.prisma.captionTrack.update({
+        where: { id: targetClip.captions[0].id },
+        data: {
+          ...(!storedSrt ? { srtKey: null } : {}),
+          ...(!storedAss ? { assKey: null } : {}),
+        },
+      });
     }
     if (!storedMp4) throw new UnrecoverableError('On-demand export did not upload the requested MP4');
   }

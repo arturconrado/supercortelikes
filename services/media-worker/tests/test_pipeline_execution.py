@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -149,3 +150,135 @@ def test_rendering_requires_selected_clip_by_default(tmp_path):
     with pytest.raises(WorkerError) as error:
         pipeline.execute("rendering", request())
     assert error.value.code == "FULL_BATCH_RENDER_DISABLED"
+
+
+def test_batch_render_analyzes_only_each_selected_clip_window(tmp_path, monkeypatch):
+    import media_worker.pipeline as module
+
+    pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path, allow_full_batch_render=True))
+    media = tmp_path / "pipeline-123" / "media"
+    media.mkdir(parents=True)
+    (media / "source.mp4").write_bytes(b"video")
+    clips_dir = tmp_path / "pipeline-123" / "clips"
+    clips_dir.mkdir()
+    (clips_dir / "clips.json").write_text(
+        '{"clips": [{"id": "clip-001", "start": 2, "end": 7}, {"id": "clip-002", "start": 100, "end": 105}]}'
+    )
+    captions_dir = tmp_path / "pipeline-123" / "captions"
+    captions_dir.mkdir()
+    (captions_dir / "manifest.json").write_text('{"captions": []}')
+    analyzed_ranges = []
+    captured = {}
+
+    def analyze(_source, _detector, _settings, **options):
+        analyzed_ranges.append((options["start_seconds"], options["end_seconds"]))
+        return {"width": 1920, "height": 1080, "focus": {"x": 960, "y": 540}}
+
+    def renders(_source, clips, _captions, output, _settings, options):
+        captured["options"] = options
+        output.mkdir(parents=True)
+        values = []
+        for clip in clips:
+            rendered = output / (clip["id"] + ".mp4")
+            rendered.write_bytes(b"render")
+            values.append({"clipId": clip["id"], "path": str(rendered), "durationSeconds": 5})
+        return values
+
+    monkeypatch.setattr(module, "analyze_focus", analyze)
+    monkeypatch.setattr(module, "render_clips", renders)
+    body = request("batch-window-render")
+    body.options = {"smartReframe": True, "aspectRatio": "9:16"}
+
+    pipeline.execute("rendering", body)
+
+    assert analyzed_ranges == [(2.0, 7.0), (100.0, 105.0)]
+    assert set(captured["options"]["smartCrops"]) == {"clip-001", "clip-002"}
+
+
+def test_rendering_uses_persisted_timing_and_caption_editor_overrides(tmp_path, monkeypatch):
+    import media_worker.pipeline as module
+
+    pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path))
+    media = tmp_path / "pipeline-123" / "media"
+    media.mkdir(parents=True)
+    (media / "source.mp4").write_bytes(b"video")
+    clips_dir = tmp_path / "pipeline-123" / "clips"
+    clips_dir.mkdir()
+    (clips_dir / "clips.json").write_text('{"clips": [{"id": "clip-001", "start": 0, "end": 5}]}')
+    captions_dir = tmp_path / "pipeline-123" / "captions"
+    captions_dir.mkdir()
+    original_srt = captions_dir / "clip-001.srt"
+    original_ass = captions_dir / "clip-001.ass"
+    original_srt.write_text("original")
+    original_ass.write_text("original")
+    (captions_dir / "manifest.json").write_text(
+        '{"captions": [{"clipId": "clip-001", "srt": "%s", "ass": "%s"}]}'
+        % (original_srt, original_ass)
+    )
+    captured = {}
+
+    def renders(source, clips, captions, output, _settings, _options):
+        captured.update({"source": source, "clips": clips, "captions": captions})
+        output.mkdir(parents=True)
+        rendered = output / "clip-001.mp4"
+        rendered.write_bytes(b"render")
+        return [{"clipId": "clip-001", "path": str(rendered), "durationSeconds": 2.5}]
+
+    monkeypatch.setattr(module, "render_clips", renders)
+    body = request("edited-render")
+    body.options = {
+        "clipIndex": 0,
+        "clipOverride": {"clipIndex": 0, "start": 1.0, "end": 3.5},
+        "captionOverride": {
+            "template": "marketing",
+            "cues": [{"start": 0, "end": 1.5, "text": "Texto editado"}],
+            "style": {"primaryColor": "#ff3366", "position": "middle", "background": True},
+        },
+    }
+
+    pipeline.execute("rendering", body)
+
+    assert captured["clips"][0]["start"] == 1.0
+    assert captured["clips"][0]["end"] == 3.5
+    rendered_ass = Path(captured["captions"][0]["ass"]).read_text()
+    assert "TEXTO" in rendered_ass and "EDITADO" in rendered_ass
+    assert "&H006633FF" in rendered_ass
+
+
+def test_rendering_does_not_restore_original_captions_when_edited_range_has_none(tmp_path, monkeypatch):
+    import media_worker.pipeline as module
+
+    pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path))
+    media = tmp_path / "pipeline-123" / "media"
+    media.mkdir(parents=True)
+    (media / "source.mp4").write_bytes(b"video")
+    clips_dir = tmp_path / "pipeline-123" / "clips"
+    clips_dir.mkdir()
+    (clips_dir / "clips.json").write_text('{"clips": [{"id": "clip-001", "start": 0, "end": 5}]}')
+    captions_dir = tmp_path / "pipeline-123" / "captions"
+    captions_dir.mkdir()
+    (captions_dir / "manifest.json").write_text(
+        '{"captions": [{"clipId": "clip-001", "srt": "original.srt", "ass": "original.ass"}]}'
+    )
+    captured = {}
+
+    def renders(_source, _clips, captions, output, _settings, _options):
+        captured["captions"] = captions
+        output.mkdir(parents=True)
+        rendered = output / "clip-001.mp4"
+        rendered.write_bytes(b"render")
+        return [{"clipId": "clip-001", "path": str(rendered), "durationSeconds": 1}]
+
+    monkeypatch.setattr(module, "render_clips", renders)
+    body = request("empty-caption-render")
+    body.options = {
+        "clipIndex": 0,
+        "clipOverride": {"clipIndex": 0, "start": 4.0, "end": 5.0},
+        "captionOverride": {"cues": [{"start": 0, "end": 1, "text": "fora"}]},
+    }
+
+    pipeline.execute("rendering", body)
+
+    assert captured["captions"] == []
+    manifest = json.loads((tmp_path / "pipeline-123" / "renders" / "manifest.json").read_text())
+    assert manifest["captions"] == []

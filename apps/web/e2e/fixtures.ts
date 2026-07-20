@@ -130,6 +130,7 @@ export type ClipbrMockState = {
   captionPatchRequests: JsonRecord[];
   exportRequests: JsonRecord[];
   retryCount: number;
+  meDelayMs?: number;
 };
 
 export function createMockState(overrides: Partial<ClipbrMockState> = {}): ClipbrMockState {
@@ -171,7 +172,10 @@ export async function mockClipbrApi(page: Page, state: ClipbrMockState = createM
       state.uploadPartRequests.push({ partUrl: path, method });
       return route.fulfill({ status: 200, headers: { ...corsHeaders(), etag: `"etag-${state.uploadPartRequests.length}"` }, body: '' });
     }
-    if (path === '/auth/me') return fulfillJson(route, state.user);
+    if (path === '/auth/me') {
+      if (state.meDelayMs) await new Promise((resolve) => setTimeout(resolve, state.meDelayMs));
+      return fulfillJson(route, state.user);
+    }
     if (path === '/auth/register') {
       const body = requestJson(request.postData());
       state.registerRequests.push(body);

@@ -9,6 +9,7 @@ import { Alert, Badge, Button, Card, EmptyState, Input, Modal, PageHeader, Progr
 import { useCollection, useResource } from '@/hooks/use-resource';
 import { useVideoEvents, type PipelineEventSnapshot } from '@/hooks/use-video-events';
 import { api } from '@/lib/api';
+import { captionTrackDataUrl } from '@/lib/captions';
 import type { Clip, Video } from '@/lib/types';
 import { cn, formatBytes, formatDate, formatDuration } from '@/lib/utils';
 
@@ -207,7 +208,7 @@ export default function VideoPage() {
         <Card className="overflow-hidden">
           <div className="aspect-video bg-black">
             {video.playbackUrl ? (
-              <video src={video.playbackUrl} controls className="h-full w-full"/>
+              <video src={video.playbackUrl} controls crossOrigin="anonymous" className="h-full w-full"/>
             ) : (
               <div className="grid h-full place-items-center">
                 <Film className="size-10 text-zinc-800"/>
@@ -395,8 +396,8 @@ export default function VideoPage() {
       >
         {previewClip?.renderUrl || previewClip?.playbackUrl ? (
           <div className="overflow-hidden rounded-2xl bg-black">
-            <video src={previewClip.renderUrl ?? previewClip.playbackUrl} poster={previewClip.thumbnailUrl} controls className="mx-auto max-h-[70vh] w-full object-contain">
-              {previewClip.captionsUrl && <track kind="captions" src={previewClip.captionsUrl} srcLang="pt" label="Português" default/>}
+            <video src={previewClip.renderUrl ?? previewClip.playbackUrl} poster={previewClip.thumbnailUrl} controls crossOrigin="anonymous" className="mx-auto max-h-[70vh] w-full object-contain">
+              {captionTrackDataUrl(previewClip.captions?.[0]?.cues) && <track kind="captions" src={captionTrackDataUrl(previewClip.captions?.[0]?.cues)} srcLang="pt" label="Português" default/>}
             </video>
           </div>
         ) : (

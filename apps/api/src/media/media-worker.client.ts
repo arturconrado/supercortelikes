@@ -24,6 +24,8 @@ const stageResponseSchema = z.object({
   metrics: z.record(z.string(), z.unknown()),
 });
 
+const cleanupResponseSchema = z.object({ removed: z.number().int().nonnegative(), requested: z.number().int().nonnegative() });
+
 export type MediaStageResponse = z.infer<typeof stageResponseSchema>;
 
 @Injectable()
@@ -63,39 +65,60 @@ export class MediaWorkerClient {
     });
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
-    let response: Response;
-    try {
-      response = await fetch(`${this.url}${path}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeout),
-      });
-    } catch {
-      throw new ServiceUnavailableException('Media worker is unavailable');
-    }
-    let payload: unknown;
-    if (typeof response.text === 'function') {
-      const text = await response.text();
-      try {
-        payload = text ? JSON.parse(text) : {};
-      } catch {
-        payload = { error: { code: 'MEDIA_WORKER_NON_JSON_RESPONSE', message: text.slice(0, 200) || 'Media worker returned a non-JSON response' } };
-      }
-    } else {
-      payload = await response.json();
-    }
-    if (!response.ok) {
-      const error = payload as { error?: { code?: string; message?: string } };
-      throw Object.assign(new Error(error.error?.message ?? 'Media worker stage failed'), {
-        code: error.error?.code ?? 'MEDIA_WORKER_FAILED',
-      });
-    }
-    if (path.startsWith('/v1/stages/')) return stageResponseSchema.parse(payload) as T;
-    return payload as T;
+  async cleanupWorkspaces(pipelineRunIds: string[]): Promise<{ removed: number; requested: number }> {
+    if (!pipelineRunIds.length) return { removed: 0, requested: 0 };
+    const response = await this.post('/v1/workspaces/cleanup', { pipelineRunIds: [...new Set(pipelineRunIds)] });
+    return cleanupResponseSchema.parse(response);
   }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let response: Response;
+      try {
+        response = await fetch(`${this.url}${path}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.timeout),
+        });
+      } catch (cause) {
+        if (attempt < 2) {
+          await retryDelay(500);
+          continue;
+        }
+        throw new ServiceUnavailableException('Media worker is unavailable', { cause });
+      }
+      let payload: unknown;
+      if (typeof response.text === 'function') {
+        const text = await response.text();
+        try {
+          payload = text ? JSON.parse(text) : {};
+        } catch {
+          payload = { error: { code: 'MEDIA_WORKER_NON_JSON_RESPONSE', message: text.slice(0, 200) || 'Media worker returned a non-JSON response' } };
+        }
+      } else {
+        payload = await response.json();
+      }
+      if (!response.ok) {
+        const error = payload as { error?: { code?: string; message?: string } };
+        if (attempt < 2 && [502, 503, 504].includes(response.status)) {
+          await retryDelay(500);
+          continue;
+        }
+        throw Object.assign(new Error(error.error?.message ?? 'Media worker stage failed'), {
+          code: error.error?.code ?? 'MEDIA_WORKER_FAILED',
+        });
+      }
+      if (path.startsWith('/v1/stages/')) return stageResponseSchema.parse(payload) as T;
+      return payload as T;
+    }
+    throw new ServiceUnavailableException('Media worker is unavailable');
+  }
+}
+
+function retryDelay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

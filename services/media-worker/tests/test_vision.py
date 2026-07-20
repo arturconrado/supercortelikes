@@ -1,4 +1,4 @@
-from media_worker.vision import crop_dimensions, even, output_dimensions
+from media_worker.vision import crop_dimensions, even, output_dimensions, smart_crop_geometry
 
 
 def test_crop_dimensions_preserve_requested_ratio_inside_source():
@@ -13,3 +13,19 @@ def test_crop_dimensions_preserve_requested_ratio_inside_source():
 def test_even_never_returns_odd_or_zero():
     assert even(0) == 2
     assert even(607) == 606
+
+
+def test_smart_crop_geometry_targets_only_the_requested_output_ratio():
+    geometry = smart_crop_geometry(
+        {"width": 1920, "height": 1080, "focus": {"x": 1500, "y": 540}},
+        "9:16",
+        720,
+    )
+    assert geometry == {
+        "x": 1196,
+        "y": 0,
+        "width": 606,
+        "height": 1080,
+        "targetWidth": 720,
+        "targetHeight": 1280,
+    }

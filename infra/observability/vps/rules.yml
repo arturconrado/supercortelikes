@@ -42,12 +42,12 @@ groups:
           summary: Fila de render acumulada
 
       - alert: PicashortsLongRunningRender
-        expr: clipbr_export_jobs{status="PROCESSING"} > 0
-        for: 30m
+        expr: clipbr_oldest_processing_export_age_seconds > 1800
+        for: 5m
         labels:
           severity: warning
         annotations:
-          summary: Export/render processando há muito tempo
+          summary: Export/render está processando há mais de 30 minutos
 
       - alert: PicashortsContainerRestarting
         expr: increase(container_start_time_seconds{name!=""}[10m]) > 0

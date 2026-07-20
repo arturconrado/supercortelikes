@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const aws = vi.hoisted(() => ({
   clients: [] as any[], send: vi.fn(), uploadDone: vi.fn().mockResolvedValue({ ETag: '"etag"' }), signed: vi.fn().mockResolvedValue('http://localhost:9000/signed'),
@@ -8,7 +8,9 @@ const aws = vi.hoisted(() => ({
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class { send = aws.send; options: any; constructor(options: any) { this.options = options; aws.clients.push(this); } },
   DeleteObjectCommand: class { constructor(public input: any) {} },
+  DeleteObjectsCommand: class { constructor(public input: any) {} },
   GetObjectCommand: class { constructor(public input: any) {} },
+  ListObjectsV2Command: class { constructor(public input: any) {} },
 }));
 vi.mock('@aws-sdk/lib-storage', () => ({ Upload: class { constructor(public options: any) {} done = aws.uploadDone; } }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: aws.signed }));
@@ -16,6 +18,13 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: aws.signed }));
 import { R2StorageService } from '../src/storage/r2-storage.service';
 
 describe('R2StorageService release endpoints', () => {
+  beforeEach(() => {
+    aws.clients.length = 0;
+    aws.send.mockReset();
+    aws.uploadDone.mockClear();
+    aws.signed.mockReset().mockResolvedValue('http://localhost:9000/signed');
+  });
+
   it('uses the internal endpoint for writes and the public endpoint for signed downloads', async () => {
     const values: Record<string, unknown> = {
       S3_BUCKET: 'clipbr-videos', UPLOAD_PART_SIZE_BYTES: 5 * 1024 * 1024, UPLOAD_QUEUE_SIZE: 2,
@@ -40,5 +49,23 @@ describe('R2StorageService release endpoints', () => {
       ResponseContentType: 'video/mp4',
     });
     expect(String(signedCommand.input?.ResponseContentDisposition)).toContain("filename*=UTF-8''Caf%C3%A9-%20corte%20final.mp4");
+  });
+
+  it('deletes every paginated object under an explicit directory prefix', async () => {
+    const values: Record<string, unknown> = {
+      S3_BUCKET: 'clipbr-videos', UPLOAD_PART_SIZE_BYTES: 5 * 1024 * 1024, UPLOAD_QUEUE_SIZE: 2,
+      S3_ENDPOINT: 'http://minio:9000', S3_PUBLIC_ENDPOINT: 'http://localhost:9000', S3_REGION: 'us-east-1',
+      S3_FORCE_PATH_STYLE: true, S3_ACCESS_KEY: 'access', S3_SECRET_KEY: 'secret',
+    };
+    const service = new R2StorageService({ get: (key: string) => values[key] } as any);
+    aws.send
+      .mockResolvedValueOnce({ Contents: [{ Key: 'exports/video/one.mp4' }], IsTruncated: true, NextContinuationToken: 'next' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ Contents: [{ Key: 'exports/video/two.srt' }], IsTruncated: false })
+      .mockResolvedValueOnce({});
+
+    await expect(service.deletePrefix('/exports/video/')).resolves.toBe(2);
+    expect(aws.send).toHaveBeenCalledTimes(4);
+    await expect(service.deletePrefix('unsafe-object')).rejects.toThrow('directory prefix');
   });
 });

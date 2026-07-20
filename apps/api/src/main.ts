@@ -8,6 +8,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { AppModule } from './app.module';
 import { validateEnvironment } from './config/env';
 import { Logger } from 'nestjs-pino';
+import { rateLimitKey, routeLimit } from './common/rate-limit';
 
 const DEFAULT_MAX_VIDEO_BYTES = 5_368_709_120;
 const MULTIPART_OVERHEAD_BYTES = 16 * 1024 * 1024;
@@ -47,7 +48,7 @@ async function bootstrap(): Promise<void> {
   await app.register(rateLimit, {
     max: (request: { url: string; method: string }) => routeLimit(request.url, request.method, environment.RATE_LIMIT_MAX),
     timeWindow: '1 minute',
-    keyGenerator: (request) => request.ip,
+    keyGenerator: (request) => rateLimitKey(request.url, request.ip),
   });
   app.enableCors({
     origin: environment.CORS_ORIGINS,
@@ -62,16 +63,4 @@ async function bootstrap(): Promise<void> {
 }
 
 void bootstrap();
-
-function routeLimit(url: string, method: string, fallback: number): number {
-  const path = url.split('?', 1)[0] ?? url;
-  if (path.startsWith('/auth/login') || path.startsWith('/auth/register')) return 20;
-  if (path.startsWith('/auth/password/forgot') || path.startsWith('/auth/email/verification')) return 10;
-  if (path.startsWith('/billing/checkout')) return 30;
-  if (path.startsWith('/api/mercado-pago/webhook')) return 600;
-  if (path.startsWith('/videos/presigned-upload')) return 60;
-  if (path.includes('/upload-parts')) return 180;
-  if (method === 'DELETE' && path.startsWith('/videos/')) return 60;
-  return fallback;
-}
 import './instrumentation';

@@ -32,5 +32,6 @@ export interface ObjectStorage {
   metadata(key: string): Promise<StoredObjectMetadata>;
   upload(key: string, body: Readable, contentType: string): Promise<StoredObject>;
   delete(key: string): Promise<void>;
+  deletePrefix(prefix: string): Promise<number>;
   downloadUrl(key: string, expiresInSeconds?: number, options?: DownloadUrlOptions): Promise<string>;
 }

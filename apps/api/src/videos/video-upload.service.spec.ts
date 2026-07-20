@@ -103,6 +103,17 @@ class MemoryStorage implements ObjectStorage {
     this.objects.delete(key);
   }
 
+  async deletePrefix(prefix: string): Promise<number> {
+    let deleted = 0;
+    for (const key of this.objects.keys()) {
+      if (key.startsWith(prefix)) {
+        this.objects.delete(key);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   async downloadUrl(key: string): Promise<string> {
     return `https://storage.test/${key}`;
   }

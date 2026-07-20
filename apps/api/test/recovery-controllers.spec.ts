@@ -145,7 +145,13 @@ describe('project and content controllers', () => {
       seoMetadata: { upsert: vi.fn().mockResolvedValue({}) },
     };
     const storage = { downloadUrl: vi.fn(async (key: string) => `https://storage.test/${key}`) };
-    const controller = new ContentController(prisma, { redrive: vi.fn() } as any, storage as any, { request: vi.fn() } as any);
+    const controller = new ContentController(
+      prisma,
+      { redrive: vi.fn() } as any,
+      storage as any,
+      { request: vi.fn() } as any,
+      { get: vi.fn().mockReturnValue(['http://localhost:3000']) } as any,
+    );
     expect((await controller.videos(user)) as any).toMatchObject({ total: 1, items: [{ clipsCount: 1 }] });
     expect((await controller.videoClips(user, '55555555-5555-4555-8555-555555555555')) as any[]).toMatchObject([{ hashtags: ['#clipbr'], downloadUrl: 'https://storage.test/exports/video/clip.mp4' }]);
     expect(await controller.clip(user, clip.id)).toMatchObject({ durationSeconds: 10 });
@@ -211,7 +217,7 @@ describe('health, exports, and media contracts', () => {
     expect(await client.seo('A transcript long enough for SEO')).toMatchObject({ hashtags: ['#clipbr'] });
     fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({ error: { code: 'MEDIA_DOWN', message: 'down' } }) });
     await expect(client.execute(job, undefined, {})).rejects.toMatchObject({ code: 'MEDIA_DOWN' });
-    fetchMock.mockRejectedValueOnce(new Error('network'));
+    fetchMock.mockRejectedValueOnce(new Error('network')).mockRejectedValueOnce(new Error('network'));
     await expect(client.execute(job, undefined, {})).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 

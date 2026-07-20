@@ -7,9 +7,11 @@ import { VideoUploadService } from './video-upload.service';
 import { VideosController } from './videos.controller';
 import { VideoImportService } from './video-import.service';
 import { DirectUploadService } from './direct-upload.service';
+import { MediaModule } from '../media/media.module';
+import { VideoLifecycleService } from './video-lifecycle.service';
 
 @Module({
-  imports: [StorageModule, UsageModule],
+  imports: [StorageModule, UsageModule, MediaModule],
   controllers: [VideosController],
   providers: [
     PrismaVideoRepository,
@@ -17,6 +19,8 @@ import { DirectUploadService } from './direct-upload.service';
     VideoUploadService,
     VideoImportService,
     DirectUploadService,
+    VideoLifecycleService,
   ],
+  exports: [VideoLifecycleService],
 })
 export class VideosModule {}

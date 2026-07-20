@@ -19,6 +19,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Alert, Badge, Button, Card, Input, Label, PageHeader, Skeleton, StatusBadge, Textarea } from '@/components/ui';
 import { useResource } from '@/hooks/use-resource';
 import { api } from '@/lib/api';
+import { captionTrackDataUrl } from '@/lib/captions';
 import type { Clip } from '@/lib/types';
 import { cn, formatDuration } from '@/lib/utils';
 
@@ -256,8 +257,8 @@ export default function ClipViewerPage() {
         <Card className={cn('overflow-hidden bg-black', activeTab !== 'preview' && 'hidden lg:block')}>
           <div className="relative mx-auto aspect-[9/16] max-h-[680px] bg-black">
             {source ? (
-              <video src={source} poster={clip.thumbnailUrl} controls className="h-full w-full object-contain">
-                {clip.captionsUrl && <track kind="captions" src={clip.captionsUrl} srcLang="pt" label="Português" default/>}
+              <video src={source} poster={clip.thumbnailUrl} controls crossOrigin="anonymous" className="h-full w-full object-contain">
+                {captionTrackDataUrl(clip.captions?.[0]?.cues) && <track kind="captions" src={captionTrackDataUrl(clip.captions?.[0]?.cues)} srcLang="pt" label="Português" default/>}
               </video>
             ) : (
               <div className="grid h-full place-items-center text-center">

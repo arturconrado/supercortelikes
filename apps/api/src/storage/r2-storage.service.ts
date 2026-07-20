@@ -3,9 +3,11 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -116,6 +118,30 @@ export class R2StorageService implements ObjectStorage {
 
   async delete(key: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    const normalized = prefix.replace(/^\/+/, '');
+    if (!normalized || !normalized.endsWith('/')) throw new Error('Object prefix deletion requires a non-empty directory prefix');
+    let continuationToken: string | undefined;
+    let deleted = 0;
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: normalized,
+        ContinuationToken: continuationToken,
+      }));
+      const objects = (page.Contents ?? []).flatMap((item) => item.Key ? [{ Key: item.Key }] : []);
+      if (objects.length) {
+        await this.client.send(new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: objects, Quiet: true },
+        }));
+        deleted += objects.length;
+      }
+      continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (continuationToken);
+    return deleted;
   }
 
   async downloadUrl(key: string, expiresInSeconds = 900, options: DownloadUrlOptions = {}): Promise<string> {

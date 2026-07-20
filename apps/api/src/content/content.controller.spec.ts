@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import { ContentController } from './content.controller';
+import { ContentController, sseResponseHeaders } from './content.controller';
 
 const user = {
   userId: '11111111-1111-4111-8111-111111111111',
@@ -28,6 +28,7 @@ const clip = {
     workspaceId: user.workspaceId,
     storageKey: 'videos/video/source.mp4',
     sourceUrl: null,
+    durationMs: 20_000n,
   },
 };
 
@@ -104,11 +105,26 @@ function makeController(db = prisma()) {
     db,
     storage,
     renderRequests,
-    controller: new ContentController(db, { redrive: vi.fn().mockResolvedValue('event') } as any, storage as any, renderRequests as any),
+    controller: new ContentController(
+      db,
+      { redrive: vi.fn().mockResolvedValue('event') } as any,
+      storage as any,
+      renderRequests as any,
+      { get: vi.fn().mockReturnValue(['https://picashorts.com']) } as any,
+    ),
   };
 }
 
 describe('ContentController', () => {
+  it('preserves CORS headers when the SSE response takes over the raw socket', () => {
+    expect(sseResponseHeaders('https://picashorts.com', ['https://picashorts.com'])).toMatchObject({
+      'Access-Control-Allow-Origin': 'https://picashorts.com',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      Vary: 'Origin',
+    });
+    expect(sseResponseHeaders('https://evil.test', ['https://picashorts.com'])).not.toHaveProperty('Access-Control-Allow-Origin');
+  });
+
   it('exposes pipeline, transcript and video clip state', async () => {
     const { controller } = makeController();
     await expect(controller.videoPipeline(user, clip.videoId)).resolves.toMatchObject({ progress: 17, run: { openDeadLetters: [{ id: 'dlq' }] } });
@@ -140,6 +156,7 @@ describe('ContentController', () => {
     expect(db.seoMetadata.upsert).toHaveBeenCalled();
     await expect(controller.updateTiming(user, clip.id, { startSeconds: 2, endSeconds: 12 })).resolves.toMatchObject({ id: clip.id });
     await expect(controller.updateTiming(user, clip.id, { startSeconds: 12, endSeconds: 2 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.updateTiming(user, clip.id, { startSeconds: 2, endSeconds: 21 })).rejects.toBeInstanceOf(BadRequestException);
     await expect(controller.updateCaptions(user, clip.id, { cues: [{ text: 'Olá' }], language: 'pt' })).resolves.toMatchObject({ id: clip.id });
     db.captionTrack.findFirst.mockResolvedValueOnce({ id: 'caption' });
     await expect(controller.updateCaptions(user, clip.id, { cues: [{ text: 'Editado' }] })).resolves.toMatchObject({ id: clip.id });

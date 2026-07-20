@@ -45,6 +45,11 @@ export class MetricsService {
     labelNames: ['status'] as const,
     registers: [this.registry],
   });
+  readonly oldestProcessingExportAge = new Gauge({
+    name: 'clipbr_oldest_processing_export_age_seconds',
+    help: 'Age in seconds of the oldest export that is currently processing',
+    registers: [this.registry],
+  });
   readonly renderRequests = new Counter({
     name: 'clipbr_render_requests_total',
     help: 'On-demand render/export requests by result',

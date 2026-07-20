@@ -18,7 +18,7 @@ const nextConfig: NextConfig = {
               "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob: https:",
-              "media-src 'self' blob: https:",
+              "media-src 'self' blob: data: https:",
               "connect-src 'self' https: http://localhost:*",
               "frame-src https://challenges.cloudflare.com",
               "object-src 'none'",

@@ -208,3 +208,23 @@ def test_completed_export_workspace_is_removed_when_retention_is_disabled(tmp_pa
     ))
     assert result == {"status": "succeeded"}
     assert not run.exists()
+
+
+def test_authenticated_workspace_cleanup_removes_only_requested_pipeline_directories(tmp_path, monkeypatch):
+    worker_app = import_module("media_worker.app")
+    first = tmp_path / "pipeline-cleanup-one"
+    second = tmp_path / "pipeline-cleanup-two"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.setattr(worker_app, "settings", replace(worker_app.settings, data_dir=tmp_path, internal_token="cleanup-token"))
+
+    response = client.post(
+        "/v1/workspaces/cleanup",
+        headers={"Authorization": "Bearer cleanup-token"},
+        json={"pipelineRunIds": ["pipeline-cleanup-one"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"requested": 1, "removed": 1}
+    assert not first.exists()
+    assert second.exists()

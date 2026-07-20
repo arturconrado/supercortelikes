@@ -5,6 +5,8 @@ from media_worker.captions import (
     render_srt,
     srt_timestamp,
     TEMPLATES,
+    caption_style,
+    normalize_cues,
 )
 
 
@@ -25,3 +27,24 @@ def test_caption_output_contains_word_timing_and_karaoke():
     assert "Olá mundo" in srt
     assert "{\\k40}OLÁ" in ass
     assert "{\\k60}MUNDO" in ass
+
+
+def test_editor_style_and_text_cues_are_applied_to_ass_output():
+    cues = normalize_cues([{"start": 0.2, "end": 1.2, "text": "Texto editado"}], 2.0)
+    style = caption_style("marketing", {
+        "primaryColor": "#ff3366",
+        "highlightColor": "#33ff99",
+        "fontSize": 44,
+        "position": "middle",
+        "background": True,
+    })
+    ass = render_ass(cues, style, "marketing")
+    assert "&H006633FF" in ass
+    assert "&H0099FF33" in ass
+    assert "Poppins ExtraBold,44" in ass
+    assert ",3,0,0,5,70,70,0,1" in ass
+    assert "TEXTO" in ass and "EDITADO" in ass
+
+    shifted = normalize_cues([{"start": 0, "end": 1, "text": "Ajustado"}], 2.0, -0.2)
+    assert shifted[0]["start"] == 0
+    assert shifted[0]["end"] == 0.8

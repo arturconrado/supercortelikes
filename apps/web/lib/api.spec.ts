@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, clearSession, storeSession, unwrap, unwrapList } from './api';
+import { api, clearSession, storedUser, storeSession, unwrap, unwrapList } from './api';
 
 describe('API client', () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -13,8 +13,42 @@ describe('API client', () => {
   it('persists and clears authenticated sessions', () => {
     storeSession({ accessToken: 'token', refreshToken: 'refresh', user: { id: '1', name: 'Ana', email: 'ana@example.com' } });
     expect(localStorage.getItem('clipbr.access-token')).toBe('token');
+    expect(storedUser()).toEqual({ id: '1', name: 'Ana', email: 'ana@example.com' });
     clearSession();
     expect(localStorage.getItem('clipbr.access-token')).toBeNull();
+  });
+
+  it('renews an expired access token once and retries the protected request', async () => {
+    storeSession({ accessToken: 'expired', refreshToken: 'refresh-1', user: { id: '1', name: 'Ana', email: 'ana@example.com' } });
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'expired' }), { status: 401, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tokens: { accessToken: 'renewed', refreshToken: 'refresh-2' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'video-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(api('/videos/video-1')).resolves.toEqual({ id: 'video-1' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(new Headers(fetchMock.mock.calls[2]![1]?.headers).get('Authorization')).toBe('Bearer renewed');
+    expect(localStorage.getItem('clipbr.refresh-token')).toBe('refresh-2');
+  });
+
+  it('does not erase a valid session when login itself returns unauthorized', async () => {
+    storeSession({ accessToken: 'token', refreshToken: 'refresh', user: { id: '1', name: 'Ana', email: 'ana@example.com' } });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ message: 'invalid' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(api('/auth/login', { method: 'POST' })).rejects.toEqual(expect.objectContaining({ status: 401 }));
+    expect(localStorage.getItem('clipbr.access-token')).toBe('token');
+  });
+
+  it('clears the session when a protected request remains unauthorized after refresh', async () => {
+    storeSession({ accessToken: 'expired', refreshToken: 'refresh', user: { id: '1', name: 'Ana', email: 'ana@example.com' } });
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tokens: { accessToken: 'renewed', refreshToken: 'refresh-2' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    await expect(api('/videos/video-1')).rejects.toEqual(expect.objectContaining({ status: 401 }));
+    expect(localStorage.getItem('clipbr.access-token')).toBeNull();
+    expect(localStorage.getItem('clipbr.refresh-token')).toBeNull();
   });
 
   it('adds the bearer token and turns error responses into ApiError', async () => {

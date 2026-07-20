@@ -36,7 +36,20 @@ describe('MediaStageProcessor persistence', () => {
     }
 
     const segment = { id: 'segment', startMs: 0n, endMs: 20_000n };
-    const clip = { id: 'clip', videoId: 'video', aspectRatio: '9:16', captions: [{ id: 'caption' }] };
+    const clip = {
+      id: 'clip',
+      videoId: 'video',
+      aspectRatio: '9:16',
+      startMs: 200n,
+      endMs: 19_800n,
+      captions: [{
+        id: 'caption',
+        template: 'marketing',
+        cues: [{ start: 0, end: 1, words: [{ word: 'original', start: 0, end: 1 }] }],
+        editedCues: [{ start: 0, end: 1, text: 'edited' }],
+        style: { primaryColor: '#ff3366' },
+      }],
+    };
     prisma = {
       video: { findUnique: vi.fn().mockResolvedValue({ id: 'video', storageBucket: 'bucket', storageKey: 'videos/source.mp4', sourceUrl: null }), update: vi.fn() },
       transcript: { upsert: vi.fn() },
@@ -130,7 +143,17 @@ describe('MediaStageProcessor persistence', () => {
     expect(prisma.export.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'export' }, data: expect.objectContaining({ status: 'READY' }) }));
     expect(prisma.clip.update).toHaveBeenCalled();
     expect(media.execute).toHaveBeenCalledWith(expect.objectContaining({ stage: 'transcription' }), expect.anything(), expect.objectContaining({ diarize: false, batchSize: 1 }), undefined);
-    expect(media.execute).toHaveBeenCalledWith(expect.objectContaining({ stage: 'rendering' }), expect.anything(), expect.objectContaining({ clipIndex: 0, maxHeight: 720 }), undefined);
+    expect(media.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'rendering' }),
+      expect.anything(),
+      expect.objectContaining({
+        clipIndex: 0,
+        maxHeight: 720,
+        clipOverride: { clipIndex: 0, start: 0.2, end: 19.8 },
+        captionOverride: expect.objectContaining({ template: 'marketing', cues: [{ start: 0, end: 1, text: 'edited' }] }),
+      }),
+      undefined,
+    );
   });
 
   it('uses source URLs and rejects missing videos or unsafe artifacts', async () => {
@@ -145,6 +168,20 @@ describe('MediaStageProcessor persistence', () => {
     media.execute.mockResolvedValueOnce({ artifacts: [{ kind: 'whisperx-transcript', path: outside }], metrics: {} });
     await expect(processor.process(job('transcription'))).rejects.toMatchObject({ code: 'ARTIFACT_PATH_REJECTED' });
     await rm(outside, { force: true });
+  });
+
+  it('clears stale caption files when the edited render has no valid captions', async () => {
+    media.execute.mockResolvedValueOnce({
+      artifacts: [],
+      metrics: { storage: [{ key: 'exports/video/export/clip-001.mp4', bytes: 100, mediaType: 'video/mp4' }] },
+    });
+
+    await processor.process(renderJob('exports'));
+
+    expect(prisma.captionTrack.update).toHaveBeenCalledWith({
+      where: { id: 'caption' },
+      data: { srtKey: null, assKey: null },
+    });
   });
 
   it('does not retry YouTube auth/bot-check import failures', async () => {

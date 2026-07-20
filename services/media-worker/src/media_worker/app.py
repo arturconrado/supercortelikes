@@ -16,7 +16,7 @@ from .errors import WorkerError
 from .logging_config import configure_logging
 from .memory import release_runtime_memory
 from .metrics import metrics_payload, observe_stage
-from .models import PipelineRequest, ReframeRequest, SeoRequest
+from .models import CleanupWorkspacesRequest, PipelineRequest, ReframeRequest, SeoRequest
 from .pipeline import Pipeline, STAGES
 from .seo import generate_seo
 
@@ -253,6 +253,21 @@ def _run_reframe(body: ReframeRequest):
                 release_runtime_memory()
 
 
+def _cleanup_workspaces(body: CleanupWorkspacesRequest) -> Dict[str, int]:
+    root = settings.data_dir.resolve()
+    removed = 0
+    for pipeline_run_id in body.pipeline_run_ids:
+        target = (root / pipeline_run_id).resolve()
+        if root not in target.parents:
+            raise WorkerError(
+                "WORKSPACE_PATH_REJECTED", "Pipeline workspace escaped the data directory"
+            )
+        if target.exists():
+            shutil.rmtree(target)
+            removed += 1
+    return {"requested": len(body.pipeline_run_ids), "removed": removed}
+
+
 @app.post("/v1/stages/{stage}", dependencies=[Depends(authorize)])
 async def execute_stage(stage: str, body: PipelineRequest) -> Dict[str, Any]:
     if stage not in STAGES:
@@ -267,6 +282,11 @@ async def execute_stage(stage: str, body: PipelineRequest) -> Dict[str, Any]:
 async def execute_reframe(body: ReframeRequest) -> Dict[str, Any]:
     result = await run_in_threadpool(_run_reframe, body)
     return result.model_dump(mode="json", by_alias=True)
+
+
+@app.post("/v1/workspaces/cleanup", dependencies=[Depends(authorize)])
+async def cleanup_workspaces(body: CleanupWorkspacesRequest) -> Dict[str, int]:
+    return await run_in_threadpool(_cleanup_workspaces, body)
 
 
 @app.post("/v1/seo", dependencies=[Depends(authorize)])

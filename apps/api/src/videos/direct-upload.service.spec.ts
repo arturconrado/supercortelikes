@@ -62,6 +62,7 @@ function fixture() {
     metadata: vi.fn().mockResolvedValue({ bytes: 10n, contentType: 'video/mp4', etag: 'head-etag' }),
     upload: vi.fn().mockResolvedValue({ etag: 'legacy' }),
     delete: vi.fn().mockResolvedValue(undefined),
+    deletePrefix: vi.fn().mockResolvedValue(0),
     downloadUrl: vi.fn().mockResolvedValue('https://storage.test/download'),
   };
   const repository = {
@@ -74,7 +75,8 @@ function fixture() {
     UPLOAD_ALLOWED_MIME_TYPES: ['video/mp4'],
   } as Environment);
   const usage = { assertCanUpload: vi.fn().mockResolvedValue({}) };
-  return { service: new DirectUploadService(prisma as never, storage, repository as never, config, usage as never), prisma, storage, repository, attempt, video, usage };
+  const lifecycle = { remove: vi.fn().mockResolvedValue(undefined) };
+  return { service: new DirectUploadService(prisma as never, storage, repository as never, config, usage as never, lifecycle as never), prisma, storage, repository, attempt, video, usage, lifecycle };
 }
 
 describe('DirectUploadService', () => {
@@ -136,5 +138,11 @@ describe('DirectUploadService', () => {
     expect(prisma.uploadAttempt.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }));
     prisma.uploadAttempt.findFirst.mockResolvedValue({ ...fixture().attempt, status: 'COMPLETED' } as never);
     await expect(service.abort(videoId, actor)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('delegates complete video cleanup with tenant ownership', async () => {
+    const { service, lifecycle } = fixture();
+    await service.remove(videoId, actor);
+    expect(lifecycle.remove).toHaveBeenCalledWith(videoId, actor.workspaceId);
   });
 });

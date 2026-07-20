@@ -11,7 +11,7 @@ test('vídeo com falha mostra erro de pipeline e permite retry', async ({ page }
 
   await page.goto('/library/video-1');
   await expect(page.getByText('O processamento encontrou um erro.')).toBeVisible();
-  await expect(page.getByText('Transcrição falhou.')).toBeVisible();
+  await expect(page.getByText('Transcrição falhou.', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: /Tentar novamente/i }).click();
   await expect.poll(() => state.retryCount).toBe(1);

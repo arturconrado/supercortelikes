@@ -3,7 +3,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from .captions import build_caption_files
+from .captions import build_caption_files, caption_style, normalize_cues, render_ass, render_srt
 from .clips import find_clips
 from .config import Settings
 from .errors import WorkerError
@@ -21,7 +21,7 @@ from .scoring import score_all
 from .segmentation import semantic_segments
 from .storage import upload_file
 from .transcription import transcribe
-from .vision import analyze_focus, render_reframes
+from .vision import analyze_focus, render_reframes, smart_crop_geometry
 from .workspace import Workspace, artifact
 
 
@@ -267,39 +267,89 @@ class Pipeline:
         clips = source_workspace.read_json("clips/clips.json")["clips"]
         selected_indexes = self._selected_clip_indexes(request, len(clips))
         selected_clips = [clips[index] for index in selected_indexes]
+        caption_time_offset = 0.0
+        clip_override = request.options.get("clipOverride")
+        if isinstance(clip_override, dict):
+            override_index = int(clip_override.get("clipIndex", -1))
+            if len(selected_indexes) != 1 or override_index != selected_indexes[0]:
+                raise WorkerError("INVALID_CLIP_OVERRIDE", "Clip timing override does not match the selected clip")
+            start = float(clip_override.get("start", -1))
+            end = float(clip_override.get("end", -1))
+            if start < 0 or end <= start:
+                raise WorkerError("INVALID_CLIP_OVERRIDE", "Clip timing override is invalid")
+            caption_time_offset = float(selected_clips[0]["start"]) - start
+            selected_clips = [{**selected_clips[0], "start": start, "end": end}]
         selected_clip_ids = {str(clip["id"]) for clip in selected_clips}
         captions = [
             caption
             for caption in source_workspace.read_json("captions/manifest.json")["captions"]
             if str(caption.get("clipId")) in selected_clip_ids
         ]
-        render_source = source
+        caption_override = request.options.get("captionOverride")
+        if isinstance(caption_override, dict) and len(selected_clips) == 1:
+            clip = selected_clips[0]
+            duration = float(clip["end"]) - float(clip["start"])
+            cues = normalize_cues(caption_override.get("cues"), duration, caption_time_offset)
+            captions = []
+            if cues:
+                override_dir = workspace.path("captions")
+                override_dir.mkdir(parents=True, exist_ok=True)
+                srt_path = override_dir / (str(clip["id"]) + ".srt")
+                ass_path = override_dir / (str(clip["id"]) + ".ass")
+                template_name = str(caption_override.get("template") or "podcast")
+                overrides = caption_override.get("style") if isinstance(caption_override.get("style"), dict) else {}
+                srt_path.write_text(render_srt(cues), encoding="utf-8")
+                ass_path.write_text(
+                    render_ass(cues, caption_style(template_name, overrides), template_name),
+                    encoding="utf-8",
+                )
+                captions = [{
+                    "clipId": clip["id"],
+                    "srt": str(srt_path),
+                    "ass": str(ass_path),
+                    "cueCount": len(cues),
+                    "cues": cues,
+                }]
+        render_options = dict(request.options)
         if bool(request.options.get("smartReframe", False)):
             aspect = str(request.options.get("aspectRatio", "9:16"))
             if aspect not in {"9:16", "1:1", "4:5", "16:9"}:
                 raise WorkerError(
                     "INVALID_ASPECT_RATIO", "Unsupported smart reframe aspect ratio"
                 )
-            analysis_path = source_workspace.path("vision/focus.json")
-            if analysis_path.is_file():
-                analysis = source_workspace.read_json("vision/focus.json")
-            else:
-                analysis = analyze_focus(
-                    source, str(request.options.get("detector", "auto")), self.settings
+            smart_crops = {}
+            for clip in selected_clips:
+                start, end = float(clip["start"]), float(clip["end"])
+                analysis_key = "vision/focus-%s-%d-%d.json" % (
+                    str(clip["id"]),
+                    round(start * 1000),
+                    round(end * 1000),
                 )
-                source_workspace.write_json("vision/focus.json", analysis)
-            render_source = render_reframes(
-                source, analysis, [aspect], workspace.path("reframes"), self.settings
-            )[0]
+                analysis_path = source_workspace.path(analysis_key)
+                if analysis_path.is_file():
+                    analysis = source_workspace.read_json(analysis_key)
+                else:
+                    analysis = analyze_focus(
+                        source,
+                        str(request.options.get("detector", "auto")),
+                        self.settings,
+                        start_seconds=start,
+                        end_seconds=end,
+                    )
+                    source_workspace.write_json(analysis_key, analysis)
+                smart_crops[str(clip["id"])] = smart_crop_geometry(
+                    analysis, aspect, self.settings.render_max_height
+                )
+            render_options["smartCrops"] = smart_crops
         outputs = render_clips(
-            render_source,
+            source,
             selected_clips,
             captions,
             workspace.path("renders"),
             self.settings,
-            request.options,
+            render_options,
         )
-        manifest = workspace.write_json("renders/manifest.json", {"renders": outputs})
+        manifest = workspace.write_json("renders/manifest.json", {"renders": outputs, "captions": captions})
         artifacts = [artifact(manifest, "renders-manifest", "application/json")]
         artifacts.extend(
             artifact(Path(output["path"]), "rendered-clip", "video/mp4")
@@ -309,15 +359,20 @@ class Pipeline:
 
     def _exports(self, request: PipelineRequest, workspace: Workspace) -> StageResponse:
         source_workspace = self._source_workspace(request, workspace)
-        renders = workspace.read_json("renders/manifest.json")["renders"]
+        render_manifest = workspace.read_json("renders/manifest.json")
+        renders = render_manifest["renders"]
         clips = source_workspace.read_json("clips/clips.json")["clips"]
         selected_indexes = self._selected_clip_indexes(request, len(clips))
         selected_clip_ids = {str(clips[index]["id"]) for index in selected_indexes}
-        captions = [
-            caption
-            for caption in source_workspace.read_json("captions/manifest.json")["captions"]
-            if str(caption.get("clipId")) in selected_clip_ids
-        ]
+        captions = (
+            render_manifest["captions"]
+            if "captions" in render_manifest
+            else [
+                caption
+                for caption in source_workspace.read_json("captions/manifest.json")["captions"]
+                if str(caption.get("clipId")) in selected_clip_ids
+            ]
+        )
         files = [
             Path(value["path"])
             for value in renders

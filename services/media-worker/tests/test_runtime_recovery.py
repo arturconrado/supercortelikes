@@ -171,7 +171,38 @@ def test_rendering_builds_caption_and_watermark_commands(tmp_path, monkeypatch):
     result = render_clips(source, clips, captions, tmp_path / "renders-plain", settings, {"watermarkText": "ClipBR AI"})
     assert "-vf" in commands[1]
     assert "drawtext" in ",".join(commands[1])
+    result = render_clips(source, clips, captions, tmp_path / "renders-cropped", settings, {
+        "smartCrops": {
+            "clip-001": {"x": 10, "y": 0, "width": 600, "height": 1080, "targetWidth": 720, "targetHeight": 1280}
+        }
+    })
+    assert "crop=600:1080:10:0,scale=720:1280:flags=lanczos" in ",".join(commands[2])
     with pytest.raises(WorkerError, match="non-positive"):
         render_clips(source, [{"id": "bad", "start": 5, "end": 5}], [], tmp_path / "bad", settings, {})
     with pytest.raises(Exception, match="artifact is missing"):
         render_clips(source, clips, captions, tmp_path / "missing", settings, {"watermarkPath": str(tmp_path / "missing.png")})
+
+
+@pytest.mark.parametrize("duration", [2.77, 5.04])
+def test_rendering_preserves_real_short_video_durations(duration, tmp_path, monkeypatch):
+    source = tmp_path / "short.mp4"
+    source.write_bytes(b"source")
+    commands = []
+
+    def execute(command, **_kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"render")
+
+    monkeypatch.setattr("media_worker.rendering.run_command", execute)
+    result = render_clips(
+        source,
+        [{"id": "clip-001", "start": 0, "end": duration}],
+        [],
+        tmp_path / ("render-%.2f" % duration),
+        Settings.from_env(),
+        {"smartCrop": {"x": 0, "y": 0, "width": 640, "height": 360, "targetWidth": 720, "targetHeight": 1280}},
+    )
+
+    assert result[0]["durationSeconds"] == duration
+    assert commands[0][commands[0].index("-t") + 1] == "%.3f" % duration
+    assert "scale=720:1280" in ",".join(commands[0])

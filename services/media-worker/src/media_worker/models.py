@@ -76,3 +76,21 @@ class ReframeRequest(PipelineRequest):
         default_factory=lambda: ["9:16"], alias="aspectRatios"
     )
     detector: Literal["opencv", "mediapipe", "yolo", "auto"] = "auto"
+
+
+class CleanupWorkspacesRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    pipeline_run_ids: List[str] = Field(
+        alias="pipelineRunIds", min_length=1, max_length=500
+    )
+
+    @field_validator("pipeline_run_ids")
+    @classmethod
+    def safe_pipeline_run_ids(cls, values: List[str]) -> List[str]:
+        for value in values:
+            if len(value) < 8 or len(value) > 128 or not all(
+                character.isalnum() or character in "-_" for character in value
+            ):
+                raise ValueError("pipeline run identifier contains unsupported characters")
+        return list(dict.fromkeys(values))

@@ -1,3 +1,5 @@
+import pytest
+
 from media_worker.clips import find_clips, overlap_ratio
 
 
@@ -32,10 +34,12 @@ def test_clip_finder_ranks_and_limits_overlap():
             )
 
 
-def test_single_short_segment_still_yields_valid_candidate():
+@pytest.mark.parametrize("duration", [2.77, 5.04])
+def test_single_short_segment_still_yields_valid_candidate(duration):
     clips = find_clips(
-        [{"id": 1, "start": 0, "end": 8, "text": "Resumo curto"}],
+        [{"id": 1, "start": 0, "end": duration, "text": "Resumo curto"}],
         [{"segmentId": 1, "score": 50}],
     )
     assert clips[0]["start"] == 0
-    assert clips[0]["end"] == 8
+    assert clips[0]["end"] == duration
+    assert clips[0]["durationSeconds"] == duration

@@ -20,6 +20,7 @@ import { VideoResponseDto } from './video-response.dto';
 import { VIDEO_REPOSITORY, type VideoRepository } from './video.repository';
 import { UsageService } from '../usage/usage.service';
 import { normalizeVideoProcessingOptions } from './video-processing-options';
+import { VideoLifecycleService } from './video-lifecycle.service';
 
 const containerByExtension: Record<string, { container: string; mimeType: string }> = {
   mp4: { container: 'mp4', mimeType: 'video/mp4' },
@@ -52,6 +53,7 @@ export class DirectUploadService {
     @Inject(VIDEO_REPOSITORY) private readonly videos: VideoRepository,
     config: ConfigService<Environment, true>,
     private readonly usage: UsageService,
+    private readonly lifecycle: VideoLifecycleService,
   ) {
     this.bucket = config.get('S3_BUCKET', { infer: true });
     this.maxBytes = BigInt(config.get('UPLOAD_MAX_BYTES', { infer: true }));
@@ -188,24 +190,7 @@ export class DirectUploadService {
   }
 
   async remove(videoId: string, actor: AuthenticatedUser): Promise<void> {
-    const video = await this.prisma.video.findFirst({
-      where: { id: videoId, workspaceId: actor.workspaceId },
-      include: { uploads: true, clips: { include: { exports: true, captions: true } } },
-    });
-    if (!video) throw new NotFoundException('Video not found');
-    await Promise.all(video.uploads
-      .filter((attempt) => attempt.status === 'STARTED' && attempt.providerUploadId)
-      .map((attempt) => this.storage.abortMultipart(video.storageKey, attempt.providerUploadId!).catch(() => undefined)));
-    const keys = new Set<string>([video.storageKey]);
-    for (const clip of video.clips) {
-      for (const item of clip.exports) if (item.storageKey) keys.add(item.storageKey);
-      for (const caption of clip.captions) {
-        if (caption.srtKey) keys.add(caption.srtKey);
-        if (caption.assKey) keys.add(caption.assKey);
-      }
-    }
-    await Promise.all([...keys].map((key) => this.storage.delete(key)));
-    await this.prisma.video.delete({ where: { id: video.id } });
+    await this.lifecycle.remove(videoId, actor.workspaceId);
   }
 
   private async attempt(videoId: string, uploadId: string, workspaceId: string) {
