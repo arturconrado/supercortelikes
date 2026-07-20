@@ -68,10 +68,6 @@ grafana.{$APP_DOMAIN} {
 storage.{$APP_DOMAIN} {
 	import secure_headers
 	header {
-		Access-Control-Allow-Origin "https://{$APP_DOMAIN}"
-		Access-Control-Allow-Methods "GET, HEAD, PUT, POST, OPTIONS"
-		Access-Control-Allow-Headers "*"
-		Access-Control-Expose-Headers "Accept-Ranges, Content-Length, Content-Range, ETag"
 		Cross-Origin-Resource-Policy "cross-origin"
 		Vary "Origin"
 	}

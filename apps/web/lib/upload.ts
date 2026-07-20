@@ -2,6 +2,8 @@ import { api } from './api';
 import type { PlanLimits, Video, VideoProcessingOptions } from './types';
 
 const MAX_BYTES = 5 * 1024 ** 3;
+const PART_UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const PART_UPLOAD_STALL_TIMEOUT_MS = 60 * 1000;
 const acceptedExtensions = ['mp4', 'mov', 'webm', 'mkv', 'avi'];
 const mimeByExtension: Record<string, string> = {
   mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
@@ -160,11 +162,38 @@ async function retry<T>(operation: () => Promise<T>, signal?: AbortSignal): Prom
 function uploadPart(url: string, body: Blob, onProgress: (loaded: number) => void, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
+    let stallTimer: ReturnType<typeof setTimeout>;
+    const clearStallTimer = () => clearTimeout(stallTimer);
+    const armStallTimer = () => {
+      clearStallTimer();
+      stallTimer = setTimeout(() => {
+        request.abort();
+        reject(new Error('O envio ficou sem progresso por muito tempo. Tentando novamente.'));
+      }, PART_UPLOAD_STALL_TIMEOUT_MS);
+    };
     request.open('PUT', url);
-    request.upload.onprogress = (event) => event.lengthComputable && onProgress(event.loaded);
-    request.onerror = () => reject(new Error('A parte do vídeo não pôde ser enviada.'));
-    request.onabort = () => reject(new DOMException('Upload cancelado.', 'AbortError'));
+    request.timeout = PART_UPLOAD_TIMEOUT_MS;
+    request.upload.onloadstart = armStallTimer;
+    request.upload.onprogress = (event) => {
+      armStallTimer();
+      if (event.lengthComputable) onProgress(event.loaded);
+    };
+    request.upload.onloadend = clearStallTimer;
+    request.onerror = () => {
+      clearStallTimer();
+      reject(new Error('A parte do vídeo não pôde ser enviada.'));
+    };
+    request.ontimeout = () => {
+      clearStallTimer();
+      reject(new Error('O envio da parte excedeu o tempo limite. Tentando novamente.'));
+    };
+    request.onabort = () => {
+      clearStallTimer();
+      if (signal?.aborted) reject(new DOMException('Upload cancelado.', 'AbortError'));
+      else reject(new Error('O envio da parte foi interrompido. Tentando novamente.'));
+    };
     request.onload = () => {
+      clearStallTimer();
       if (request.status >= 200 && request.status < 300) {
         const etag = request.getResponseHeader('ETag');
         if (!etag) reject(new Error('O storage não retornou o ETag da parte enviada.'));

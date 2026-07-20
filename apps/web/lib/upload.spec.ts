@@ -3,11 +3,17 @@ import { uploadVideo, validateVideo } from './upload';
 
 class MockXhr {
   static instances: MockXhr[] = [];
-  static outcomes: Array<'error' | number> = [];
-  upload: { onprogress: ((event: ProgressEvent) => void) | null } = { onprogress: null };
+  static outcomes: Array<'error' | 'stall' | number> = [];
+  upload: {
+    onloadstart: (() => void) | null;
+    onprogress: ((event: ProgressEvent) => void) | null;
+    onloadend: (() => void) | null;
+  } = { onloadstart: null, onprogress: null, onloadend: null };
   status = 200;
+  timeout = 0;
   onerror: (() => void) | null = null;
   onabort: (() => void) | null = null;
+  ontimeout: (() => void) | null = null;
   onload: (() => void) | null = null;
   method = '';
   url = '';
@@ -18,10 +24,13 @@ class MockXhr {
   getResponseHeader(name: string) { return name.toLowerCase() === 'etag' ? '"part-etag"' : null; }
   send(body: Blob) {
     this.body = body;
+    this.upload.onloadstart?.();
     const outcome = MockXhr.outcomes.shift();
+    if (outcome === 'stall') return;
     if (outcome === 'error') { this.onerror?.(); return; }
     if (typeof outcome === 'number') this.status = outcome;
     this.upload.onprogress?.({ lengthComputable: true, loaded: body.size, total: body.size } as ProgressEvent);
+    this.upload.onloadend?.();
     this.onload?.();
   }
   abort() { this.onabort?.(); }
@@ -86,6 +95,17 @@ describe('video upload', () => {
     const signedCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/videos/video-1/upload-parts'));
     expect(MockXhr.instances).toHaveLength(4);
     expect(signedCalls).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it('retries a part when its upload stops making progress', async () => {
+    vi.useFakeTimers();
+    MockXhr.outcomes = ['stall', 200];
+    const upload = uploadVideo(new File(['video'], 'episode.mp4', { type: 'video/mp4', lastModified: 13 }), vi.fn());
+    await vi.runAllTimersAsync();
+    await expect(upload).resolves.toMatchObject({ id: 'video-1' });
+    expect(MockXhr.instances).toHaveLength(2);
+    expect(MockXhr.instances[0]?.timeout).toBe(15 * 60 * 1000);
     vi.useRealTimers();
   });
 
