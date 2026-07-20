@@ -143,7 +143,7 @@ def render_reframes(
                 "-i",
                 str(source),
                 "-vf",
-                "crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos"
+                "crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos,setsar=1"
                 % (
                     geometry["width"],
                     geometry["height"],

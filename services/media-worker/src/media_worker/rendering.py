@@ -51,6 +51,10 @@ def render_clips(
         smart_crop = _smart_crop_filter(smart_crop_value)
         if smart_crop:
             filters.append(smart_crop)
+        # FFmpeg preserves the display aspect ratio of the even-sized source crop by
+        # changing SAR during scale. Social exports must use square pixels so that a
+        # coded 720x1280 frame is also displayed as exactly 9:16 by browsers/players.
+        filters.append("setsar=1")
         if caption:
             filters.append("ass='%s'" % _filter_escape(Path(str(caption["ass"]))))
         if watermark_text:

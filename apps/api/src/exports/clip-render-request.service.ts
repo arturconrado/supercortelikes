@@ -9,7 +9,7 @@ import { MetricsService } from '../observability/metrics.service';
 import type { PipelineJob } from '../queues/pipeline.constants';
 import { limitsFor } from '../usage/entitlements';
 
-const RENDER_CACHE_VERSION = 'clip-render-720p-v2-editor-overrides';
+const RENDER_CACHE_VERSION = 'clip-render-720p-v3-square-pixels';
 const REUSABLE_EXPORT_STATUSES = ['READY', 'QUEUED', 'PROCESSING'] as const;
 
 type RenderRequestInput = {

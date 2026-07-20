@@ -12,6 +12,7 @@ test('editor salva timing, formato, legendas, SEO e solicita export', async ({ p
   await page.getByLabel('Início (s)').fill('10');
   await page.getByLabel('Fim (s)').fill('35');
   await page.getByLabel('Formato').selectOption('4:5');
+  await expect(page.getByRole('region', { name: 'Prévia do corte' })).toHaveClass(/aspect-\[4\/5\]/);
   await page.getByRole('button', { name: /Salvar timing/i }).click();
   await expect(page.getByText('Timing e formato salvos. Renderize novamente para aplicar.')).toBeVisible();
   expect(state.timingPatchRequests[0]).toEqual({ startSeconds: 10, endSeconds: 35 });

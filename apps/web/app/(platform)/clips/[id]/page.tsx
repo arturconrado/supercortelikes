@@ -205,6 +205,13 @@ export default function ClipViewerPage() {
   const source = clip.renderUrl ?? clip.playbackUrl;
   const sampleCaption = extractCaptionSample(captionCues);
   const captionSize = Math.max(18, Math.min(72, Number(captionFontSize) || 42));
+  const previewAspectClass = aspectRatio === '1:1'
+    ? 'aspect-square'
+    : aspectRatio === '4:5'
+      ? 'aspect-[4/5]'
+      : aspectRatio === '16:9'
+        ? 'aspect-video'
+        : 'aspect-[9/16]';
   const exportPending = exportRequested || ['QUEUED', 'PROCESSING', 'RENDERING'].includes((clip.status ?? '').toUpperCase());
   const exportButtonLabel = clip.downloadUrl ? 'Gerar novamente' : exportPending ? 'Gerando MP4…' : 'Gerar e baixar';
 
@@ -255,7 +262,7 @@ export default function ClipViewerPage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,.78fr)_1.22fr]">
         <Card className={cn('overflow-hidden bg-black', activeTab !== 'preview' && 'hidden lg:block')}>
-          <div className="relative mx-auto aspect-[9/16] max-h-[680px] bg-black">
+          <div role="region" aria-label="Prévia do corte" className={cn('relative mx-auto max-h-[680px] bg-black', previewAspectClass)}>
             {source ? (
               <video src={source} poster={clip.thumbnailUrl} controls crossOrigin="anonymous" className="h-full w-full object-contain">
                 {captionTrackDataUrl(clip.captions?.[0]?.cues) && <track kind="captions" src={captionTrackDataUrl(clip.captions?.[0]?.cues)} srcLang="pt" label="Português" default/>}
