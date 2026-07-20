@@ -50,6 +50,7 @@ export class AccountService {
     const videoIds = await this.videos.prepareWorkspaceDeletion(workspaceIds);
     await this.prisma.$transaction(async (tx) => {
       await tx.outboxEvent.deleteMany({ where: { aggregateId: { in: videoIds } } });
+      await tx.video.deleteMany({ where: { id: { in: videoIds } } });
       await tx.workspace.deleteMany({ where: { ownerId: user.userId } });
       await tx.user.delete({ where: { id: user.userId } });
     });
