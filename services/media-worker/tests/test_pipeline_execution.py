@@ -187,12 +187,21 @@ def test_batch_render_analyzes_only_each_selected_clip_window(tmp_path, monkeypa
     monkeypatch.setattr(module, "analyze_focus", analyze)
     monkeypatch.setattr(module, "render_clips", renders)
     body = request("batch-window-render")
-    body.options = {"smartReframe": True, "aspectRatio": "9:16"}
+    body.options = {
+        "smartReframe": True,
+        "aspectRatio": "9:16",
+        "preserveSourceQuality": True,
+        "maxSourceShortSide": 2160,
+    }
 
     pipeline.execute("rendering", body)
 
     assert analyzed_ranges == [(2.0, 7.0), (100.0, 105.0)]
     assert set(captured["options"]["smartCrops"]) == {"clip-001", "clip-002"}
+    assert all(
+        (crop["targetWidth"], crop["targetHeight"]) == (1080, 1920)
+        for crop in captured["options"]["smartCrops"].values()
+    )
 
 
 def test_rendering_uses_persisted_timing_and_caption_editor_overrides(tmp_path, monkeypatch):

@@ -68,6 +68,7 @@ const environmentSchema = z.object({
   FFMPEG_THREADS: z.coerce.number().int().min(1).max(32).default(2),
   FFMPEG_FILTER_THREADS: z.coerce.number().int().min(1).max(16).default(1),
   RENDER_MAX_HEIGHT: z.coerce.number().int().min(360).max(2160).default(720),
+  RENDER_MAX_SOURCE_SHORT_SIDE: z.coerce.number().int().min(360).max(2160).default(2160),
   ALLOW_FULL_BATCH_RENDER: booleanString,
   YTDLP_FRAGMENT_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
   ENABLE_AI: booleanString,

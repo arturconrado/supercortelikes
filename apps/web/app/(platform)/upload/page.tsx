@@ -398,7 +398,7 @@ function UploadInfo({ quota, options, files }: { quota?: UsageSnapshot; options:
         <div className="mt-3 rounded-xl border border-white/[.06] bg-white/[.025] p-3 text-xs leading-5 text-zinc-500">
           <div className="flex justify-between"><span>{quota.plan}</span><span>{quota.usage.remaining} min restantes</span></div>
           <Progress value={quota.usage.limit ? quota.usage.minutes / quota.usage.limit * 100 : 0} className="mt-2"/>
-          <p className="mt-2">Upload até {formatBytes(quota.limits.maxUploadBytes)} · export {quota.limits.exportResolution}{quota.limits.watermark ? ' · com marca d’água' : ''}</p>
+          <p className="mt-2">Upload até {formatBytes(quota.limits.maxUploadBytes)} · {exportQualityLabel(quota.limits.exportResolution)}{quota.limits.watermark ? ' · com marca d’água' : ''}</p>
         </div>
       ) : null}
       <div className="mt-4 rounded-xl border border-lime/15 bg-lime/[.06] p-3 text-xs leading-5 text-lime">
@@ -423,6 +423,10 @@ function UploadInfo({ quota, options, files }: { quota?: UsageSnapshot; options:
       <div className="mt-6 border-t border-white/[.06] pt-5 text-xs leading-5 text-zinc-600">Ao enviar, você confirma que possui os direitos necessários sobre o conteúdo.</div>
     </Card>
   );
+}
+
+function exportQualityLabel(value: '720p' | '1080p' | 'source'): string {
+  return value === 'source' ? 'qualidade da origem até 4K' : `export ${value}`;
 }
 
 function validateImportUrl(value: string): string {

@@ -54,6 +54,7 @@ class Settings:
     ffmpeg_threads: int
     ffmpeg_filter_threads: int
     render_max_height: int
+    render_max_source_short_side: int
     allow_full_batch_render: bool
     metrics_enabled: bool
     ytdlp_fragment_concurrency: int
@@ -131,6 +132,9 @@ class Settings:
             ffmpeg_threads=max(1, min(32, int(os.getenv("FFMPEG_THREADS", "2")))),
             ffmpeg_filter_threads=max(1, min(16, int(os.getenv("FFMPEG_FILTER_THREADS", "1")))),
             render_max_height=max(360, min(2160, int(os.getenv("RENDER_MAX_HEIGHT", "720")))),
+            render_max_source_short_side=max(
+                360, min(2160, int(os.getenv("RENDER_MAX_SOURCE_SHORT_SIDE", "2160")))
+            ),
             allow_full_batch_render=_bool_env("ALLOW_FULL_BATCH_RENDER", False),
             metrics_enabled=_bool_env("MEDIA_WORKER_METRICS_ENABLED", True),
             ytdlp_fragment_concurrency=max(1, min(16, int(os.getenv("YTDLP_FRAGMENT_CONCURRENCY", "4")))),

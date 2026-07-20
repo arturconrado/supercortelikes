@@ -49,6 +49,7 @@ def test_runtime_tuning_environment(monkeypatch):
     monkeypatch.setenv("FFMPEG_THREADS", "2")
     monkeypatch.setenv("FFMPEG_FILTER_THREADS", "1")
     monkeypatch.setenv("RENDER_MAX_HEIGHT", "720")
+    monkeypatch.setenv("RENDER_MAX_SOURCE_SHORT_SIDE", "2160")
     monkeypatch.setenv("ALLOW_FULL_BATCH_RENDER", "false")
     monkeypatch.setenv("YTDLP_FRAGMENT_CONCURRENCY", "4")
 
@@ -62,6 +63,7 @@ def test_runtime_tuning_environment(monkeypatch):
     assert settings.ffmpeg_threads == 2
     assert settings.ffmpeg_filter_threads == 1
     assert settings.render_max_height == 720
+    assert settings.render_max_source_short_side == 2160
     assert settings.allow_full_batch_render is False
     assert settings.ytdlp_fragment_concurrency == 4
 

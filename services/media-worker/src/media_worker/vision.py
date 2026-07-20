@@ -103,7 +103,10 @@ def analyze_focus(
 
 
 def smart_crop_geometry(
-    analysis: Dict[str, Any], aspect: str, max_height: int = 720
+    analysis: Dict[str, Any],
+    aspect: str,
+    max_height: int = 720,
+    preserve_source_quality: bool = False,
 ) -> Dict[str, int]:
     if aspect not in ASPECTS:
         raise WorkerError("INVALID_ASPECT_RATIO", "Unsupported smart reframe aspect ratio")
@@ -113,7 +116,12 @@ def smart_crop_geometry(
     crop_width, crop_height = crop_dimensions(width, height, ratio_width, ratio_height)
     crop_x = even_coordinate(max(0, min(width - crop_width, focus_x - crop_width / 2)))
     crop_y = even_coordinate(max(0, min(height - crop_height, focus_y - crop_height / 2)))
-    target_width, target_height = output_dimensions(ratio_width, ratio_height, max_height)
+    output_base = (
+        source_quality_base(width, height, max_height)
+        if preserve_source_quality
+        else max_height
+    )
+    target_width, target_height = output_dimensions(ratio_width, ratio_height, output_base)
     return {
         "x": crop_x,
         "y": crop_y,
@@ -134,7 +142,12 @@ def render_reframes(
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
     for aspect in aspect_ratios:
-        geometry = smart_crop_geometry(analysis, aspect, settings.render_max_height)
+        geometry = smart_crop_geometry(
+            analysis,
+            aspect,
+            settings.render_max_source_short_side,
+            preserve_source_quality=True,
+        )
         output = output_dir / ("reframe-%s.mp4" % aspect.replace(":", "x"))
         run_command(
             [
@@ -188,6 +201,11 @@ def output_dimensions(ratio_width: int, ratio_height: int, base: int = 720) -> T
     if ratio_width / ratio_height < 1:
         return even(base), even(base * ratio_height / ratio_width)
     return even(base * ratio_width / ratio_height), even(base)
+
+
+def source_quality_base(width: int, height: int, max_short_side: int = 2160) -> int:
+    """Preserve the source resolution tier without exceeding the 4K safety ceiling."""
+    return even(min(width, height, max(360, min(2160, max_short_side))))
 
 
 def even(value: float) -> int:

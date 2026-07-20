@@ -3,7 +3,13 @@ from types import SimpleNamespace
 
 import media_worker.rendering as rendering
 import media_worker.vision as vision
-from media_worker.vision import crop_dimensions, even, output_dimensions, smart_crop_geometry
+from media_worker.vision import (
+    crop_dimensions,
+    even,
+    output_dimensions,
+    smart_crop_geometry,
+    source_quality_base,
+)
 
 
 def test_crop_dimensions_preserve_requested_ratio_inside_source():
@@ -34,6 +40,25 @@ def test_smart_crop_geometry_targets_only_the_requested_output_ratio():
         "targetWidth": 720,
         "targetHeight": 1280,
     }
+
+
+def test_source_quality_base_preserves_the_source_tier_with_a_4k_ceiling():
+    assert source_quality_base(640, 360) == 360
+    assert source_quality_base(1280, 720) == 720
+    assert source_quality_base(1920, 1080) == 1080
+    assert source_quality_base(3840, 2160) == 2160
+    assert source_quality_base(7680, 4320) == 2160
+    assert source_quality_base(1920, 1080, 720) == 720
+
+
+def test_smart_crop_geometry_preserves_1080p_source_quality():
+    geometry = smart_crop_geometry(
+        {"width": 1920, "height": 1080, "focus": {"x": 960, "y": 540}},
+        "9:16",
+        2160,
+        preserve_source_quality=True,
+    )
+    assert (geometry["targetWidth"], geometry["targetHeight"]) == (1080, 1920)
 
 
 def test_render_clips_forces_square_pixels(monkeypatch, tmp_path: Path):
@@ -80,6 +105,7 @@ def test_render_reframes_forces_square_pixels(monkeypatch, tmp_path: Path):
         ffmpeg_preset="veryfast",
         ffmpeg_crf=23,
         render_max_height=720,
+        render_max_source_short_side=2160,
     )
 
     vision.render_reframes(
@@ -92,4 +118,4 @@ def test_render_reframes_forces_square_pixels(monkeypatch, tmp_path: Path):
 
     command = commands[0]
     video_filter = command[command.index("-vf") + 1]
-    assert video_filter.endswith("scale=720:1280:flags=lanczos,setsar=1")
+    assert video_filter.endswith("scale=1080:1920:flags=lanczos,setsar=1")

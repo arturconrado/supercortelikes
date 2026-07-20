@@ -69,7 +69,7 @@ function prisma(overrides: Record<string, unknown> = {}) {
 function service(db = prisma()) {
   return new ClipRenderRequestService(
     db,
-    { get: vi.fn((key: string) => ({ FFMPEG_PRESET: 'veryfast', FFMPEG_CRF: 22, RENDER_MAX_HEIGHT: 720 })[key]) } as any,
+    { get: vi.fn((key: string) => ({ FFMPEG_PRESET: 'veryfast', FFMPEG_CRF: 22, RENDER_MAX_HEIGHT: 720, RENDER_MAX_SOURCE_SHORT_SIDE: 2160 })[key]) } as any,
   );
 }
 

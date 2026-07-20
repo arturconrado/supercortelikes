@@ -107,6 +107,7 @@ describe('MediaStageProcessor persistence', () => {
           FFMPEG_PRESET: 'veryfast',
           FFMPEG_CRF: 22,
           RENDER_MAX_HEIGHT: 720,
+          RENDER_MAX_SOURCE_SHORT_SIDE: 2160,
         } as any)[key],
       } as any,
       usage,
@@ -148,7 +149,8 @@ describe('MediaStageProcessor persistence', () => {
       expect.anything(),
       expect.objectContaining({
         clipIndex: 0,
-        maxHeight: 720,
+        preserveSourceQuality: true,
+        maxSourceShortSide: 2160,
         clipOverride: { clipIndex: 0, start: 0.2, end: 19.8 },
         captionOverride: expect.objectContaining({ template: 'marketing', cues: [{ start: 0, end: 1, text: 'edited' }] }),
       }),

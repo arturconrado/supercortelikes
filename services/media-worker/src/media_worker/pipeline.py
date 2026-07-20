@@ -338,7 +338,23 @@ class Pipeline:
                     )
                     source_workspace.write_json(analysis_key, analysis)
                 smart_crops[str(clip["id"])] = smart_crop_geometry(
-                    analysis, aspect, self.settings.render_max_height
+                    analysis,
+                    aspect,
+                    max(
+                        360,
+                        min(
+                            2160,
+                            int(
+                                request.options.get(
+                                    "maxSourceShortSide",
+                                    self.settings.render_max_source_short_side,
+                                )
+                            ),
+                        ),
+                    ),
+                    preserve_source_quality=bool(
+                        request.options.get("preserveSourceQuality", False)
+                    ),
                 )
             render_options["smartCrops"] = smart_crops
         outputs = render_clips(

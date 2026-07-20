@@ -54,7 +54,7 @@ export type PlanLimits = {
   minutesPerMonth: number;
   maxUploadBytes: number;
   maxVideoDurationSeconds: number;
-  exportResolution: '720p' | '1080p';
+  exportResolution: '720p' | '1080p' | 'source';
   watermark: boolean;
   queuePriority: number;
   maxConcurrentHeavyJobs: number;

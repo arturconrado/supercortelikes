@@ -8,7 +8,7 @@ import { PrismaService } from '../database/prisma.service';
 import { MetricsService } from '../observability/metrics.service';
 import type { PipelineJob } from '../queues/pipeline.constants';
 
-const RENDER_CACHE_VERSION = 'clip-render-720p-v5-no-platform-watermark';
+const RENDER_CACHE_VERSION = 'clip-render-source-quality-v6';
 const REUSABLE_EXPORT_STATUSES = ['READY', 'QUEUED', 'PROCESSING'] as const;
 
 type RenderRequestInput = {
@@ -22,7 +22,7 @@ type RenderRequestInput = {
 export class ClipRenderRequestService {
   private readonly ffmpegPreset: string;
   private readonly ffmpegCrf: number;
-  private readonly renderMaxHeight: number;
+  private readonly renderMaxSourceShortSide: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -31,7 +31,7 @@ export class ClipRenderRequestService {
   ) {
     this.ffmpegPreset = config.get('FFMPEG_PRESET', { infer: true });
     this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
-    this.renderMaxHeight = config.get('RENDER_MAX_HEIGHT', { infer: true });
+    this.renderMaxSourceShortSide = config.get('RENDER_MAX_SOURCE_SHORT_SIDE', { infer: true });
   }
 
   async request(user: AuthenticatedUser, input: RenderRequestInput): Promise<Record<string, unknown>> {
@@ -101,7 +101,8 @@ export class ClipRenderRequestService {
         version: RENDER_CACHE_VERSION,
         preset: this.ffmpegPreset,
         crf: this.ffmpegCrf,
-        maxHeight: this.renderMaxHeight,
+        preserveSourceQuality: true,
+        maxSourceShortSide: this.renderMaxSourceShortSide,
       },
     });
     if (!input.force) {

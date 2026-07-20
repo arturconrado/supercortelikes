@@ -60,7 +60,7 @@ export const defaultClip = {
 export const defaultUsage = {
   plan: 'FREE',
   status: 'ACTIVE',
-  version: '2026-06',
+  version: '2026-07-source-quality-v3',
   periodStart: '2026-07-01T00:00:00.000Z',
   periodEnd: '2026-08-01T00:00:00.000Z',
   usage: { minutes: 0, limit: 60, remaining: 60 },
@@ -68,7 +68,7 @@ export const defaultUsage = {
     minutesPerMonth: 60,
     maxUploadBytes: 5368709120,
     maxVideoDurationSeconds: 3600,
-    exportResolution: '720p',
+    exportResolution: 'source',
     watermark: false,
     queuePriority: 1,
     maxConcurrentHeavyJobs: 1,

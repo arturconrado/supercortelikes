@@ -1,6 +1,6 @@
 import type { Plan } from '@prisma/client';
 
-export const PLAN_VERSION = '2026-07-watermark-free-v2';
+export const PLAN_VERSION = '2026-07-source-quality-v3';
 export const GiB = 1024 ** 3;
 
 export type CommercialPlan = Exclude<Plan, 'ENTERPRISE'>;
@@ -9,7 +9,7 @@ export interface PlanLimits {
   minutesPerMonth: number;
   maxUploadBytes: number;
   maxVideoDurationSeconds: number;
-  exportResolution: '720p' | '1080p';
+  exportResolution: '720p' | '1080p' | 'source';
   /** Whether the platform forces its own watermark onto exports. */
   watermark: boolean;
   queuePriority: number;
@@ -34,7 +34,7 @@ export const PLAN_LIMITS: Record<CommercialPlan, PlanLimits> = {
     minutesPerMonth: 60,
     maxUploadBytes: 5 * GiB,
     maxVideoDurationSeconds: 60 * 60,
-    exportResolution: '720p',
+    exportResolution: 'source',
     watermark: false,
     queuePriority: 20,
     maxConcurrentHeavyJobs: 1,
@@ -44,7 +44,7 @@ export const PLAN_LIMITS: Record<CommercialPlan, PlanLimits> = {
     minutesPerMonth: 600,
     maxUploadBytes: 5 * GiB,
     maxVideoDurationSeconds: 60 * 60,
-    exportResolution: '720p',
+    exportResolution: 'source',
     watermark: false,
     queuePriority: 10,
     maxConcurrentHeavyJobs: 1,
@@ -54,7 +54,7 @@ export const PLAN_LIMITS: Record<CommercialPlan, PlanLimits> = {
     minutesPerMonth: 2_000,
     maxUploadBytes: 5 * GiB,
     maxVideoDurationSeconds: 60 * 60,
-    exportResolution: '720p',
+    exportResolution: 'source',
     watermark: false,
     queuePriority: 1,
     maxConcurrentHeavyJobs: 1,
@@ -71,7 +71,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     interval: 'month',
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.FREE,
-    features: ['60 minutos/mês', 'Uploads até 5 GiB', 'Export 720p', 'Sem marca d’água'],
+    features: ['60 minutos/mês', 'Uploads até 5 GiB', 'Qualidade da origem até 4K', 'Sem marca d’água'],
   },
   {
     id: 'PRO',
@@ -82,7 +82,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     recommended: true,
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.PRO,
-    features: ['600 minutos/mês', 'Uploads até 5 GiB', 'Export 720p', 'Sem marca d’água'],
+    features: ['600 minutos/mês', 'Uploads até 5 GiB', 'Qualidade da origem até 4K', 'Sem marca d’água'],
   },
   {
     id: 'BUSINESS',
@@ -92,7 +92,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     interval: 'month',
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.BUSINESS,
-    features: ['2.000 minutos/mês', 'Fila prioritária', 'Export 720p', 'Suporte prioritário'],
+    features: ['2.000 minutos/mês', 'Fila prioritária', 'Qualidade da origem até 4K', 'Suporte prioritário'],
   },
 ];
 
