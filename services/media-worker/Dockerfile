@@ -13,6 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG DENO_VERSION=2.3.0
 ARG TARGETARCH
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg libglib2.0-0 libgl1 patchelf unzip \
     && case "$TARGETARCH" in \
       amd64) DENO_ARCH="x86_64" ;; \

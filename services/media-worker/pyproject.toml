@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "supercortelikes-media-worker"
 version = "0.1.0"
 description = "Executable AI and media pipeline for SuperCortesLikes"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.30,<1",

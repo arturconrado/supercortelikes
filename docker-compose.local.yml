@@ -154,6 +154,9 @@ services:
       ENABLE_OPENCV: "false"
       ENABLE_MEDIAPIPE: "false"
       ENABLE_YOLO: "false"
+    networks:
+      default:
+        aliases: [media-worker]
     depends_on:
       redis: { condition: service_healthy }
       minio-init: { condition: service_completed_successfully }

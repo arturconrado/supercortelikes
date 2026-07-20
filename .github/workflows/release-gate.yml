@@ -102,6 +102,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          timeout: 20m
       - name: Scan bundle image
         uses: aquasecurity/trivy-action@v0.35.0
         with:
@@ -110,6 +111,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          timeout: 20m
 
   integration:
     name: Real PostgreSQL, Redis, MinIO and AI pipeline

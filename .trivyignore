@@ -1,25 +1,15 @@
-# Temporary media-worker AI waivers — reviewed 2026-07-02.
+# Temporary media-worker AI waiver — reviewed 2026-07-20.
 #
 # Context:
 # - The release gate still builds and imports the real AI runtime.
 # - The product E2E gate exercises the full pipeline with AI enabled.
-# - The fixed versions currently reported by Trivy are not installable from the
-#   build index or are incompatible with the current FastAPI/MediaPipe/WhisperX
-#   dependency graph.
+# - MediaPipe 0.10.18 requires protobuf < 5, while the fixed protobuf versions
+#   reported by Trivy start at 5.29.6. Newer MediaPipe wheels removed the
+#   solutions API used by the face/hand detector and do not ship Linux arm64.
 #
 # Compensating controls:
-# - yt-dlp is used only for controlled public URL ingestion; the worker does not
-#   expose arbitrary CLI flags such as --exec or --netrc-cmd.
-# - The media-worker does not mount StaticFiles or accept public form uploads.
-# - Hugging Face model loading is constrained by configured model names and does
-#   not intentionally enable trust_remote_code.
+# - Protobuf is used internally by MediaPipe with bundled model assets; the
+#   media-worker API does not accept or deserialize user-supplied protobuf data.
 #
-# Remove these waivers when compatible fixed versions are available.
+# Remove this waiver when MediaPipe offers a compatible fixed dependency graph.
 CVE-2026-0994
-CVE-2026-48818
-CVE-2026-54283
-CVE-2026-4372
-CVE-2026-26331
-CVE-2026-50023
-CVE-2026-50574
-GHSA-69qj-pvh9-c5wg
