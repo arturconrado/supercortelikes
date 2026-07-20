@@ -260,7 +260,7 @@ export class MediaStageProcessor {
       await this.usage.recordProcessingMinutes(videoId);
     } catch (error) {
       if (error instanceof HttpException && error.getStatus() === 402) {
-        throw new UnrecoverableError(error.message);
+        throw Object.assign(new UnrecoverableError(error.message), { code: 'PLAN_LIMIT_EXCEEDED' });
       }
       throw error;
     }

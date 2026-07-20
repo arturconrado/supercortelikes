@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { HttpException } from '@nestjs/common';
 import { UnrecoverableError } from 'bullmq';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaStageProcessor } from '../src/media/media-stage.processor';
@@ -203,6 +204,19 @@ describe('MediaStageProcessor persistence', () => {
     await expect(promise).rejects.toMatchObject({
       code: 'URL_IMPORT_AUTH_REQUIRED',
       message: 'O YouTube bloqueou a importação automática deste link.',
+    });
+    await expect(promise).rejects.toBeInstanceOf(UnrecoverableError);
+  });
+
+  it('classifies plan limits as user-actionable terminal failures', async () => {
+    usage.assertCanProcessVideo.mockRejectedValueOnce(
+      new HttpException('O vídeo excede a duração máxima do plano atual.', 402),
+    );
+
+    const promise = processor.process(job('ingestion'));
+    await expect(promise).rejects.toMatchObject({
+      code: 'PLAN_LIMIT_EXCEEDED',
+      message: 'O vídeo excede a duração máxima do plano atual.',
     });
     await expect(promise).rejects.toBeInstanceOf(UnrecoverableError);
   });

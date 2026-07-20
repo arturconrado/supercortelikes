@@ -74,6 +74,7 @@ const USER_ACTIONABLE_TERMINAL_CODES = new Set([
   'SOURCE_SCHEME_UNSUPPORTED',
   'SOURCE_TOO_LARGE',
   'SOURCE_NOT_FOUND',
+  'PLAN_LIMIT_EXCEEDED',
 ]);
 
 function shouldCaptureDeadLetter(error: unknown): boolean {

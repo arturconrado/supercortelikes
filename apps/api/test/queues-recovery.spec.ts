@@ -86,6 +86,22 @@ describe('queue registry and worker factory', () => {
     expect(dead.capture).not.toHaveBeenCalled();
     await factory.onModuleDestroy();
   });
+
+  it('fails plan-limit errors without opening DLQ', async () => {
+    const orchestrator: any = { begin: vi.fn().mockResolvedValue('started'), complete: vi.fn(), retry: vi.fn(), fail: vi.fn() };
+    const dead: any = { capture: vi.fn() };
+    const error = Object.assign(new UnrecoverableError('O vídeo excede a duração máxima do plano atual.'), {
+      code: 'PLAN_LIMIT_EXCEEDED',
+    });
+    const factory = new StageWorkerFactory(orchestrator, dead, config);
+    factory.create('ingestion', vi.fn().mockRejectedValue(error), 1);
+
+    await expect(mocks.processors[0]({ data: job(), opts: { attempts: 5 }, attemptsMade: 0, id: 'job' })).resolves.toBeUndefined();
+
+    expect(orchestrator.fail).toHaveBeenCalledWith(expect.anything(), error, { deadLettered: false });
+    expect(dead.capture).not.toHaveBeenCalled();
+    await factory.onModuleDestroy();
+  });
 });
 
 describe('pipeline orchestration', () => {
