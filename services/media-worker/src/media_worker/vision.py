@@ -1,4 +1,5 @@
 import statistics
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -18,6 +19,7 @@ def analyze_focus(
     sample_seconds: float = 0.75,
     start_seconds: float = 0.0,
     end_seconds: Optional[float] = None,
+    time_budget_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     try:
         import cv2
@@ -31,7 +33,8 @@ def analyze_focus(
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 25.0)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    step = max(1, round(fps * sample_seconds))
+    detection_step = max(1, round(fps * sample_seconds))
+    tracking_step = max(1, round(detection_step / 2))
     start_frame = max(0, round(start_seconds * fps))
     end_frame = round(end_seconds * fps) if end_seconds is not None else None
     if start_frame:
@@ -40,18 +43,39 @@ def analyze_focus(
     samples: List[Dict[str, Any]] = []
     frame_index = start_frame
     previous_gray = None
+    tracked_boxes: List[Tuple[float, float, float, float, float]] = []
+    deadline = time.monotonic() + time_budget_seconds if time_budget_seconds else None
     try:
         while True:
+            if deadline is not None and time.monotonic() > deadline:
+                raise WorkerError("VISION_TIME_BUDGET_EXCEEDED", "Composition analysis exceeded its CPU time budget")
             if end_frame is not None and frame_index > end_frame:
                 break
             ok, frame = capture.read()
             if not ok:
                 break
-            if (frame_index - start_frame) % step == 0:
-                boxes = detect(frame)
+            relative_frame = frame_index - start_frame
+            if relative_frame % tracking_step == 0:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                activity = _motion_activity(previous_gray, gray, boxes)
-                boxes = [
+                if relative_frame % detection_step == 0 or not tracked_boxes:
+                    tracked_boxes = detect(frame)
+                else:
+                    tracked_boxes = _track_boxes(previous_gray, gray, tracked_boxes, cv2)
+                boxes = tracked_boxes
+                # A single detected face is unambiguous. Lip-region motion is only
+                # needed to disambiguate interviews and remote grids.
+                activity_regions = getattr(detect, "activity_regions", None)
+                regions = (
+                    activity_regions(frame, boxes)
+                    if len(boxes) > 1 and callable(activity_regions)
+                    else boxes
+                )
+                activity = (
+                    _motion_activity(previous_gray, gray, regions)
+                    if len(boxes) > 1
+                    else [1.0 for _ in boxes]
+                )
+                weighted_boxes = [
                     (
                         box[0],
                         box[1],
@@ -61,16 +85,27 @@ def analyze_focus(
                     )
                     for index, box in enumerate(boxes)
                 ]
-                focus = _weighted_center(boxes, width, height)
+                focus = _weighted_center(weighted_boxes, width, height)
                 samples.append(
                     {
                         "time": round(frame_index / fps, 3),
                         "x": round(focus[0], 2),
                         "y": round(focus[1], 2),
-                        "detections": len(boxes),
+                        "detections": len(weighted_boxes),
                         "activeSpeakerConfidence": round(
                             max(activity) if activity else 0.0, 4
                         ),
+                        "boxes": [
+                            {
+                                "x": round(float(box[0]), 2),
+                                "y": round(float(box[1]), 2),
+                                "width": round(float(box[2]), 2),
+                                "height": round(float(box[3]), 2),
+                                "confidence": round(float(box[4]), 4),
+                                "activity": round(float(activity[index]), 4),
+                            }
+                            for index, box in enumerate(weighted_boxes)
+                        ],
                     }
                 )
                 previous_gray = gray
@@ -98,6 +133,8 @@ def analyze_focus(
         },
         "detectionRate": round(len(detected) / len(samples), 4),
         "activeSpeakerMethod": "face-region-motion",
+        "detectionFps": round(fps / detection_step, 3),
+        "trackingFps": round(fps / tracking_step, 3),
         "range": {"start": start_seconds, "end": end_seconds},
     }
 
@@ -204,7 +241,7 @@ def output_dimensions(ratio_width: int, ratio_height: int, base: int = 720) -> T
 
 
 def source_quality_base(width: int, height: int, max_short_side: int = 2160) -> int:
-    """Preserve the source resolution tier without exceeding the 4K safety ceiling."""
+    """Preserve source detail without upscaling past the configured ceiling."""
     return even(min(width, height, max(360, min(2160, max_short_side))))
 
 
@@ -262,6 +299,46 @@ def _motion_activity(
         region = difference[top:bottom, left:right]
         values.append(min(1.0, float(region.mean()) / 32.0) if region.size else 0.0)
     return values
+
+
+def _track_boxes(previous_gray: Any, current_gray: Any, boxes: Sequence[Tuple[float, float, float, float, float]], cv2: Any):
+    if previous_gray is None or previous_gray.shape != current_gray.shape:
+        return list(boxes)
+    try:
+        import numpy as np
+    except ImportError:
+        return list(boxes)
+    height, width = current_gray.shape[:2]
+    tracked = []
+    for x, y, box_width, box_height, confidence in boxes:
+        mask = np.zeros_like(previous_gray)
+        left, top = max(0, int(x)), max(0, int(y))
+        right, bottom = min(width, int(x + box_width)), min(height, int(y + box_height))
+        mask[top:bottom, left:right] = 255
+        points = cv2.goodFeaturesToTrack(previous_gray, mask=mask, maxCorners=24, qualityLevel=0.02, minDistance=5)
+        if points is None:
+            tracked.append((x, y, box_width, box_height, confidence * 0.9))
+            continue
+        next_points, status, _error = cv2.calcOpticalFlowPyrLK(previous_gray, current_gray, points, None)
+        if next_points is None or status is None:
+            tracked.append((x, y, box_width, box_height, confidence * 0.9))
+            continue
+        valid = status.reshape(-1) == 1
+        if not valid.any():
+            tracked.append((x, y, box_width, box_height, confidence * 0.9))
+            continue
+        shifts = next_points.reshape(-1, 2)[valid] - points.reshape(-1, 2)[valid]
+        dx, dy = float(np.median(shifts[:, 0])), float(np.median(shifts[:, 1]))
+        tracked.append(
+            (
+                max(0.0, min(width - box_width, x + dx)),
+                max(0.0, min(height - box_height, y + dy)),
+                box_width,
+                box_height,
+                confidence * 0.97,
+            )
+        )
+    return tracked
 
 
 def _detector(name: str, cv2: Any, settings: Settings):
@@ -345,14 +422,81 @@ def _detector(name: str, cv2: Any, settings: Settings):
                 "ultralytics", "Ultralytics YOLO is not installed"
             ) from error
         model = YOLO(settings.yolo_model)
+        face_mesh = None
+        try:
+            import mediapipe as mp
+
+            face_mesh = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=4,
+                refine_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+        except (ImportError, AttributeError):
+            face_mesh = None
 
         def detect(frame: Any):
-            result = model.predict(frame, verbose=False, classes=[0])[0]
+            result = model.track(
+                frame,
+                persist=True,
+                tracker="bytetrack.yaml",
+                verbose=False,
+                classes=[0],
+                device=0 if settings.media_accelerator == "cuda" else "cpu",
+            )[0]
             boxes = []
             for value in result.boxes:
                 x1, y1, x2, y2 = value.xyxy[0].tolist()
                 boxes.append((x1, y1, x2 - x1, y2 - y1, float(value.conf[0])))
             return boxes
 
-        return "ultralytics-yolo-person", detect
+        def activity_regions(
+            frame: Any,
+            people: Sequence[Tuple[float, float, float, float, float]],
+        ):
+            if face_mesh is None:
+                return people
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            height, width = frame.shape[:2]
+            result = face_mesh.process(rgb)
+            mouth_regions = []
+            for face in result.multi_face_landmarks or []:
+                points = [
+                    face.landmark[index] for index in (13, 14, 61, 78, 291, 308)
+                ]
+                xs = [point.x * width for point in points]
+                ys = [point.y * height for point in points]
+                pad_x = max(4.0, (max(xs) - min(xs)) * 0.35)
+                pad_y = max(4.0, (max(ys) - min(ys)) * 1.1)
+                left = max(0.0, min(xs) - pad_x)
+                top = max(0.0, min(ys) - pad_y)
+                right = min(float(width), max(xs) + pad_x)
+                bottom = min(float(height), max(ys) + pad_y)
+                mouth_regions.append(
+                    (left, top, right - left, bottom - top, 1.0)
+                )
+            regions = []
+            for person in people:
+                px, py, pw, ph, confidence = person
+                matches = [
+                    mouth
+                    for mouth in mouth_regions
+                    if px <= mouth[0] + mouth[2] / 2 <= px + pw
+                    and py <= mouth[1] + mouth[3] / 2 <= py + ph
+                ]
+                regions.append(
+                    matches[0]
+                    if matches
+                    else (px, py, pw, ph * 0.45, confidence)
+                )
+            return regions
+
+        def close():
+            if face_mesh is not None:
+                face_mesh.close()
+
+        setattr(detect, "activity_regions", activity_regions)
+        setattr(detect, "close", close)
+        return "ultralytics-yolo-bytetrack-mediapipe-mouth", detect
     raise ValueError("Unsupported detector: %s" % name)

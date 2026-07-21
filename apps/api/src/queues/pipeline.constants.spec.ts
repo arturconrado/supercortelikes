@@ -29,13 +29,13 @@ describe('pipeline queue contracts', () => {
 
   it('routes the main pipeline and on-demand render events', () => {
     expect(eventQueue('video.uploaded.v1')).toBe('ingestion');
-    const mainStages = PIPELINE_STAGES.slice(0, PIPELINE_STAGES.indexOf('captions'));
+    const mainStages = PIPELINE_STAGES.slice(0, PIPELINE_STAGES.indexOf('composition'));
     for (let index = 0; index < mainStages.length; index += 1) {
       expect(eventQueue(completedEventType(PIPELINE_STAGES[index]))).toBe(PIPELINE_STAGES[index + 1]);
     }
     expect(eventQueue('clip.render.requested.v1')).toBe('rendering');
     expect(eventQueue('pipeline.rendering.completed.v1')).toBe('exports');
-    expect(() => eventQueue('pipeline.captions.completed.v1')).toThrow('Unsupported outbox event type');
+    expect(eventQueue('pipeline.captions.completed.v1')).toBe('composition');
     expect(() => eventQueue('payload.selected.queue')).toThrow('Unsupported outbox event type');
   });
 
@@ -50,9 +50,10 @@ describe('pipeline queue contracts', () => {
     }
   });
 
-  it('walks the main stages in order and keeps render/export on demand', () => {
+  it('walks every automatic production stage in order', () => {
     expect(nextStage('ingestion')).toBe('transcription');
-    expect(nextStage('captions')).toBeNull();
+    expect(nextStage('captions')).toBe('composition');
+    expect(nextStage('composition')).toBe('rendering');
     expect(nextStage('rendering')).toBe('exports');
     expect(nextStage('exports')).toBeNull();
   });

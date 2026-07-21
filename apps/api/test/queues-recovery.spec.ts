@@ -142,6 +142,19 @@ describe('pipeline orchestration', () => {
     expect(errorCode(new Error())).toBe('PIPELINE_STAGE_FAILED');
     expect(safeErrorMessage(new Error('redis://secret@redis:6379\nfailed'))).not.toContain('secret');
   });
+
+  it('continues from composition to automatic rendering only when production auto-render is enabled', async () => {
+    const tx: any = {
+      stageExecution: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findUnique: vi.fn(), create: vi.fn() },
+      outboxEvent: { create: vi.fn() }, pipelineRun: { update: vi.fn() },
+    };
+    const prisma: any = { ...tx, $transaction: vi.fn(async (callback: any) => callback(tx)) };
+    const enabled = new PipelineOrchestratorService(prisma, { get: () => 'all' } as any);
+    const disabled = new PipelineOrchestratorService(prisma, { get: () => 'off' } as any);
+
+    expect((await enabled.complete(job('composition')))?.stage).toBe('rendering');
+    expect(await disabled.complete(job('composition'))).toBeNull();
+  });
 });
 
 describe('outbox relay and dead letters', () => {

@@ -52,7 +52,7 @@ export class AnalyticsController {
     const [videos, clips, exportsReady, usage, pipelines, downloads, recentVideos, recentProjects] = await Promise.all([
       this.prisma.video.count({ where: { workspaceId } }),
       this.prisma.clip.count({ where: { video: { workspaceId } } }),
-      this.prisma.export.count({ where: { status: 'READY', clip: { video: { workspaceId } } } }),
+      this.prisma.export.count({ where: { purpose: 'FINAL', status: 'READY', clip: { video: { workspaceId } } } }),
       this.prisma.usageEvent.aggregate({
         where: { workspaceId },
         _sum: { quantity: true, costCents: true },

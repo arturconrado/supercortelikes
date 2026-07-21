@@ -28,6 +28,7 @@
     "acceptance:direct:5g": "node scripts/acceptance/direct-upload-5g.mjs",
     "gate:local-full-ai": "bash scripts/acceptance/local-full-ai-gate.sh",
     "acceptance:ga-soak": "node scripts/acceptance/ga-soak.mjs",
+    "benchmark:opuslike": "node scripts/benchmark/opuslike-report.mjs",
     "vps:preflight": "bash scripts/vps/preflight.sh",
     "vps:do:provision": "bash scripts/vps/digitalocean-provision.sh",
     "vps:do:validate": "bash scripts/vps/digitalocean-validate.sh",

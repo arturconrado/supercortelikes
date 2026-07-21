@@ -227,9 +227,9 @@ describe('health, exports, and media contracts', () => {
     new MediaWorkersService(
       factory as any,
       processor as any,
-      config({ PIPELINE_STAGE_CONCURRENCY_JSON: '{"ingestion":4,"transcription":2,"segmentation":3,"scoring":4,"clips":3,"captions":3,"rendering":2,"exports":3}' }),
+      config({ PIPELINE_STAGE_CONCURRENCY_JSON: '{"ingestion":4,"transcription":2,"segmentation":3,"scoring":4,"clips":3,"captions":3,"composition":1,"rendering":2,"exports":3}' }),
     ).onApplicationBootstrap();
-    expect(factory.create).toHaveBeenCalledTimes(8);
+    expect(factory.create).toHaveBeenCalledTimes(9);
     const heartbeat = new WorkerHeartbeatService({ $queryRaw: vi.fn() } as any, { heartbeat: vi.fn() } as any);
     await heartbeat.refresh();
     expect(workerHeartbeatKey('instance')).toBe('pipeline-worker:instance');

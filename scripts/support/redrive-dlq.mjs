@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 const id = process.argv[2];
 if (!id) throw new Error('Usage: node scripts/support/redrive-dlq.mjs <dead-letter-id>');
 
-const stages = ['ingestion', 'transcription', 'segmentation', 'scoring', 'clips', 'captions', 'rendering', 'exports'];
+const stages = ['ingestion', 'transcription', 'segmentation', 'scoring', 'clips', 'captions', 'composition', 'rendering', 'exports'];
 const prisma = new PrismaClient();
 try {
   const deadLetter = await prisma.deadLetterJob.findUnique({ where: { id } });
@@ -16,7 +16,9 @@ try {
   const eventId = randomUUID();
   const stageIndex = stages.indexOf(payload.stage);
   const previousStage = stageIndex > 0 ? stages[stageIndex - 1] : null;
-  const eventType = previousStage ? `pipeline.${previousStage}.completed.v1` : 'video.uploaded.v1';
+  const eventType = payload.stage === 'rendering'
+    ? 'clip.render.requested.v1'
+    : previousStage ? `pipeline.${previousStage}.completed.v1` : 'video.uploaded.v1';
   const job = { ...payload, eventId, causationId: payload.eventId, occurredAt: new Date().toISOString() };
   await prisma.$transaction([
     prisma.deadLetterJob.update({

@@ -152,6 +152,34 @@ def test_rendering_requires_selected_clip_by_default(tmp_path):
     assert error.value.code == "FULL_BATCH_RENDER_DISABLED"
 
 
+def test_hybrid_composition_is_deferred_to_the_single_render_job(tmp_path):
+    settings = replace(
+        Settings.from_env(),
+        data_dir=tmp_path,
+        ai_execution_mode="hybrid",
+        gpu_provider="runpod",
+        runpod_api_key="secret",
+        runpod_endpoint_id="endpoint",
+    )
+    pipeline = Pipeline(settings)
+    clips_dir = tmp_path / "pipeline-123" / "clips"
+    clips_dir.mkdir(parents=True)
+    (clips_dir / "clips.json").write_text(
+        '{"clips": [{"id": "clip-001", "start": 0, "end": 20}]}',
+        encoding="utf-8",
+    )
+    body = request("deferred-composition")
+    body.source_uri = None
+    body.options = {"remote": True, "aspectRatio": "9:16", "sourceWidth": 1920, "sourceHeight": 1080}
+
+    response = pipeline.execute("composition", body)
+    manifest = json.loads((tmp_path / "pipeline-123" / "composition" / "manifest.json").read_text())
+
+    assert response.metrics["deferred"] is True
+    assert manifest["compositions"][0]["diagnostics"]["reason"] == "deferred-runpod"
+    assert manifest["compositions"][0]["accelerator"] == "deferred"
+
+
 def test_batch_render_analyzes_only_each_selected_clip_window(tmp_path, monkeypatch):
     import media_worker.pipeline as module
 
@@ -252,6 +280,62 @@ def test_rendering_uses_persisted_timing_and_caption_editor_overrides(tmp_path, 
     rendered_ass = Path(captured["captions"][0]["ass"]).read_text()
     assert "TEXTO" in rendered_ass and "EDITADO" in rendered_ass
     assert "&H006633FF" in rendered_ass
+
+
+def test_rendering_lazily_regenerates_and_exposes_missing_composition(tmp_path, monkeypatch):
+    import media_worker.pipeline as module
+
+    pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path, media_accelerator="cpu"))
+    media = tmp_path / "pipeline-123" / "media"
+    media.mkdir(parents=True)
+    (media / "source.mp4").write_bytes(b"video")
+    clips_dir = tmp_path / "pipeline-123" / "clips"
+    clips_dir.mkdir()
+    (clips_dir / "clips.json").write_text(
+        '{"clips": [{"id": "clip-001", "start": 0, "end": 5}]}'
+    )
+    captions_dir = tmp_path / "pipeline-123" / "captions"
+    captions_dir.mkdir()
+    (captions_dir / "manifest.json").write_text('{"captions": []}')
+    captured = {}
+
+    def compositions(_source, clips, settings, _options):
+        return [
+            {
+                "clipId": clips[0]["id"],
+                "version": "composition-v1",
+                "accelerator": settings.media_accelerator,
+                "source": {"width": 1280, "height": 720},
+                "scenes": [{"start": 0, "end": 5, "layout": "fit"}],
+                "diagnostics": {"status": "ready", "accelerator": settings.media_accelerator},
+            }
+        ]
+
+    def renders(_source, clips, _captions, output, _settings, options):
+        captured["plans"] = options["compositionPlans"]
+        output.mkdir(parents=True)
+        rendered = output / "clip-001.mp4"
+        rendered.write_bytes(b"render")
+        return [{"clipId": clips[0]["id"], "path": str(rendered), "durationSeconds": 5}]
+
+    monkeypatch.setattr(module, "build_compositions", compositions)
+    monkeypatch.setattr(module, "render_clips", renders)
+    body = request("lazy-composition-render")
+    body.options = {
+        "clipIndex": 0,
+        "compositionV1": True,
+        "regenerateComposition": True,
+        "aspectRatio": "9:16",
+    }
+
+    response = pipeline.execute("rendering", body)
+
+    assert captured["plans"]["clip-001"]["accelerator"] == "cpu"
+    assert any(item.kind == "composition-manifest" for item in response.artifacts)
+    persisted = json.loads(
+        (tmp_path / "pipeline-123" / "composition" / "manifest.json").read_text()
+    )
+    assert persisted["compositions"][0]["diagnostics"]["status"] == "ready"
 
 
 def test_rendering_does_not_restore_original_captions_when_edited_range_has_none(tmp_path, monkeypatch):

@@ -27,7 +27,8 @@ export type Project = {
 export type Clip = {
   id: string; projectId?: string; videoId?: string; title: string; reason?: string; status: string; score?: number;
   startSeconds?: number; endSeconds?: number; durationSeconds?: number; aspectRatio?: string; thumbnailUrl?: string;
-  playbackUrl?: string; renderUrl?: string; downloadUrl?: string; captionsUrl?: string; createdAt?: string;
+  playbackUrl?: string; previewUrl?: string; previewStatus?: string; renderUrl?: string; downloadUrl?: string; captionsUrl?: string; createdAt?: string;
+  composition?: { version: string; plan?: Record<string, unknown>; diagnostics?: Record<string, unknown> } | null;
   description?: string; hashtags?: string[]; titleSuggestions?: Array<string | { title: string; score?: number }>;
   genre?: string; hook?: string; sourceText?: string; captionsEdited?: boolean;
   captions?: Array<{ id: string; template: string; language: string; cues: unknown[]; style?: Record<string, unknown> }>;
@@ -54,7 +55,7 @@ export type PlanLimits = {
   minutesPerMonth: number;
   maxUploadBytes: number;
   maxVideoDurationSeconds: number;
-  exportResolution: '720p' | '1080p' | 'source';
+  exportResolution: '720p' | '1080p';
   watermark: boolean;
   queuePriority: number;
   maxConcurrentHeavyJobs: number;

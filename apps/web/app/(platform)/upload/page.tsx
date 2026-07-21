@@ -425,8 +425,8 @@ function UploadInfo({ quota, options, files }: { quota?: UsageSnapshot; options:
   );
 }
 
-function exportQualityLabel(value: '720p' | '1080p' | 'source'): string {
-  return value === 'source' ? 'qualidade da origem até 4K' : `export ${value}`;
+function exportQualityLabel(value: '720p' | '1080p'): string {
+  return `export ${value}`;
 }
 
 function validateImportUrl(value: string): string {

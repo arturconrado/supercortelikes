@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "language": "pt-BR",
+  "samples": [
+    { "id": "solo-01", "category": "solo", "source": "TODO" },
+    { "id": "solo-02", "category": "solo", "source": "TODO" },
+    { "id": "solo-03", "category": "solo", "source": "TODO" },
+    { "id": "solo-04", "category": "solo", "source": "TODO" },
+    { "id": "interview-01", "category": "interview", "source": "TODO" },
+    { "id": "interview-02", "category": "interview", "source": "TODO" },
+    { "id": "interview-03", "category": "interview", "source": "TODO" },
+    { "id": "interview-04", "category": "interview", "source": "TODO" },
+    { "id": "grid-01", "category": "grid", "source": "TODO" },
+    { "id": "grid-02", "category": "grid", "source": "TODO" },
+    { "id": "difficult-01", "category": "difficult", "source": "TODO" },
+    { "id": "difficult-02", "category": "difficult", "source": "TODO" }
+  ]
+}

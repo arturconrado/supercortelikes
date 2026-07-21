@@ -29,6 +29,9 @@ x-api-environment: &api-environment
   MEDIA_WORKER_DATA_DIR: /data/pipelines
   MEDIA_DIARIZATION_ENABLED: "false"
   MEDIA_TRANSCRIPTION_BATCH_SIZE: "1"
+  COMPOSITION_V1_ENABLED: ${COMPOSITION_V1_ENABLED:-false}
+  COMPOSITION_V1_ROLLOUT_PERCENT: ${COMPOSITION_V1_ROLLOUT_PERCENT:-100}
+  MEDIA_ACCELERATOR: cpu
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
 x-worker-environment: &worker-environment
@@ -171,7 +174,7 @@ services:
       ENABLE_OPENCV: "true"
       ENABLE_MEDIAPIPE: "true"
       ENABLE_YOLO: "true"
-      WHISPERX_MODEL: tiny
+      WHISPERX_MODEL: small
       WHISPERX_DEVICE: cpu
       WHISPERX_COMPUTE_TYPE: int8
       HF_HOME: /data/models/huggingface

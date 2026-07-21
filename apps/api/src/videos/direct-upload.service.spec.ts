@@ -61,6 +61,7 @@ function fixture() {
     abortMultipart: vi.fn().mockResolvedValue(undefined),
     metadata: vi.fn().mockResolvedValue({ bytes: 10n, contentType: 'video/mp4', etag: 'head-etag' }),
     upload: vi.fn().mockResolvedValue({ etag: 'legacy' }),
+    uploadUrl: vi.fn().mockResolvedValue('https://storage.test/upload'),
     delete: vi.fn().mockResolvedValue(undefined),
     deletePrefix: vi.fn().mockResolvedValue(0),
     downloadUrl: vi.fn().mockResolvedValue('https://storage.test/download'),

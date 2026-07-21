@@ -26,6 +26,7 @@ enum PipelineStage {
   SCORING
   CLIPS
   CAPTIONS
+  COMPOSITION
   RENDERING
   EXPORTS
 }
@@ -83,6 +84,7 @@ enum ClipStatus {
   APPROVED
   RENDERING
   READY
+  REVIEW_REQUIRED
   FAILED
 }
 
@@ -91,6 +93,11 @@ enum ExportStatus {
   PROCESSING
   READY
   FAILED
+}
+
+enum ExportPurpose {
+  PREVIEW
+  FINAL
 }
 
 model User {
@@ -439,6 +446,7 @@ model Clip {
   video            Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
   segment          Segment?       @relation(fields: [segmentId], references: [id], onDelete: SetNull)
   captions         CaptionTrack[]
+  composition      ClipComposition?
   exports          Export[]
   publications     Publication[]
   seo              SeoMetadata?
@@ -446,6 +454,19 @@ model Clip {
   @@index([videoId, score])
   @@index([videoId, status, createdAt])
   @@map("clips")
+}
+
+model ClipComposition {
+  id          String   @id @default(uuid()) @db.Uuid
+  clipId      String   @unique @db.Uuid
+  version     String
+  plan        Json
+  diagnostics Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  clip        Clip     @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@map("clip_compositions")
 }
 
 model CaptionTrack {
@@ -470,6 +491,7 @@ model Export {
   id          String       @id @default(uuid()) @db.Uuid
   clipId      String       @db.Uuid
   format      String
+  purpose     ExportPurpose @default(FINAL)
   aspectRatio String
   storageKey  String?
   sizeBytes   BigInt?
@@ -482,6 +504,7 @@ model Export {
   clip        Clip         @relation(fields: [clipId], references: [id], onDelete: Cascade)
 
   @@index([clipId, status])
+  @@index([clipId, purpose, status])
   @@index([clipId, renderFingerprint, status])
   @@index([status, createdAt])
   @@index([status, updatedAt])

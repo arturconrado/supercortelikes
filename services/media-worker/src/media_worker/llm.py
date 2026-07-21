@@ -1,8 +1,11 @@
 import json
+import hashlib
 import logging
 import re
+import time
 import urllib.error
 import urllib.request
+import unicodedata
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 
@@ -43,14 +46,31 @@ def maybe_score_with_llm(
         },
         method="POST",
     )
+    started = time.monotonic()
     try:
         with urllib.request.urlopen(
             request, timeout=int(getattr(settings, "llm_timeout_seconds", 45))
         ) as response:
             body = json.loads(response.read().decode("utf-8"))
+        if not isinstance(body, Mapping):
+            raise ValueError("OpenRouter response must be an object")
         content = body["choices"][0]["message"]["content"]
         value = _json_from_content(content)
-        return _normalize_scores(segments, lexical_result, value, payload["model"])
+        normalized = _normalize_scores(segments, lexical_result, value, payload["model"])
+        usage = body.get("usage") if isinstance(body.get("usage"), Mapping) else {}
+        cost_usd = _cost(usage)
+        normalized["providerUsage"] = [
+            {
+                "provider": "openrouter",
+                "requestId": str(body.get("id") or _response_id(body)),
+                "quantity": int(usage.get("total_tokens") or 0),
+                "unit": "token",
+                "costUsd": round(cost_usd, 6),
+                "latencyMs": round((time.monotonic() - started) * 1000),
+                "model": payload["model"],
+            }
+        ]
+        return normalized
     except (KeyError, ValueError, TypeError, urllib.error.URLError, TimeoutError) as error:
         logger.warning("OpenRouter scoring failed; using lexical fallback: %s", error)
         return None
@@ -67,14 +87,23 @@ def _openrouter_payload(
             "start": segment.get("start", 0),
             "end": segment.get("end", 0),
             "text": str(segment.get("text", ""))[:1800],
+            "speakers": segment.get("speakers") or ([segment.get("speaker")] if segment.get("speaker") else []),
             "lexicalScore": lexical_result["scores"][index]["score"],
+            "lexicalCategories": lexical_result["scores"][index].get("categories", {}),
+            "lexicalSignals": lexical_result["scores"][index].get("signals", {}),
         }
         for index, segment in enumerate(segments[:40])
     ]
     return {
-        "model": getattr(settings, "llm_model", "") or "openai/gpt-4o-mini",
+        "model": getattr(settings, "openrouter_editor_model", "") or "google/gemini-2.5-flash",
+        "provider": {
+            "sort": getattr(settings, "llm_provider_sort", "latency"),
+            "require_parameters": True,
+            "data_collection": "deny",
+        },
         "temperature": 0.2,
         "max_tokens": 2400,
+        "usage": {"include": True},
         "response_format": {"type": "json_object"},
         "messages": [
             {
@@ -88,7 +117,10 @@ def _openrouter_payload(
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "task": "Score each segment from 0 to 100 for short-form viral potential.",
+                        "task": (
+                            "Score each segment for short-form viral potential and refine its safe spoken boundaries, "
+                            "hook, title and one keyword using timestamps and speaker context."
+                        ),
                         "requiredShape": {
                             "scores": [
                                 {
@@ -96,6 +128,13 @@ def _openrouter_payload(
                                     "score": 0,
                                     "categories": {category: 0 for category in REQUIRED_CATEGORIES},
                                     "signals": {"hook": 0, "retention": 0, "clarity": 0},
+                                    "editorial": {
+                                        "suggestedStart": "absolute timestamp in seconds",
+                                        "suggestedEnd": "absolute timestamp in seconds",
+                                        "hook": "short spoken hook, no emoji",
+                                        "title": "concise Brazilian Portuguese title, no emoji",
+                                        "keyword": "one relevant keyword, no emoji",
+                                    },
                                 }
                             ]
                         },
@@ -141,6 +180,7 @@ def _normalize_scores(
                 "score": max(0.0, min(100.0, blended_score)),
                 "categories": categories,
                 "signals": signals,
+                "editorial": _editorial(candidate.get("editorial"), segments[index]),
             }
         )
     average = round(sum(item["score"] for item in normalized) / len(normalized), 2) if normalized else 0.0
@@ -167,3 +207,50 @@ def _number(value: Any, fallback: Any) -> float:
     except (TypeError, ValueError):
         number = float(fallback)
     return round(max(0.0, min(100.0, number)), 2)
+
+
+def _editorial(value: Any, segment: Mapping[str, Any]) -> Dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    start = float(segment.get("start", 0))
+    end = max(start, float(segment.get("end", start)))
+    suggested_start = _timestamp(source.get("suggestedStart"), start, start, end)
+    suggested_end = _timestamp(source.get("suggestedEnd"), end, start, end)
+    if suggested_end <= suggested_start:
+        suggested_start, suggested_end = start, end
+    return {
+        "suggestedStart": round(suggested_start, 3),
+        "suggestedEnd": round(suggested_end, 3),
+        "hook": _text(source.get("hook"), 180),
+        "title": _text(source.get("title"), 120),
+        "keyword": _text(source.get("keyword"), 40),
+    }
+
+
+def _timestamp(value: Any, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = fallback
+    return max(minimum, min(maximum, number))
+
+
+def _text(value: Any, maximum: int) -> str:
+    text = re.sub(r"[\r\n\t]+", " ", str(value or "")).strip()
+    text = "".join(character for character in text if unicodedata.category(character) != "So")
+    return text[:maximum]
+
+
+def _cost(usage: Mapping[str, Any]) -> float:
+    for key in ("cost", "total_cost", "totalCost"):
+        if key not in usage:
+            continue
+        try:
+            return max(0.0, float(usage.get(key) or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _response_id(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return "openrouter-%s" % hashlib.sha256(encoded).hexdigest()[:24]

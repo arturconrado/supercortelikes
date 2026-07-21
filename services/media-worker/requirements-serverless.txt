@@ -1,0 +1,2 @@
+-r requirements-gpu.txt
+runpod>=1.7,<2

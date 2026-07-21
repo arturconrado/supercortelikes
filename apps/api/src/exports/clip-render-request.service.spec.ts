@@ -41,6 +41,7 @@ function prisma(overrides: Record<string, unknown> = {}) {
     format: 'MP4',
     aspectRatio: '9:16',
     status: 'QUEUED',
+    purpose: 'FINAL',
     sizeBytes: null,
     renderFingerprint: 'fingerprint',
     sourcePipelineRunId: '66666666-6666-4666-8666-666666666666',
@@ -69,7 +70,7 @@ function prisma(overrides: Record<string, unknown> = {}) {
 function service(db = prisma()) {
   return new ClipRenderRequestService(
     db,
-    { get: vi.fn((key: string) => ({ FFMPEG_PRESET: 'veryfast', FFMPEG_CRF: 22, RENDER_MAX_HEIGHT: 720, RENDER_MAX_SOURCE_SHORT_SIDE: 2160 })[key]) } as any,
+    { get: vi.fn((key: string) => ({ FFMPEG_PRESET: 'veryfast', FFMPEG_CRF: 19, RENDER_MAX_HEIGHT: 720, RENDER_MAX_SOURCE_SHORT_SIDE: 1080, MEDIA_ACCELERATOR: 'cpu' })[key]) } as any,
   );
 }
 
@@ -142,8 +143,29 @@ describe('ClipRenderRequestService', () => {
           exportId: expect.any(String),
           sourcePipelineRunId: '66666666-6666-4666-8666-666666666666',
           renderFingerprint: expect.any(String),
+          regenerateComposition: true,
           stage: 'rendering',
         }),
+      }),
+    }));
+  });
+
+  it('creates an isolated preview without changing the clip final-render status', async () => {
+    const db = prisma();
+    const result = await service(db).request(user, {
+      clipId: clip.id,
+      purpose: 'PREVIEW',
+      force: true,
+    });
+
+    expect(result).toMatchObject({ status: 'QUEUED' });
+    expect(db.export.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ purpose: 'PREVIEW' }),
+    }));
+    expect(db.clip.update).not.toHaveBeenCalled();
+    expect(db.outboxEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        payload: expect.objectContaining({ stage: 'rendering' }),
       }),
     }));
   });

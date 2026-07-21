@@ -99,6 +99,10 @@ class MemoryStorage implements ObjectStorage {
     return { etag: 'etag' };
   }
 
+  async uploadUrl(key: string): Promise<string> {
+    return `https://storage.test/upload/${key}`;
+  }
+
   async delete(key: string): Promise<void> {
     this.objects.delete(key);
   }

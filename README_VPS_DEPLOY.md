@@ -32,7 +32,7 @@ Perfis suportados pelo preflight:
 | `standard` | Primeiro upgrade saudável | 8 CPU, 15 GiB RAM, 250 GiB livres |
 | `performance` | Mais folga para render/Whisper local | 16 CPU, 28 GiB RAM, 300 GiB livres |
 
-O perfil `budget` mantém WhisperX `tiny`, CPU/int8, batch 1 e apenas 1 job pesado por vez. Se os jobs demorarem demais ou houver OOM, faça resize vertical do Droplet antes de mexer na aplicação.
+O perfil `budget` mantém WhisperX `small`, CPU/int8, batch 1 e apenas 1 job pesado por vez. A composição Opus-like usa detecção facial a 2 fps e tracking a 4 fps, com fallback seguro `fit`. Não faça resize nem contrate GPU sem aprovação financeira.
 
 ## 1.1. Alternativa à DigitalOcean
 
@@ -60,7 +60,7 @@ Se o plano Hetzner barato disponível tiver menos disco que isso, existem três 
 2. reduzir temporariamente o gate de 5 GiB para smoke menor e manter 5 GiB só quando houver storage externo;
 3. migrar mídia persistente para S3-compatible externo, como DigitalOcean Spaces, Cloudflare R2 ou outro bucket.
 
-Plano B: **OVHcloud VPS** pode sair bem barato, mas muitos planos têm disco menor. Para este produto, disco pequeno é o limitador mais perigoso por causa de uploads, exports, cache de modelos e backups.
+Alternativa B: **OVHcloud VPS** pode sair bem barato, mas muitos planos têm disco menor. Para este produto, disco pequeno é o limitador mais perigoso por causa de uploads, exports, cache de modelos e backups.
 
 Plano C: **Vultr/Akamai Linode** são alternativas simples, mas normalmente não reduzem tanto o custo quanto Hetzner para CPU/RAM parecidos.
 
@@ -81,9 +81,9 @@ Droplet
     └── minio
 ```
 
-Não use App Platform, Agent ou Serverless Inference como primeira opção all-in-one. O produto precisa de arquivos grandes, diretórios temporários, fila, worker pesado, FFmpeg, IA e estado local controlado. Mesmo em uma única máquina, API e workers devem continuar separados em containers diferentes.
+Não use App Platform, Agent ou uma plataforma serverless como substituta all-in-one da stack persistente. O produto precisa de arquivos grandes, fila, banco e estado controlado. Mesmo em uma única máquina, API e workers devem continuar separados em containers diferentes.
 
-Se você for rodar modelos locais pesados com GPU, troque o alvo para **GPU Droplet** e prepare NVIDIA Container Toolkit/imagem compatível. O perfil atual usa WhisperX `tiny`, CPU/int8, batch 1 e concorrência pesada 1.
+O Plano A usa WhisperX `small`, CPU/int8, batch 1 e concorrência pesada 1. Após aprovação, o Plano B mantém esta mesma VPS e usa Deepgram, OpenRouter e um endpoint Runpod scale-to-zero para o trabalho variável; isso não cria uma segunda VPS. A substituição integral por uma máquina NVIDIA (`docker-compose.gpu.yml`) fica inativa até o volume superar 500 horas/mês e exigir uma nova aprovação financeira.
 
 Storage:
 
@@ -475,7 +475,26 @@ Recomendação: sincronize `/srv/clipbr/backups` para DigitalOcean Spaces, outro
 
 Antes de declarar produção comercial, execute um restore drill em uma VPS separada.
 
-## 8. Rollback
+## 8. Pipeline IA-first em produção
+
+O deploy mantém `AI_EXECUTION_MODE=local`, `GPU_PROVIDER=none` e `AUTO_RENDER_MODE=off` por padrão. Assim, atualizar a aplicação não ativa Deepgram, OpenRouter, Runpod nem cobrança variável.
+
+Após aprovação, configure as credenciais e gates descritos em [docs/runbooks/opuslike-dual-plan.md](docs/runbooks/opuslike-dual-plan.md), publique `services/media-worker/Dockerfile.serverless` no endpoint Runpod scale-to-zero e só então altere `AI_EXECUTION_MODE=hybrid` e `AUTO_RENDER_MODE=all`. A VPS continua sendo a única máquina persistente; o endpoint GPU existe apenas durante jobs cobrados por segundo.
+
+O limite final é 1080p sem upscale. Para desativação imediata sem rollback de código:
+
+```bash
+sed -i.bak \
+  -e 's/^AI_EXECUTION_MODE=.*/AI_EXECUTION_MODE=local/' \
+  -e 's/^STT_PROVIDER=.*/STT_PROVIDER=whisperx/' \
+  -e 's/^GPU_PROVIDER=.*/GPU_PROVIDER=none/' \
+  -e 's/^AUTO_RENDER_MODE=.*/AUTO_RENDER_MODE=off/' \
+  /srv/clipbr/app/.env.production
+docker compose --env-file /srv/clipbr/app/.env.production \
+  -f /srv/clipbr/app/docker-compose.vps.yml -p clipbr-vps up -d --wait api worker media-worker
+```
+
+## 9. Rollback
 
 Rollback para um SHA/tag:
 
@@ -491,7 +510,7 @@ SKIP_BACKUP=true npm run vps:rollback -- <SHA_OU_TAG>
 
 Não faça rollback destrutivo de banco. Use apenas código compatível com o schema atual ou restaure backup em ambiente separado.
 
-## 9. Operação diária
+## 10. Operação diária
 
 Status:
 
@@ -574,7 +593,7 @@ Para habilitar importação YouTube com cookies:
 
 Se os cookies expirarem, o worker volta a informar que o YouTube recusou a importação e será necessário atualizar o arquivo. Para links bloqueados, a alternativa operacional é orientar o usuário a enviar o arquivo de vídeo diretamente.
 
-## 10. Go-live comercial
+## 11. Go-live comercial
 
 Só declarar lançamento comercial quando:
 
@@ -588,5 +607,8 @@ Só declarar lançamento comercial quando:
 - restore drill tiver passado;
 - product E2E e 5 GiB tiverem passado na VPS;
 - soak de 24h tiver passado;
+- benchmark CPU/híbrido/OpusClip tiver passado com custo híbrido de até US$1 por hora-fonte;
+- Runpod estiver com `workersMin=0`, `workersMax=2` e nenhuma segunda VPS persistente;
+- exports automáticos estiverem limitados a 1080p sem upscale e com `UsageEvent` dos três provedores;
 - DLQ aberta = 0;
 - outbox pendente = 0.

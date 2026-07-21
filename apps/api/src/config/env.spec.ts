@@ -37,17 +37,38 @@ describe('environment validation', () => {
       ENABLE_AI: true,
       BUILD_SHA: 'abcdef1234',
       OUTBOX_BATCH_SIZE: 50,
+      COMPOSITION_V1_ROLLOUT_PERCENT: 100,
       FFMPEG_PRESET: 'veryfast',
-      FFMPEG_CRF: 22,
+      FFMPEG_CRF: 19,
       FFMPEG_THREADS: 2,
       FFMPEG_FILTER_THREADS: 1,
       RENDER_MAX_HEIGHT: 720,
-      RENDER_MAX_SOURCE_SHORT_SIDE: 2160,
+      RENDER_MAX_SOURCE_SHORT_SIDE: 1080,
       ALLOW_FULL_BATCH_RENDER: false,
       YTDLP_FRAGMENT_CONCURRENCY: 4,
-      MEDIA_HEAVY_CONCURRENT_JOBS: 2,
+      MEDIA_HEAVY_CONCURRENT_JOBS: 1,
       MEDIA_LIGHT_CONCURRENT_JOBS: 4,
+      AI_EXECUTION_MODE: 'local',
+      STT_PROVIDER: 'whisperx',
+      GPU_PROVIDER: 'none',
+      AUTO_RENDER_MODE: 'all',
+      FINAL_MAX_SHORT_SIDE: 1080,
     });
+  });
+
+  it('requires every approved hybrid provider credential in production', () => {
+    const production = {
+      ...base,
+      NODE_ENV: 'production', APP_ENV: 'production', DIRECT_DATABASE_URL: base.DATABASE_URL,
+      REFRESH_TOKEN_SECRET: 'abcdefghijklmnopqrstuvwxyz123456', ENABLE_AI: 'true', ENABLE_WHISPERX: 'true',
+      UPLOAD_MODE: 'direct', AI_EXECUTION_MODE: 'hybrid', STT_PROVIDER: 'deepgram', GPU_PROVIDER: 'runpod',
+    };
+    expect(() => validateEnvironment(production)).toThrow(/DEEPGRAM_API_KEY/);
+    const config = validateEnvironment({
+      ...production,
+      DEEPGRAM_API_KEY: 'deepgram-secret', RUNPOD_API_KEY: 'runpod-secret', RUNPOD_ENDPOINT_ID: 'endpoint-id',
+    });
+    expect(config).toMatchObject({ AI_EXECUTION_MODE: 'hybrid', STT_PROVIDER: 'deepgram', GPU_PROVIDER: 'runpod' });
   });
 
   it('rejects Turnstile bypass tokens in production by default', () => {

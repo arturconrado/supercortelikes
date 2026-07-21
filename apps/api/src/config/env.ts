@@ -8,7 +8,7 @@ const booleanString = z
 const optionalSecret = z.preprocess((value) => (value === '' ? undefined : value), z.string().min(1).optional());
 const optionalUrl = z.preprocess((value) => (value === '' ? undefined : value), z.string().url().optional());
 const pipelineConcurrencyDefault =
-  '{"ingestion":4,"transcription":2,"segmentation":3,"scoring":4,"clips":3,"captions":3,"rendering":2,"exports":3}';
+  '{"ingestion":4,"transcription":1,"segmentation":3,"scoring":4,"clips":3,"captions":3,"composition":1,"rendering":1,"exports":3}';
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -58,17 +58,39 @@ const environmentSchema = z.object({
   MEDIA_WORKER_DATA_DIR: z.string().default('/data'),
   MEDIA_WORKER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(8 * 60 * 60 * 1000).default(7_200_000),
   MEDIA_DIARIZATION_ENABLED: booleanString,
+  COMPOSITION_V1_ENABLED: booleanString,
+  COMPOSITION_V1_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),
+  MEDIA_ACCELERATOR: z.enum(['cpu', 'cuda']).default('cpu'),
+  AI_EXECUTION_MODE: z.enum(['local', 'hybrid']).default('local'),
+  STT_PROVIDER: z.enum(['whisperx', 'deepgram']).default('whisperx'),
+  DEEPGRAM_API_KEY: optionalSecret,
+  DEEPGRAM_MODEL: z.string().min(1).default('nova-3'),
+  DEEPGRAM_LANGUAGE: z.string().min(2).max(16).default('pt-BR'),
+  DEEPGRAM_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(7200).default(1800),
+  DEEPGRAM_COST_USD_PER_HOUR: z.coerce.number().min(0).max(100).default(0.35),
+  OPENROUTER_EDITOR_MODEL: z.string().min(1).default('google/gemini-2.5-flash'),
+  OPENROUTER_QA_ENABLED: booleanString,
+  GPU_PROVIDER: z.enum(['none', 'runpod']).default('none'),
+  RUNPOD_API_KEY: optionalSecret,
+  RUNPOD_ENDPOINT_ID: optionalSecret,
+  RUNPOD_TIMEOUT_SECONDS: z.coerce.number().int().min(60).max(7200).default(3600),
+  RUNPOD_POLL_SECONDS: z.coerce.number().min(0.5).max(30).default(2),
+  RUNPOD_COST_USD_PER_SECOND: z.coerce.number().min(0).max(1).default(0.00019),
+  AI_COST_LIMIT_USD_PER_SOURCE_HOUR: z.coerce.number().min(0).max(100).default(1),
+  REMOTE_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
+  AUTO_RENDER_MODE: z.enum(['off', 'all']).default('all'),
+  FINAL_MAX_SHORT_SIDE: z.coerce.number().int().min(360).max(1080).default(1080),
   MEDIA_TRANSCRIPTION_BATCH_SIZE: z.coerce.number().int().min(1).max(64).default(16),
-  MEDIA_HEAVY_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(2),
+  MEDIA_HEAVY_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),
   MEDIA_LIGHT_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(16).default(4),
   FFMPEG_PRESET: z
     .enum(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'])
     .default('veryfast'),
-  FFMPEG_CRF: z.coerce.number().int().min(16).max(35).default(22),
+  FFMPEG_CRF: z.coerce.number().int().min(16).max(35).default(19),
   FFMPEG_THREADS: z.coerce.number().int().min(1).max(32).default(2),
   FFMPEG_FILTER_THREADS: z.coerce.number().int().min(1).max(16).default(1),
   RENDER_MAX_HEIGHT: z.coerce.number().int().min(360).max(2160).default(720),
-  RENDER_MAX_SOURCE_SHORT_SIDE: z.coerce.number().int().min(360).max(2160).default(2160),
+  RENDER_MAX_SOURCE_SHORT_SIDE: z.coerce.number().int().min(360).max(2160).default(1080),
   ALLOW_FULL_BATCH_RENDER: booleanString,
   YTDLP_FRAGMENT_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
   ENABLE_AI: booleanString,
@@ -79,6 +101,7 @@ const environmentSchema = z.object({
   LLM_PROVIDER: z.enum(['none', 'openai', 'openrouter']).default('none'),
   LLM_API_KEY: optionalSecret,
   LLM_MODEL: optionalSecret,
+  LLM_PROVIDER_SORT: z.enum(['price', 'throughput', 'latency']).default('latency'),
   MEDIA_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
   OTEL_SERVICE_NAME: z.string().default('picashorts-api'),
@@ -114,6 +137,14 @@ const environmentSchema = z.object({
     }
     if (value.LLM_PROVIDER !== 'none' && !value.LLM_API_KEY) {
       context.addIssue({ code: 'custom', path: ['LLM_API_KEY'], message: 'LLM_API_KEY is required when LLM_PROVIDER is enabled' });
+    }
+    if (value.AI_EXECUTION_MODE === 'hybrid') {
+      if (value.STT_PROVIDER === 'deepgram' && !value.DEEPGRAM_API_KEY) {
+        context.addIssue({ code: 'custom', path: ['DEEPGRAM_API_KEY'], message: 'DEEPGRAM_API_KEY is required for hybrid Deepgram transcription' });
+      }
+      if (value.GPU_PROVIDER === 'runpod' && (!value.RUNPOD_API_KEY || !value.RUNPOD_ENDPOINT_ID)) {
+        context.addIssue({ code: 'custom', path: ['RUNPOD_API_KEY'], message: 'RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required for Runpod' });
+      }
     }
   }
 });

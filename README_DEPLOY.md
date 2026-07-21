@@ -32,11 +32,12 @@ Para ativar scoring com LLM via OpenRouter, coloque os valores apenas em arquivo
 ```bash
 LLM_PROVIDER=openrouter
 LLM_API_KEY=...
-LLM_MODEL=openai/gpt-4o-mini
+LLM_MODEL=google/gemini-2.5-flash-lite
+LLM_PROVIDER_SORT=latency
 LLM_TIMEOUT_SECONDS=45
 ```
 
-No all-in-one local use `.env.one`; na VPS use `.env.production`. Se a OpenRouter falhar ou responder JSON inválido, o media-worker mantém o fallback heurístico local e o pipeline não deve cair por isso.
+No all-in-one local use `.env.one`; na VPS use `.env.production`. O OpenRouter só acelera a curadoria textual e o scoring; transcrição, foco no orador e render continuam locais. Se ele falhar ou responder JSON inválido, o media-worker mantém o fallback heurístico local e o pipeline não deve cair por isso.
 
 ## 1. Recursos externos
 

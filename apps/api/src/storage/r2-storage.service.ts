@@ -8,6 +8,7 @@ import {
   HeadBucketCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -114,6 +115,14 @@ export class R2StorageService implements ObjectStorage {
     });
     const result = await upload.done();
     return { etag: result.ETag?.replaceAll('"', '') };
+  }
+
+  async uploadUrl(key: string, contentType: string, expiresInSeconds = 3600): Promise<string> {
+    return getSignedUrl(
+      this.publicClient,
+      new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }),
+      { expiresIn: Math.min(3600, Math.max(60, expiresInSeconds)) },
+    );
   }
 
   async delete(key: string): Promise<void> {

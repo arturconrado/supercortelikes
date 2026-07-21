@@ -25,7 +25,7 @@ import { DeadLetterService } from '../queues/dead-letter.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 import { ClipExportDto, RenderClipDto, UpdateClipCaptionsDto, UpdateClipDto, UpdateClipTimingDto } from './content.dto';
 
-const MAIN_PIPELINE_STAGE_COUNT = 6;
+const MAIN_PIPELINE_STAGE_COUNT = 7;
 const RENDER_PIPELINE_STAGE_COUNT = 2;
 const PIPELINE_EVENT_INTERVAL_MS = 3_500;
 const PIPELINE_EVENT_HEARTBEAT_MS = 15_000;
@@ -90,7 +90,7 @@ export class ContentController {
     const clips = await this.prisma.clip.findMany({
       where: { videoId: id },
       orderBy: { score: 'desc' },
-      include: { captions: true, exports: true, seo: true, video: true },
+      include: { captions: true, composition: true, exports: true, seo: true, video: true },
     });
     return serialize(await Promise.all(clips.map((clip) => this.clipView(clip))));
   }
@@ -166,7 +166,7 @@ export class ContentController {
     const [pipeline, clipsCount, readyExportsCount] = await Promise.all([
       this.pipelineSnapshot(workspaceId, id),
       this.prisma.clip.count({ where: { videoId: id, video: { workspaceId } } }),
-      this.prisma.export.count({ where: { status: 'READY', clip: { videoId: id, video: { workspaceId } } } }),
+      this.prisma.export.count({ where: { purpose: 'FINAL', status: 'READY', clip: { videoId: id, video: { workspaceId } } } }),
     ]);
     return { generatedAt: new Date().toISOString(), pipeline, clipsCount, readyExportsCount };
   }
@@ -298,6 +298,9 @@ export class ContentController {
           ...(input.status ? { status: input.status } : {}),
         },
       });
+      if (input.aspectRatio && input.aspectRatio !== clip.aspectRatio) {
+        await tx.clipComposition.deleteMany({ where: { clipId: id } });
+      }
       if (input.description !== undefined || input.hashtags !== undefined) {
         const hashtags = input.hashtags?.map((tag) => tag.trim()).filter(Boolean) ?? (clip.seo?.hashtags as string[] | undefined) ?? [];
         await tx.seoMetadata.upsert({
@@ -331,14 +334,17 @@ export class ContentController {
     if (clip.video.durationMs && BigInt(Math.round(input.endSeconds * 1000)) > clip.video.durationMs) {
       throw new BadRequestException('Clip end cannot exceed the source video duration');
     }
-    await this.prisma.clip.update({
-      where: { id },
-      data: {
-        startMs: BigInt(Math.round(input.startSeconds * 1000)),
-        endMs: BigInt(Math.round(input.endSeconds * 1000)),
-        status: 'SUGGESTED',
-      },
-    });
+    await this.prisma.$transaction([
+      this.prisma.clip.update({
+        where: { id },
+        data: {
+          startMs: BigInt(Math.round(input.startSeconds * 1000)),
+          endMs: BigInt(Math.round(input.endSeconds * 1000)),
+          status: 'SUGGESTED',
+        },
+      }),
+      this.prisma.clipComposition.deleteMany({ where: { clipId: id } }),
+    ]);
     return serialize(await this.fullClip(id, user.workspaceId));
   }
 
@@ -391,6 +397,22 @@ export class ContentController {
     }));
   }
 
+  @Post('clips/:id/preview')
+  async previewClip(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() input: RenderClipDto,
+  ): Promise<unknown> {
+    const clip = await this.ensureClip(id, user.workspaceId);
+    return serialize(await this.renderRequests.request(user, {
+      clipId: clip.id,
+      format: 'MP4',
+      aspectRatio: input.aspectRatio ?? clip.aspectRatio,
+      force: input.force ?? false,
+      purpose: 'PREVIEW',
+    }));
+  }
+
   @Post('clips/:id/export')
   async exportClip(
     @CurrentUser() user: AuthenticatedUser,
@@ -402,6 +424,7 @@ export class ContentController {
       clipId: clip.id,
       format: input.format ?? 'MP4',
       aspectRatio: input.aspectRatio ?? clip.aspectRatio,
+      purpose: 'FINAL',
     }));
   }
 
@@ -422,7 +445,7 @@ export class ContentController {
   private async fullClip(id: string, workspaceId: string): Promise<Record<string, unknown>> {
     const clip = await this.prisma.clip.findFirst({
       where: { id, video: { workspaceId } },
-      include: { video: true, segment: { include: { viralScore: true } }, captions: true, exports: true, seo: true },
+      include: { video: true, segment: { include: { viralScore: true } }, captions: true, composition: true, exports: true, seo: true },
     });
     if (!clip) throw new NotFoundException('Clip not found');
     return this.clipView(clip);
@@ -432,14 +455,21 @@ export class ContentController {
     const sortedExports = [...(clip.exports ?? [])].sort((left: { createdAt?: string | Date }, right: { createdAt?: string | Date }) =>
       String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
     );
-    const hasActiveExport = sortedExports.some((item: { status: string }) => ['QUEUED', 'PROCESSING'].includes(item.status));
+    const finalExports = sortedExports.filter((item: { purpose?: string }) => (item.purpose ?? 'FINAL') === 'FINAL');
+    const previewExports = sortedExports.filter((item: { purpose?: string }) => item.purpose === 'PREVIEW');
+    const hasActiveExport = finalExports.some((item: { status: string }) => ['QUEUED', 'PROCESSING'].includes(item.status));
     const canUseReadyExport = clip.status === 'READY' && !hasActiveExport;
     const readyExport = canUseReadyExport
-      ? sortedExports.find((item: { status: string; storageKey?: string | null }) => item.status === 'READY' && item.storageKey)
+      ? finalExports.find((item: { status: string; storageKey?: string | null }) => item.status === 'READY' && item.storageKey)
       : undefined;
+    const latestPreview = previewExports[0];
+    const readyPreview = previewExports.find(
+      (item: { status: string; storageKey?: string | null }) => item.status === 'READY' && item.storageKey,
+    );
     const caption = clip.captions?.[0];
     const captionStorageKey = isStorageKey(caption?.srtKey) ? caption.srtKey : undefined;
     const renderUrl = readyExport?.storageKey ? await this.storage.downloadUrl(readyExport.storageKey, 900) : undefined;
+    const previewUrl = readyPreview?.storageKey ? await this.storage.downloadUrl(readyPreview.storageKey, 900) : undefined;
     const downloadUrl = readyExport?.storageKey
       ? await this.storage.downloadUrl(readyExport.storageKey, 900, {
           disposition: 'attachment',
@@ -447,7 +477,7 @@ export class ContentController {
           contentType: 'video/mp4',
         })
       : undefined;
-    const sourcePreviewUrl = renderUrl ? undefined : await this.sourcePreviewUrl(clip);
+    const sourcePreviewUrl = renderUrl || previewUrl ? undefined : await this.sourcePreviewUrl(clip);
     const { video: _video, ...clipFields } = clip;
     return {
       ...clipFields,
@@ -468,7 +498,9 @@ export class ContentController {
       })),
       thumbnailUrl: clip.thumbnailKey ? await this.storage.downloadUrl(clip.thumbnailKey, 900) : undefined,
       renderUrl,
-      playbackUrl: renderUrl ?? sourcePreviewUrl,
+      previewUrl,
+      previewStatus: latestPreview?.status,
+      playbackUrl: previewUrl ?? renderUrl ?? sourcePreviewUrl,
       downloadUrl,
       captionsUrl: captionStorageKey ? await this.storage.downloadUrl(captionStorageKey, 900) : undefined,
     };

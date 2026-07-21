@@ -24,6 +24,7 @@ describe('MediaStageProcessor persistence', () => {
       'viral-scores': { scores: [{ score: 88, categories: { curiosity: 80, authority: 70, controversy: 10, emotion: 90, business: 60, entertainment: 50, educational: 75, financial: 20 }, signals: { hook: 1 } }] },
       'clip-candidates': { clips: [{ start: 0, end: 20, score: 88, titleSuggestions: ['Title'], reason: 'Strong hook', text: 'A useful transcript', segmentIds: [0] }] },
       'captions-manifest': { captions: [{ clipId: 'clip-001', srt: `${root}/clip-001.srt`, ass: `${root}/clip-001.ass`, cueCount: 2 }] },
+      'composition-manifest': { compositions: [{ clipId: 'clip-001', version: 'composition-v1', scenes: [], diagnostics: { status: 'fallback' } }] },
       'export-manifest': { storage: [
         { key: 'exports/video/clip-001.mp4', bytes: 100, mediaType: 'video/mp4' },
         { key: 'exports/video/clip-001.srt', bytes: 20, mediaType: 'application/x-subrip' },
@@ -62,8 +63,10 @@ describe('MediaStageProcessor persistence', () => {
       },
       seoMetadata: { create: vi.fn() },
       captionTrack: { deleteMany: vi.fn(), create: vi.fn(), update: vi.fn() },
+      clipComposition: { upsert: vi.fn() },
       export: {
-        findFirst: vi.fn().mockResolvedValue({ aspectRatio: '9:16', renderFingerprint: 'fingerprint' }),
+        findFirst: vi.fn().mockResolvedValue({ aspectRatio: '9:16', renderFingerprint: 'fingerprint', purpose: 'FINAL' }),
+        findUnique: vi.fn().mockResolvedValue({ purpose: 'FINAL' }),
         create: vi.fn(),
         updateMany: vi.fn(),
         update: vi.fn(),
@@ -77,12 +80,14 @@ describe('MediaStageProcessor persistence', () => {
           job.stage === 'scoring' ? 'viral-scores' :
           job.stage === 'clips' ? 'clip-candidates' :
           job.stage === 'captions' ? 'captions-manifest' :
+          job.stage === 'composition' ? 'composition-manifest' :
           job.stage === 'exports' ? 'export-manifest' : 'missing']
           ? [{ kind: job.stage === 'transcription' ? 'whisperx-transcript' :
             job.stage === 'segmentation' ? 'semantic-segments' :
             job.stage === 'scoring' ? 'viral-scores' :
             job.stage === 'clips' ? 'clip-candidates' :
-            job.stage === 'captions' ? 'captions-manifest' : 'export-manifest', path: artifacts[job.stage === 'transcription' ? 'whisperx-transcript' : job.stage === 'segmentation' ? 'semantic-segments' : job.stage === 'scoring' ? 'viral-scores' : job.stage === 'clips' ? 'clip-candidates' : job.stage === 'captions' ? 'captions-manifest' : 'export-manifest'] }]
+            job.stage === 'captions' ? 'captions-manifest' :
+            job.stage === 'composition' ? 'composition-manifest' : 'export-manifest', path: artifacts[job.stage === 'transcription' ? 'whisperx-transcript' : job.stage === 'segmentation' ? 'semantic-segments' : job.stage === 'scoring' ? 'viral-scores' : job.stage === 'clips' ? 'clip-candidates' : job.stage === 'captions' ? 'captions-manifest' : job.stage === 'composition' ? 'composition-manifest' : 'export-manifest'] }]
           : [],
         metrics: job.stage === 'ingestion' ? { durationSeconds: 20, video: { width: 640, height: 360, frameRate: 24, codec: 'h264' }, audio: { codec: 'aac' } } : {},
       })),
@@ -94,6 +99,11 @@ describe('MediaStageProcessor persistence', () => {
     };
     storage = {
       upload: vi.fn().mockResolvedValue({ etag: 'etag' }),
+      uploadUrl: vi.fn(async (key: string) => `https://storage.test/upload/${key}`),
+      metadata: vi.fn(async (key: string) => ({
+        bytes: BigInt(key.endsWith('.srt') ? 20 : key.endsWith('.ass') ? 30 : 100),
+        contentType: key.endsWith('.mp4') ? 'video/mp4' : 'text/plain',
+      })),
       downloadUrl: vi.fn(async (key: string) => `https://storage.test/${key}`),
     };
     processor = new MediaStageProcessor(
@@ -109,6 +119,15 @@ describe('MediaStageProcessor persistence', () => {
           FFMPEG_CRF: 22,
           RENDER_MAX_HEIGHT: 720,
           RENDER_MAX_SOURCE_SHORT_SIDE: 2160,
+          COMPOSITION_V1_ENABLED: true,
+          COMPOSITION_V1_ROLLOUT_PERCENT: 100,
+          MEDIA_ACCELERATOR: 'cpu',
+          AI_EXECUTION_MODE: 'local',
+          STT_PROVIDER: 'whisperx',
+          GPU_PROVIDER: 'none',
+          AUTO_RENDER_MODE: 'all',
+          AI_COST_LIMIT_USD_PER_SOURCE_HOUR: 1,
+          FINAL_MAX_SHORT_SIDE: 1080,
         } as any)[key],
       } as any,
       usage,
@@ -127,7 +146,7 @@ describe('MediaStageProcessor persistence', () => {
   }) as any;
 
   it('persists every pipeline stage and passes release-safe options', async () => {
-    for (const stage of ['ingestion', 'transcription', 'segmentation', 'scoring', 'clips', 'captions']) {
+    for (const stage of ['ingestion', 'transcription', 'segmentation', 'scoring', 'clips', 'captions', 'composition']) {
       await processor.process(job(stage));
     }
     await processor.process(renderJob('rendering'));
@@ -141,6 +160,7 @@ describe('MediaStageProcessor persistence', () => {
     expect(prisma.clip.create).toHaveBeenCalled();
     expect(prisma.seoMetadata.create).toHaveBeenCalled();
     expect(prisma.captionTrack.create).toHaveBeenCalled();
+    expect(prisma.clipComposition.upsert).toHaveBeenCalled();
     expect(prisma.export.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'export', status: { in: ['QUEUED', 'PROCESSING'] } } }));
     expect(prisma.export.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'export' }, data: expect.objectContaining({ status: 'READY' }) }));
     expect(prisma.clip.update).toHaveBeenCalled();
@@ -151,7 +171,8 @@ describe('MediaStageProcessor persistence', () => {
       expect.objectContaining({
         clipIndex: 0,
         preserveSourceQuality: true,
-        maxSourceShortSide: 2160,
+        compositionV1: true,
+        maxSourceShortSide: 1080,
         clipOverride: { clipIndex: 0, start: 0.2, end: 19.8 },
         captionOverride: expect.objectContaining({ template: 'marketing', cues: [{ start: 0, end: 1, text: 'edited' }] }),
       }),
@@ -184,6 +205,49 @@ describe('MediaStageProcessor persistence', () => {
     expect(prisma.captionTrack.update).toHaveBeenCalledWith({
       where: { id: 'caption' },
       data: { srtKey: null, assKey: null },
+    });
+  });
+
+  it('creates one idempotent final export per clip for automatic production rendering', async () => {
+    prisma.export.findFirst.mockResolvedValueOnce(null);
+    prisma.export.create.mockResolvedValueOnce({
+      id: 'automatic-export',
+      clipId: 'clip',
+      purpose: 'FINAL',
+      status: 'QUEUED',
+      storageKey: null,
+    });
+    media.execute.mockResolvedValueOnce({ artifacts: [], metrics: {} });
+
+    await processor.process(job('rendering'));
+
+    expect(prisma.export.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ clipId: 'clip', purpose: 'FINAL', status: 'QUEUED', sourcePipelineRunId: 'run' }),
+    });
+    expect(media.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'rendering' }),
+      { bucket: 'bucket', key: 'videos/source.mp4' },
+      expect.objectContaining({
+        purpose: 'FINAL',
+        clipIndexes: [0],
+        batchOutputs: [expect.objectContaining({ clipId: 'clip', exportId: 'automatic-export' })],
+      }),
+      undefined,
+    );
+    expect(storage.uploadUrl).not.toHaveBeenCalled();
+  });
+
+  it('marks a clip for review when visual QA still fails after the conservative rerender', async () => {
+    media.execute.mockResolvedValueOnce({
+      artifacts: [],
+      metrics: { quality: { status: 'review', failedClipIds: ['clip-001'], rerendered: ['clip-001'] } },
+    });
+
+    await processor.process(renderJob('rendering'));
+
+    expect(prisma.clip.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['clip'] } },
+      data: { status: 'REVIEW_REQUIRED' },
     });
   });
 

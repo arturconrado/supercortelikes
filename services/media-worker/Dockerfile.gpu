@@ -1,0 +1,37 @@
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MEDIA_WORKER_DATA_DIR=/data \
+    MEDIA_ACCELERATOR=cuda \
+    HF_HOME=/data/models/huggingface \
+    TORCH_HOME=/data/models/torch \
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
+    XDG_CACHE_HOME=/data/models/cache \
+    YOLO_CONFIG_DIR=/data/models
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg fontconfig fonts-liberation2 fonts-montserrat fonts-urw-base35 libglib2.0-0 libgl1 patchelf python3 python3-pip \
+    && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt requirements-gpu.txt ./
+RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install -r requirements-gpu.txt \
+    && python3 -c "import torch, whisperx, cv2, mediapipe, ultralytics; assert torch.version.cuda; print(torch.version.cuda)"
+
+COPY pyproject.toml ./
+COPY src ./src
+RUN python3 -m pip install --no-deps . \
+    && useradd --create-home --uid 10001 worker \
+    && mkdir -p /data/models /data/pipelines \
+    && chown -R worker:worker /data
+
+USER worker
+EXPOSE 8090
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/live', timeout=3)"
+CMD ["python3", "-m", "uvicorn", "media_worker.app:app", "--host", "0.0.0.0", "--port", "8090"]

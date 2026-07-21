@@ -100,4 +100,4 @@ def artifact(path: Path, kind: str, media_type: str) -> ArtifactDescriptor:
 
 
 def artifacts_to_dict(values: List[ArtifactDescriptor]) -> List[Dict[str, Any]]:
-    return [value.model_dump(mode="json") for value in values]
+    return [value.model_dump(mode="json", exclude_none=True) for value in values]

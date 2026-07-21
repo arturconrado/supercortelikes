@@ -114,7 +114,7 @@ else
   fi
 fi
 
-llm_provider="${LLM_PROVIDER:-openrouter}"
+llm_provider="${LLM_PROVIDER:-none}"
 llm_api_key="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
 case "${llm_provider}" in
   openrouter)
@@ -170,7 +170,7 @@ tmp_file="$(mktemp)"
   printf 'QUEUE_PREFIX=%s\n' "${QUEUE_PREFIX:-clipbr-vps}"
   printf 'OUTBOX_POLL_INTERVAL_MS=%s\n' "${OUTBOX_POLL_INTERVAL_MS:-1000}"
   printf 'OUTBOX_BATCH_SIZE=%s\n' "${OUTBOX_BATCH_SIZE:-50}"
-  printf 'PIPELINE_STAGE_CONCURRENCY_JSON=%s\n' "$(env_quote "${PIPELINE_STAGE_CONCURRENCY_JSON:-{\"ingestion\":4,\"transcription\":1,\"segmentation\":3,\"scoring\":4,\"clips\":3,\"captions\":3,\"rendering\":1,\"exports\":3}}")"
+  printf 'PIPELINE_STAGE_CONCURRENCY_JSON=%s\n' "$(env_quote "${PIPELINE_STAGE_CONCURRENCY_JSON:-{\"ingestion\":4,\"transcription\":1,\"segmentation\":3,\"scoring\":4,\"clips\":3,\"captions\":3,\"composition\":1,\"rendering\":1,\"exports\":3}}")"
   printf 'PIPELINE_EVENT_RETENTION_SECONDS=%s\n' "${PIPELINE_EVENT_RETENTION_SECONDS:-300}"
   printf 'ANALYTICS_CACHE_TTL_SECONDS=%s\n' "${ANALYTICS_CACHE_TTL_SECONDS:-30}"
   printf '\n'
@@ -194,12 +194,15 @@ tmp_file="$(mktemp)"
   printf 'MEDIA_MAX_CONCURRENT_JOBS=%s\n' "${MEDIA_MAX_CONCURRENT_JOBS:-2}"
   printf 'MEDIA_HEAVY_CONCURRENT_JOBS=%s\n' "${MEDIA_HEAVY_CONCURRENT_JOBS:-1}"
   printf 'MEDIA_LIGHT_CONCURRENT_JOBS=%s\n' "${MEDIA_LIGHT_CONCURRENT_JOBS:-4}"
+  printf 'COMPOSITION_V1_ENABLED=%s\n' "${COMPOSITION_V1_ENABLED:-false}"
+  printf 'COMPOSITION_V1_ROLLOUT_PERCENT=%s\n' "${COMPOSITION_V1_ROLLOUT_PERCENT:-100}"
+  printf 'MEDIA_ACCELERATOR=%s\n' "${MEDIA_ACCELERATOR:-cpu}"
   printf 'FFMPEG_PRESET=%s\n' "${FFMPEG_PRESET:-veryfast}"
-  printf 'FFMPEG_CRF=%s\n' "${FFMPEG_CRF:-22}"
+  printf 'FFMPEG_CRF=%s\n' "${FFMPEG_CRF:-19}"
   printf 'FFMPEG_THREADS=%s\n' "${FFMPEG_THREADS:-2}"
   printf 'FFMPEG_FILTER_THREADS=%s\n' "${FFMPEG_FILTER_THREADS:-1}"
   printf 'RENDER_MAX_HEIGHT=%s\n' "${RENDER_MAX_HEIGHT:-720}"
-  printf 'RENDER_MAX_SOURCE_SHORT_SIDE=%s\n' "${RENDER_MAX_SOURCE_SHORT_SIDE:-2160}"
+  printf 'RENDER_MAX_SOURCE_SHORT_SIDE=%s\n' "${RENDER_MAX_SOURCE_SHORT_SIDE:-1080}"
   printf 'ALLOW_FULL_BATCH_RENDER=%s\n' "${ALLOW_FULL_BATCH_RENDER:-false}"
   printf 'YTDLP_FRAGMENT_CONCURRENCY=%s\n' "${YTDLP_FRAGMENT_CONCURRENCY:-4}"
   printf 'ENABLE_AI=true\n'
@@ -211,9 +214,10 @@ tmp_file="$(mktemp)"
   printf 'MEDIA_TRANSCRIPTION_BATCH_SIZE=1\n'
   printf 'LLM_PROVIDER=%s\n' "${llm_provider}"
   printf 'LLM_API_KEY=%s\n' "${llm_api_key}"
-  printf 'LLM_MODEL=%s\n' "${LLM_MODEL:-openai/gpt-4o-mini}"
+  printf 'LLM_MODEL=%s\n' "${LLM_MODEL:-google/gemini-2.5-flash-lite}"
+  printf 'LLM_PROVIDER_SORT=%s\n' "${LLM_PROVIDER_SORT:-latency}"
   printf 'LLM_TIMEOUT_SECONDS=%s\n' "${LLM_TIMEOUT_SECONDS:-45}"
-  printf 'WHISPERX_MODEL=tiny\n'
+  printf 'WHISPERX_MODEL=small\n'
   printf 'WHISPERX_DEVICE=cpu\n'
   printf 'WHISPERX_COMPUTE_TYPE=int8\n'
   printf 'HF_TOKEN=%s\n' "${HF_TOKEN:-}"

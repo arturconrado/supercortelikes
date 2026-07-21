@@ -12,6 +12,7 @@ export const DEFAULT_PIPELINE_STAGE_CONCURRENCY: Record<PipelineStageName, numbe
   scoring: 4,
   clips: 3,
   captions: 3,
+  composition: 1,
   rendering: 2,
   exports: 3,
 };

@@ -3,7 +3,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { errorCode, safeErrorMessage } from './pipeline-orchestrator.service';
-import { pipelineJobSchema, type PipelineJob } from './pipeline.constants';
+import { PIPELINE_STAGES, pipelineJobSchema, type PipelineJob } from './pipeline.constants';
 import { QueueRegistryService } from './queue-registry.service';
 
 @Injectable()
@@ -63,26 +63,14 @@ export class DeadLetterService {
       causationId: parsed.data.eventId,
       occurredAt: new Date().toISOString(),
     };
-    const stageIndex = [
-      'ingestion',
-      'transcription',
-      'segmentation',
-      'scoring',
-      'clips',
-      'captions',
-      'rendering',
-      'exports',
-    ].indexOf(job.stage);
-    const previousStage = stageIndex > 0 ? [
-      'ingestion',
-      'transcription',
-      'segmentation',
-      'scoring',
-      'clips',
-      'captions',
-      'rendering',
-    ][stageIndex - 1] : null;
-    const eventType = previousStage ? `pipeline.${previousStage}.completed.v1` : 'video.uploaded.v1';
+    const stageIndex = PIPELINE_STAGES.indexOf(job.stage);
+    const previousStage = stageIndex > 0 ? PIPELINE_STAGES[stageIndex - 1] : null;
+    const eventType =
+      job.stage === 'rendering'
+        ? 'clip.render.requested.v1'
+        : previousStage
+          ? `pipeline.${previousStage}.completed.v1`
+          : 'video.uploaded.v1';
     await this.prisma.$transaction([
       this.prisma.deadLetterJob.update({
         where: { id },

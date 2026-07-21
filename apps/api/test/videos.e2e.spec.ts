@@ -89,6 +89,7 @@ class TestStorage implements ObjectStorage {
     }
     return { etag: 'test-etag' };
   }
+  async uploadUrl(key: string): Promise<string> { return `https://storage.test/upload/${key}`; }
   async delete(): Promise<void> {}
   async deletePrefix(): Promise<number> { return 0; }
   async downloadUrl(key: string): Promise<string> {

@@ -5,7 +5,9 @@ from typing import Any, Callable, Dict, List
 
 from .captions import build_caption_files, caption_style, normalize_cues, render_ass, render_srt
 from .clips import find_clips
+from .composition import build_compositions, fallback_plan
 from .config import Settings
+from .deepgram import transcribe_url as transcribe_with_deepgram
 from .errors import WorkerError
 from .media import (
     detect_burned_in_subtitles,
@@ -15,8 +17,10 @@ from .media import (
     materialize_storage,
     probe_media,
 )
-from .models import ArtifactDescriptor, PipelineRequest, ReframeRequest, StageResponse
+from .models import ArtifactDescriptor, ArtifactLocation, PipelineRequest, ReframeRequest, StageResponse
 from .rendering import render_clips
+from .quality import conservative_compositions, review_renders
+from .runpod import execute_remote_job
 from .scoring import score_all
 from .segmentation import semantic_segments
 from .storage import upload_file
@@ -32,6 +36,7 @@ STAGES = (
     "scoring",
     "clips",
     "captions",
+    "composition",
     "rendering",
     "exports",
 )
@@ -49,6 +54,7 @@ class Pipeline:
             "scoring": self._scoring,
             "clips": self._clips,
             "captions": self._captions,
+            "composition": self._composition,
             "rendering": self._rendering,
             "exports": self._exports,
         }
@@ -69,7 +75,7 @@ class Pipeline:
                 return StageResponse.model_validate(cached)
             response = self.handlers[stage](request, workspace)
             workspace.save_result(
-                stage, response.model_dump(mode="json", by_alias=True)
+                stage, response.model_dump(mode="json", by_alias=True, exclude_none=True)
             )
             return response
 
@@ -112,7 +118,7 @@ class Pipeline:
                 },
             )
             workspace.save_result(
-                stage, response.model_dump(mode="json", by_alias=True)
+                stage, response.model_dump(mode="json", by_alias=True, exclude_none=True)
             )
             return response
 
@@ -130,11 +136,15 @@ class Pipeline:
             self.settings,
             float(metadata["durationSeconds"]),
         )
-        metadata["burnedInSubtitles"] = detect_burned_in_subtitles(
-            source,
-            workspace.path("media"),
-            self.settings,
-            float(metadata["durationSeconds"]),
+        metadata["burnedInSubtitles"] = (
+            {"detected": False, "confidence": 0.0, "evidence": [], "skipped": "hybrid-light-ingestion"}
+            if self.settings.ai_execution_mode == "hybrid"
+            else detect_burned_in_subtitles(
+                source,
+                workspace.path("media"),
+                self.settings,
+                float(metadata["durationSeconds"]),
+            )
         )
         metadata["sourcePath"] = str(source)
         metadata_path = workspace.write_json("media/metadata.json", metadata)
@@ -152,8 +162,29 @@ class Pipeline:
     def _transcription(
         self, request: PipelineRequest, workspace: Workspace
     ) -> StageResponse:
-        source = self._ensure_source(request, workspace)
-        value = transcribe(source, self.settings, request.options)
+        provider_error = None
+        value = None
+        if (
+            self.settings.ai_execution_mode == "hybrid"
+            and self.settings.stt_provider == "deepgram"
+            and request.source_uri
+            and _external_budget_available(request.options, self.settings.deepgram_cost_usd_per_hour)
+        ):
+            try:
+                value = transcribe_with_deepgram(
+                    request.source_uri, self.settings, request.options
+                )
+            except WorkerError as error:
+                provider_error = error.code
+        if value is None:
+            source = self._ensure_source(request, workspace)
+            value = transcribe(source, self.settings, request.options)
+            if provider_error:
+                value["fallback"] = {
+                    "provider": "deepgram",
+                    "reason": provider_error,
+                    "engine": "whisperx",
+                }
         path = workspace.write_json("transcription/transcript.json", value)
         return self._response(
             request,
@@ -164,6 +195,9 @@ class Pipeline:
                 "confidence": value["confidence"],
                 "speakerCount": value["speakerCount"],
                 "segments": len(value["segments"]),
+                "engine": value.get("engine", "whisperx"),
+                "providerUsage": value.get("providerUsage", []),
+                "fallback": value.get("fallback"),
             },
         )
 
@@ -191,13 +225,22 @@ class Pipeline:
 
     def _scoring(self, request: PipelineRequest, workspace: Workspace) -> StageResponse:
         segments = workspace.read_json("segmentation/segments.json")["segments"]
-        value = score_all(segments, self.settings)
+        llm_settings = (
+            self.settings
+            if _external_budget_available(request.options, 0.05)
+            else None
+        )
+        value = score_all(segments, llm_settings)
         path = workspace.write_json("scoring/scores.json", value)
         return self._response(
             request,
             "scoring",
             [artifact(path, "viral-scores", "application/json")],
-            {"segments": len(value["scores"]), "averageScore": value["averageScore"]},
+            {
+                "segments": len(value["scores"]),
+                "averageScore": value["averageScore"],
+                "providerUsage": value.get("providerUsage", []),
+            },
         )
 
     def _clips(self, request: PipelineRequest, workspace: Workspace) -> StageResponse:
@@ -263,10 +306,35 @@ class Pipeline:
         self, request: PipelineRequest, workspace: Workspace
     ) -> StageResponse:
         source_workspace = self._source_workspace(request, workspace)
-        source = self._ensure_source(request, source_workspace)
+        remote_gpu = _remote_gpu_enabled(request, self.settings)
+        source = None if remote_gpu else self._ensure_source(request, source_workspace)
         clips = source_workspace.read_json("clips/clips.json")["clips"]
         selected_indexes = self._selected_clip_indexes(request, len(clips))
         selected_clips = [clips[index] for index in selected_indexes]
+        batch_outputs = request.options.get("batchOutputs")
+        if isinstance(batch_outputs, list):
+            pending_indexes = {
+                int(value.get("clipIndex", -1))
+                for value in batch_outputs
+                if isinstance(value, dict) and not bool(value.get("ready"))
+            }
+            pending = [
+                (index, clip)
+                for index, clip in zip(selected_indexes, selected_clips)
+                if index in pending_indexes
+            ]
+            selected_indexes = [value[0] for value in pending]
+            selected_clips = [value[1] for value in pending]
+            if not selected_clips:
+                manifest = workspace.write_json(
+                    "renders/manifest.json", {"renders": [], "captions": [], "storage": []}
+                )
+                return self._response(
+                    request,
+                    "rendering",
+                    [artifact(manifest, "renders-manifest", "application/json")],
+                    {"clips": 0, "storage": [], "reused": len(batch_outputs)},
+                )
         caption_time_offset = 0.0
         clip_override = request.options.get("clipOverride")
         if isinstance(clip_override, dict):
@@ -311,7 +379,53 @@ class Pipeline:
                     "cues": cues,
                 }]
         render_options = dict(request.options)
-        if bool(request.options.get("smartReframe", False)):
+        composition_enabled = bool(request.options.get("compositionV1", False))
+        composition_plans = []
+        generated_composition_path = None
+        if composition_enabled:
+            composition_path = source_workspace.path("composition/manifest.json")
+            if composition_path.is_file():
+                composition_plans = source_workspace.read_json("composition/manifest.json").get("compositions", [])
+            selected_plan_ids = {str(clip["id"]) for clip in selected_clips}
+            regenerate = bool(request.options.get("regenerateComposition", False))
+            reusable_plans = [
+                plan
+                for plan in composition_plans
+                if str(plan.get("clipId")) not in selected_plan_ids
+                or (
+                    not regenerate
+                    and str(plan.get("accelerator", "legacy"))
+                    == self.settings.media_accelerator
+                )
+            ]
+            reusable_ids = {str(plan.get("clipId")) for plan in reusable_plans}
+            missing_clips = [
+                clip for clip in selected_clips if str(clip["id"]) not in reusable_ids
+            ]
+            if missing_clips and not remote_gpu:
+                assert source is not None
+                generated = build_compositions(
+                    source,
+                    missing_clips,
+                    self.settings,
+                    {
+                        **request.options,
+                        "enabled": True,
+                        "voiceActivity": _voice_activity(source_workspace),
+                        **_source_video_dimensions(source_workspace),
+                    },
+                )
+                composition_plans = [*reusable_plans, *generated]
+                generated_composition_path = source_workspace.write_json(
+                    "composition/manifest.json", {"compositions": composition_plans}
+                )
+            render_options["compositionPlans"] = {
+                str(plan["clipId"]): plan
+                for plan in composition_plans
+                if str(plan.get("clipId")) in selected_plan_ids
+            }
+        if bool(request.options.get("smartReframe", False)) and not composition_enabled and not remote_gpu:
+            assert source is not None
             aspect = str(request.options.get("aspectRatio", "9:16"))
             if aspect not in {"9:16", "1:1", "4:5", "16:9"}:
                 raise WorkerError(
@@ -357,6 +471,113 @@ class Pipeline:
                     ),
                 )
             render_options["smartCrops"] = smart_crops
+        remote_error = None
+        remote_provider_usage = []
+        if remote_gpu:
+            try:
+                remote = execute_remote_job(
+                    workspace,
+                    "rendering",
+                    {
+                        "jobType": "render",
+                        "idempotencyKey": request.stage_execution_id,
+                        "sourceUrl": request.source_uri,
+                        "sourceSha256": request.options.get("sourceSha256"),
+                        "sourceEtag": request.options.get("sourceEtag"),
+                        "clips": selected_clips,
+                        "captions": _remote_caption_payload(captions),
+                        "compositionPlans": render_options.get("compositionPlans", {}),
+                        "clipIndexes": selected_indexes,
+                        "options": {
+                            **request.options,
+                            "voiceActivity": _voice_activity(source_workspace),
+                            **_source_video_dimensions(source_workspace),
+                        },
+                        "outputs": request.options.get("batchOutputs", []),
+                    },
+                    self.settings,
+                )
+                outputs = remote.get("renders")
+                stored = remote.get("storage")
+                if not isinstance(outputs, list) or not isinstance(stored, list):
+                    raise WorkerError(
+                        "RUNPOD_RESPONSE_INVALID",
+                        "Runpod render output is missing renders or storage",
+                        status_code=502,
+                    )
+                manifest = workspace.write_json(
+                    "renders/manifest.json",
+                    {"renders": outputs, "captions": captions, "storage": stored},
+                )
+                artifacts = [artifact(manifest, "renders-manifest", "application/json")]
+                remote_compositions = remote.get("compositions")
+                if isinstance(remote_compositions, list):
+                    generated_composition_path = source_workspace.write_json(
+                        "composition/manifest.json",
+                        {"compositions": remote_compositions},
+                    )
+                    artifacts.append(
+                        artifact(
+                            generated_composition_path,
+                            "composition-manifest",
+                            "application/json",
+                        )
+                    )
+                for value in stored:
+                    if not isinstance(value, dict) or str(value.get("mediaType")) != "video/mp4":
+                        continue
+                    artifacts.append(
+                        ArtifactDescriptor(
+                            kind="rendered-clip",
+                            location=ArtifactLocation(
+                                type="object",
+                                bucket=str(value.get("bucket") or ""),
+                                key=str(value.get("key") or ""),
+                            ),
+                            sha256=str(value.get("sha256") or ""),
+                            bytes=int(value.get("bytes") or 0),
+                            media_type="video/mp4",
+                        )
+                    )
+                return self._response(
+                    request,
+                    "rendering",
+                    artifacts,
+                    {
+                        "clips": len(outputs),
+                        "storage": stored,
+                        "providerUsage": remote.get("providerUsage", []),
+                        "quality": remote.get("quality"),
+                        "remote": True,
+                    },
+                )
+            except WorkerError as error:
+                remote_error = error.code
+                remote_provider_usage = (
+                    list(error.detail.get("providerUsage", []))
+                    if isinstance(error.detail, dict)
+                    else []
+                )
+                source = self._ensure_source(request, source_workspace)
+                if composition_enabled:
+                    generated = build_compositions(
+                        source,
+                        selected_clips,
+                        self.settings,
+                        {
+                            **request.options,
+                            "enabled": True,
+                            "voiceActivity": _voice_activity(source_workspace),
+                            **_source_video_dimensions(source_workspace),
+                        },
+                    )
+                    render_options["compositionPlans"] = {
+                        str(plan["clipId"]): plan for plan in generated
+                    }
+                    generated_composition_path = source_workspace.write_json(
+                        "composition/manifest.json", {"compositions": generated}
+                    )
+        assert source is not None
         outputs = render_clips(
             source,
             selected_clips,
@@ -365,13 +586,136 @@ class Pipeline:
             self.settings,
             render_options,
         )
+        quality = review_renders(
+            outputs,
+            self.settings,
+            workspace.path("quality/contact-sheets"),
+            cost_remaining_usd=_optional_float(request.options.get("costRemainingUsd")),
+        ) if request.options.get("visualQaEnabled", True) else None
+        provider_usage = list(remote_provider_usage)
+        if quality:
+            provider_usage.extend(quality.get("providerUsage", []))
+        if quality and quality.get("failedClipIds") and isinstance(render_options.get("compositionPlans"), dict):
+            failed_ids = set(str(value) for value in quality["failedClipIds"])
+            failed_clips = [clip for clip in selected_clips if str(clip.get("id")) in failed_ids]
+            conservative_plans = conservative_compositions(
+                render_options["compositionPlans"], list(failed_ids)
+            )
+            render_options["compositionPlans"] = conservative_plans
+            persisted_plans = {
+                str(plan.get("clipId")): plan
+                for plan in composition_plans
+                if isinstance(plan, dict) and plan.get("clipId")
+            }
+            persisted_plans.update(conservative_plans)
+            generated_composition_path = source_workspace.write_json(
+                "composition/manifest.json",
+                {"compositions": list(persisted_plans.values())},
+            )
+            render_clips(
+                source,
+                failed_clips,
+                captions,
+                workspace.path("renders"),
+                self.settings,
+                render_options,
+            )
+            second_quality = review_renders(
+                [value for value in outputs if str(value.get("clipId")) in failed_ids],
+                self.settings,
+                workspace.path("quality/contact-sheets-rerender"),
+                cost_remaining_usd=_remaining_after_usage(
+                    request.options.get("costRemainingUsd"), provider_usage
+                ),
+            )
+            if second_quality:
+                provider_usage.extend(second_quality.get("providerUsage", []))
+                quality = {
+                    **second_quality,
+                    "rerendered": sorted(failed_ids),
+                    "status": "review" if second_quality.get("failedClipIds") else "passed",
+                }
         manifest = workspace.write_json("renders/manifest.json", {"renders": outputs, "captions": captions})
         artifacts = [artifact(manifest, "renders-manifest", "application/json")]
         artifacts.extend(
             artifact(Path(output["path"]), "rendered-clip", "video/mp4")
             for output in outputs
         )
-        return self._response(request, "rendering", artifacts, {"clips": len(outputs)})
+        if generated_composition_path is not None:
+            artifacts.append(
+                artifact(
+                    generated_composition_path,
+                    "composition-manifest",
+                    "application/json",
+                )
+            )
+        return self._response(
+            request,
+            "rendering",
+            artifacts,
+            {
+                "clips": len(outputs),
+                "remote": False,
+                "fallback": (
+                    {"provider": "runpod", "reason": remote_error}
+                    if remote_error
+                    else None
+                ),
+                "quality": quality,
+                "providerUsage": provider_usage,
+            },
+        )
+
+    def _composition(
+        self, request: PipelineRequest, workspace: Workspace
+    ) -> StageResponse:
+        clips = workspace.read_json("clips/clips.json")["clips"]
+        composition_options = {
+            **request.options,
+            "voiceActivity": _voice_activity(workspace),
+            **_source_video_dimensions(workspace),
+        }
+        deferred = (
+            self.settings.ai_execution_mode == "hybrid"
+            and self.settings.gpu_provider == "runpod"
+            and bool(request.options.get("remote"))
+        )
+        if deferred:
+            aspect = str(request.options.get("aspectRatio", "9:16"))
+            plans = [fallback_plan(clip, aspect, "deferred-runpod") for clip in clips]
+            for plan in plans:
+                plan["source"] = {
+                    "width": int(composition_options.get("sourceWidth", 0)),
+                    "height": int(composition_options.get("sourceHeight", 0)),
+                }
+                plan["accelerator"] = "deferred"
+                plan["diagnostics"]["accelerator"] = "deferred"
+        else:
+            source = self._ensure_source(request, workspace)
+            plans = build_compositions(source, clips, self.settings, composition_options)
+        manifest = workspace.write_json(
+            "composition/manifest.json", {"compositions": plans}
+        )
+        ready = sum(
+            1
+            for plan in plans
+            if plan.get("diagnostics", {}).get("status") == "ready"
+        )
+        fallbacks = len(plans) - ready
+        return self._response(
+            request,
+            "composition",
+            [artifact(manifest, "composition-manifest", "application/json")],
+            {
+                "clips": len(plans),
+                "ready": ready,
+                "fallbacks": fallbacks,
+                "version": plans[0]["version"] if plans else "composition-v1",
+                "providerUsage": [],
+                "remote": False,
+                "deferred": deferred,
+            },
+        )
 
     def _exports(self, request: PipelineRequest, workspace: Workspace) -> StageResponse:
         source_workspace = self._source_workspace(request, workspace)
@@ -389,12 +733,6 @@ class Pipeline:
                 if str(caption.get("clipId")) in selected_clip_ids
             ]
         )
-        files = [
-            Path(value["path"])
-            for value in renders
-            if str(value.get("clipId")) in selected_clip_ids
-        ]
-        files.extend(Path(value[kind]) for value in captions for kind in ("srt", "ass"))
         bucket = str(
             request.options.get("bucket")
             or (request.storage.bucket if request.storage else "")
@@ -402,14 +740,76 @@ class Pipeline:
         prefix = str(
             request.options.get("prefix", "exports/%s" % request.video_id)
         ).strip("/")
-        uploaded = []
-        if bucket:
-            for path in files:
-                uploaded.append(
-                    upload_file(
-                        path, bucket, "%s/%s" % (prefix, path.name), self.settings
-                    )
+        purpose = str(request.options.get("purpose", "FINAL"))
+        batch_outputs = request.options.get("batchOutputs")
+        batch_outputs = batch_outputs if isinstance(batch_outputs, list) else []
+        is_batch = bool(request.options.get("batch", False))
+        files: List[Path] = []
+        uploaded = [
+            dict(value)
+            for value in render_manifest.get("storage", [])
+            if isinstance(value, dict)
+        ]
+        renders_by_id = {
+            str(value.get("clipId")): value
+            for value in renders
+            if isinstance(value, dict)
+        }
+        captions_by_id = {
+            str(value.get("clipId")): value
+            for value in captions
+            if isinstance(value, dict)
+        }
+        if is_batch:
+            for spec in batch_outputs:
+                if not isinstance(spec, dict):
+                    continue
+                clip_index = int(spec.get("clipIndex", -1))
+                if clip_index < 0 or clip_index >= len(clips):
+                    continue
+                source_clip_id = str(clips[clip_index]["id"])
+                export_id = str(spec.get("exportId") or "")
+                clip_id = str(spec.get("clipId") or "")
+                already_uploaded = any(
+                    str(value.get("exportId")) == export_id
+                    and str(value.get("mediaType")) == "video/mp4"
+                    for value in uploaded
                 )
+                rendered = renders_by_id.get(source_clip_id)
+                if not bool(spec.get("ready")) and not already_uploaded and rendered and rendered.get("path"):
+                    path = Path(str(rendered["path"]))
+                    files.append(path)
+                    stored = upload_file(path, bucket, str(spec.get("key") or ""), self.settings)
+                    uploaded.append({**stored, "clipId": clip_id, "exportId": export_id, "clipIndex": clip_index})
+                caption = captions_by_id.get(source_clip_id)
+                if purpose == "FINAL" and caption:
+                    output_prefix = str(spec.get("prefix") or str(spec.get("key") or "").rsplit("/", 1)[0]).strip("/")
+                    for kind in ("srt", "ass"):
+                        path = Path(str(caption.get(kind) or ""))
+                        if not path.is_file():
+                            continue
+                        files.append(path)
+                        stored = upload_file(path, bucket, "%s/%s" % (output_prefix, path.name), self.settings)
+                        uploaded.append({**stored, "clipId": clip_id, "exportId": export_id, "clipIndex": clip_index})
+        else:
+            files.extend(
+                Path(str(value["path"]))
+                for value in renders
+                if str(value.get("clipId")) in selected_clip_ids and value.get("path")
+            )
+            if purpose == "FINAL":
+                files.extend(
+                    Path(str(value[kind]))
+                    for value in captions
+                    for kind in ("srt", "ass")
+                    if value.get(kind)
+                )
+            if bucket:
+                existing_keys = {str(value.get("key")) for value in uploaded}
+                for path in files:
+                    key = "%s/%s" % (prefix, path.name)
+                    if key not in existing_keys:
+                        uploaded.append(upload_file(path, bucket, key, self.settings))
         manifest_value = {
             "files": [
                 {
@@ -505,6 +905,14 @@ class Pipeline:
         metrics: Dict[str, Any],
     ) -> StageResponse:
         return StageResponse(
+            schemaVersion=(
+                2
+                if any(
+                    value.location is not None and value.location.type == "object"
+                    for value in artifacts
+                )
+                else 1
+            ),
             pipelineRunId=request.pipeline_run_id,
             stageExecutionId=request.stage_execution_id,
             videoId=request.video_id,
@@ -516,6 +924,103 @@ class Pipeline:
 
 def _media_type(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def _external_budget_available(options: Dict[str, Any], estimated_usd_per_hour: float) -> bool:
+    remaining = options.get("costRemainingUsd")
+    source_duration = options.get("sourceDurationSeconds")
+    if remaining is None or source_duration is None:
+        return True
+    estimated = max(0.0, float(source_duration)) / 3600.0 * max(0.0, estimated_usd_per_hour)
+    return estimated <= max(0.0, float(remaining))
+
+
+def _remote_gpu_enabled(request: PipelineRequest, settings: Settings) -> bool:
+    if not (
+        settings.ai_execution_mode == "hybrid"
+        and settings.gpu_provider == "runpod"
+        and bool(request.options.get("remote"))
+        and request.source_uri
+    ):
+        return False
+    remaining = request.options.get("costRemainingUsd")
+    source_duration = request.options.get("sourceDurationSeconds")
+    if remaining is None or source_duration is None:
+        return True
+    # The first production guard assumes GPU time may reach half of source duration.
+    # Actual provider usage is persisted and subsequent stages consume the remainder.
+    estimated_gpu_seconds = max(30.0, float(source_duration) * 0.5)
+    estimated_cost = estimated_gpu_seconds * settings.runpod_cost_usd_per_second
+    return estimated_cost <= max(0.0, float(remaining))
+
+
+def _remote_caption_payload(captions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    values = []
+    for caption in captions:
+        if not isinstance(caption, dict):
+            continue
+        ass_path = Path(str(caption.get("ass") or ""))
+        srt_path = Path(str(caption.get("srt") or ""))
+        if not ass_path.is_file():
+            continue
+        values.append(
+            {
+                "clipId": str(caption.get("clipId") or ""),
+                "ass": ass_path.read_text(encoding="utf-8"),
+                "srt": srt_path.read_text(encoding="utf-8") if srt_path.is_file() else "",
+                "cueCount": int(caption.get("cueCount") or 0),
+            }
+        )
+    return values
+
+
+def _optional_float(value: Any) -> Any:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _remaining_after_usage(value: Any, usage: List[Dict[str, Any]]) -> Any:
+    remaining = _optional_float(value)
+    if remaining is None:
+        return None
+    spent = sum(max(0.0, float(item.get("costUsd") or 0.0)) for item in usage)
+    return max(0.0, remaining - spent)
+
+
+def _voice_activity(workspace: Workspace) -> List[Dict[str, Any]]:
+    transcript_path = workspace.path("transcription/transcript.json")
+    if not transcript_path.is_file():
+        return []
+    try:
+        segments = workspace.read_json("transcription/transcript.json").get("segments", [])
+    except (OSError, ValueError, TypeError):
+        return []
+    return [
+        {
+            "start": segment.get("start", 0),
+            "end": segment.get("end", 0),
+            "speaker": segment.get("speaker"),
+        }
+        for segment in segments
+        if isinstance(segment, dict)
+    ]
+
+
+def _source_video_dimensions(workspace: Workspace) -> Dict[str, int]:
+    metadata_path = workspace.path("media/metadata.json")
+    if not metadata_path.is_file():
+        return {}
+    try:
+        video = workspace.read_json("media/metadata.json").get("video", {})
+        width, height = int(video.get("width", 0)), int(video.get("height", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+    return {
+        "sourceWidth": width,
+        "sourceHeight": height,
+    } if width > 0 and height > 0 else {}
 
 
 def _read_source_metadata(source: Path) -> Dict[str, Any]:

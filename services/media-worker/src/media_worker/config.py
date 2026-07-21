@@ -43,6 +43,7 @@ class Settings:
     llm_api_key: str
     llm_model: str
     llm_timeout_seconds: int
+    llm_provider_sort: str
     ytdlp_cookies_file: str
     ytdlp_proxy: str
     ytdlp_user_agent: str
@@ -59,6 +60,26 @@ class Settings:
     metrics_enabled: bool
     ytdlp_fragment_concurrency: int
     log_level: str
+    media_accelerator: str
+    ai_execution_mode: str
+    stt_provider: str
+    deepgram_api_key: str
+    deepgram_model: str
+    deepgram_language: str
+    deepgram_timeout_seconds: int
+    deepgram_cost_usd_per_hour: float
+    openrouter_editor_model: str
+    openrouter_qa_enabled: bool
+    gpu_provider: str
+    runpod_api_key: str
+    runpod_endpoint_id: str
+    runpod_timeout_seconds: int
+    runpod_poll_seconds: float
+    runpod_cost_usd_per_second: float
+    ai_cost_limit_usd_per_source_hour: float
+    remote_max_concurrency: int
+    auto_render_mode: str
+    final_max_short_side: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -73,9 +94,9 @@ class Settings:
             ffprobe_binary=os.getenv("FFPROBE_BINARY", "ffprobe"),
             max_download_bytes=int(os.getenv("MAX_SOURCE_BYTES", str(6 * 1024**3))),
             request_timeout_seconds=int(os.getenv("SOURCE_TIMEOUT_SECONDS", "120")),
-            whisper_model=os.getenv("WHISPERX_MODEL", "large-v3"),
-            whisper_device=os.getenv("WHISPERX_DEVICE", "cuda"),
-            whisper_compute_type=os.getenv("WHISPERX_COMPUTE_TYPE", "float16"),
+            whisper_model=os.getenv("WHISPERX_MODEL", "small"),
+            whisper_device=os.getenv("WHISPERX_DEVICE", "cpu"),
+            whisper_compute_type=os.getenv("WHISPERX_COMPUTE_TYPE", "int8"),
             hf_token=os.getenv("HF_TOKEN", ""),
             yolo_model=os.getenv("YOLO_MODEL", "yolo11n.pt"),
             internal_token=os.getenv(
@@ -109,8 +130,9 @@ class Settings:
             enable_yolo=_bool_env("ENABLE_YOLO", ai_required or enable_ai),
             llm_provider=os.getenv("LLM_PROVIDER", "none").strip().lower(),
             llm_api_key=os.getenv("LLM_API_KEY", ""),
-            llm_model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            llm_model=os.getenv("LLM_MODEL", "google/gemini-2.5-flash-lite"),
             llm_timeout_seconds=max(5, int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))),
+            llm_provider_sort=os.getenv("LLM_PROVIDER_SORT", "latency").strip().lower(),
             ytdlp_cookies_file=os.getenv("YTDLP_COOKIES_FILE", "").strip(),
             ytdlp_proxy=os.getenv("YTDLP_PROXY", "").strip(),
             ytdlp_user_agent=os.getenv("YTDLP_USER_AGENT", "").strip(),
@@ -128,22 +150,70 @@ class Settings:
                 ),
             ),
             ffmpeg_preset=os.getenv("FFMPEG_PRESET", "veryfast").strip() or "veryfast",
-            ffmpeg_crf=max(16, min(35, int(os.getenv("FFMPEG_CRF", "22")))),
+            ffmpeg_crf=max(16, min(35, int(os.getenv("FFMPEG_CRF", "19")))),
             ffmpeg_threads=max(1, min(32, int(os.getenv("FFMPEG_THREADS", "2")))),
             ffmpeg_filter_threads=max(1, min(16, int(os.getenv("FFMPEG_FILTER_THREADS", "1")))),
             render_max_height=max(360, min(2160, int(os.getenv("RENDER_MAX_HEIGHT", "720")))),
             render_max_source_short_side=max(
-                360, min(2160, int(os.getenv("RENDER_MAX_SOURCE_SHORT_SIDE", "2160")))
+                360, min(2160, int(os.getenv("RENDER_MAX_SOURCE_SHORT_SIDE", "1080")))
             ),
             allow_full_batch_render=_bool_env("ALLOW_FULL_BATCH_RENDER", False),
             metrics_enabled=_bool_env("MEDIA_WORKER_METRICS_ENABLED", True),
             ytdlp_fragment_concurrency=max(1, min(16, int(os.getenv("YTDLP_FRAGMENT_CONCURRENCY", "4")))),
             log_level=os.getenv("LOG_LEVEL", "info").lower(),
+            media_accelerator=os.getenv("MEDIA_ACCELERATOR", "cpu").strip().lower(),
+            ai_execution_mode=os.getenv("AI_EXECUTION_MODE", "local").strip().lower(),
+            stt_provider=os.getenv("STT_PROVIDER", "whisperx").strip().lower(),
+            deepgram_api_key=os.getenv("DEEPGRAM_API_KEY", "").strip(),
+            deepgram_model=os.getenv("DEEPGRAM_MODEL", "nova-3").strip() or "nova-3",
+            deepgram_language=os.getenv("DEEPGRAM_LANGUAGE", "pt-BR").strip() or "pt-BR",
+            deepgram_timeout_seconds=max(30, min(7200, int(os.getenv("DEEPGRAM_TIMEOUT_SECONDS", "1800")))),
+            deepgram_cost_usd_per_hour=max(0.0, float(os.getenv("DEEPGRAM_COST_USD_PER_HOUR", "0.35"))),
+            openrouter_editor_model=os.getenv(
+                "OPENROUTER_EDITOR_MODEL",
+                os.getenv("LLM_MODEL", "google/gemini-2.5-flash"),
+            ).strip() or "google/gemini-2.5-flash",
+            openrouter_qa_enabled=_bool_env("OPENROUTER_QA_ENABLED", True),
+            gpu_provider=os.getenv("GPU_PROVIDER", "none").strip().lower(),
+            runpod_api_key=os.getenv("RUNPOD_API_KEY", "").strip(),
+            runpod_endpoint_id=os.getenv("RUNPOD_ENDPOINT_ID", "").strip(),
+            runpod_timeout_seconds=max(60, min(7200, int(os.getenv("RUNPOD_TIMEOUT_SECONDS", "3600")))),
+            runpod_poll_seconds=max(0.5, min(30.0, float(os.getenv("RUNPOD_POLL_SECONDS", "2")))),
+            runpod_cost_usd_per_second=max(
+                0.0, float(os.getenv("RUNPOD_COST_USD_PER_SECOND", "0.00019"))
+            ),
+            ai_cost_limit_usd_per_source_hour=max(
+                0.0, float(os.getenv("AI_COST_LIMIT_USD_PER_SOURCE_HOUR", "1.00"))
+            ),
+            remote_max_concurrency=max(1, min(8, int(os.getenv("REMOTE_MAX_CONCURRENCY", "2")))),
+            auto_render_mode=os.getenv("AUTO_RENDER_MODE", "all").strip().lower(),
+            final_max_short_side=max(
+                360, min(1080, int(os.getenv("FINAL_MAX_SHORT_SIDE", "1080")))
+            ),
         )
         settings.validate()
         return settings
 
     def validate(self) -> None:
+        if self.media_accelerator not in {"cpu", "cuda"}:
+            raise RuntimeError("MEDIA_ACCELERATOR must be cpu or cuda")
+        if self.media_accelerator == "cuda" and self.whisper_device != "cuda":
+            raise RuntimeError("MEDIA_ACCELERATOR=cuda requires WHISPERX_DEVICE=cuda")
+        if self.llm_provider_sort not in {"price", "throughput", "latency"}:
+            raise RuntimeError("LLM_PROVIDER_SORT must be price, throughput or latency")
+        if self.ai_execution_mode not in {"local", "hybrid"}:
+            raise RuntimeError("AI_EXECUTION_MODE must be local or hybrid")
+        if self.stt_provider not in {"whisperx", "deepgram"}:
+            raise RuntimeError("STT_PROVIDER must be whisperx or deepgram")
+        if self.gpu_provider not in {"none", "runpod"}:
+            raise RuntimeError("GPU_PROVIDER must be none or runpod")
+        if self.auto_render_mode not in {"off", "all"}:
+            raise RuntimeError("AUTO_RENDER_MODE must be off or all")
+        if self.ai_execution_mode == "hybrid":
+            if self.stt_provider == "deepgram" and not self.deepgram_api_key:
+                raise RuntimeError("DEEPGRAM_API_KEY is required for hybrid Deepgram transcription")
+            if self.gpu_provider == "runpod" and (not self.runpod_api_key or not self.runpod_endpoint_id):
+                raise RuntimeError("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required for Runpod")
         if self.app_env not in {"release", "production"}:
             return
         missing = []

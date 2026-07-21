@@ -37,7 +37,7 @@ describe('UsageService', () => {
       plan: 'PRO',
       status: 'ACTIVE',
       usage: { minutes: 120, limit: 600, remaining: 480 },
-      limits: { exportResolution: 'source', watermark: false },
+      limits: { exportResolution: '1080p', watermark: false },
     });
   });
 

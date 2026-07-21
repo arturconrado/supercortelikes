@@ -25,7 +25,7 @@ settings = Settings.from_env()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 pipeline = Pipeline(settings)
-HEAVY_STAGES = {"transcription", "rendering", "reframe"}
+HEAVY_STAGES = {"transcription", "composition", "rendering", "reframe"}
 heavy_stage_capacity = threading.BoundedSemaphore(settings.heavy_concurrent_jobs)
 light_stage_capacity = threading.BoundedSemaphore(settings.light_concurrent_jobs)
 app = FastAPI(
@@ -275,13 +275,13 @@ async def execute_stage(stage: str, body: PipelineRequest) -> Dict[str, Any]:
             "UNKNOWN_STAGE", "Unsupported pipeline stage: %s" % stage, status_code=404
         )
     result = await run_in_threadpool(_run_stage, stage, body)
-    return result.model_dump(mode="json", by_alias=True)
+    return result.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 @app.post("/v1/reframe", dependencies=[Depends(authorize)])
 async def execute_reframe(body: ReframeRequest) -> Dict[str, Any]:
     result = await run_in_threadpool(_run_reframe, body)
-    return result.model_dump(mode="json", by_alias=True)
+    return result.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 @app.post("/v1/workspaces/cleanup", dependencies=[Depends(authorize)])

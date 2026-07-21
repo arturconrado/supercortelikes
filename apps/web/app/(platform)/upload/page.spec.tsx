@@ -19,7 +19,7 @@ vi.mock('@/hooks/use-resource', () => ({
     data: {
       plan: 'FREE',
       usage: { minutes: 0, limit: 30, remaining: 30 },
-      limits: { maxUploadBytes: 5 * 1024 ** 3, exportResolution: 'source', watermark: false },
+      limits: { maxUploadBytes: 5 * 1024 ** 3, exportResolution: '1080p', watermark: false },
     },
   }),
 }));
@@ -44,7 +44,7 @@ describe('UploadPage', () => {
   it('starts a URL import with an idempotency key', async () => {
     render(<UploadPage />);
 
-    expect(screen.getByText(/qualidade da origem até 4K/)).toBeInTheDocument();
+    expect(screen.getByText(/export 1080p/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Selecionar importação por URL' }));
     fireEvent.change(screen.getByLabelText('URL do vídeo'), {
       target: { value: ' https://www.youtube.com/watch?v=VYDE529RzNk ' },

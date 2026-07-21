@@ -68,7 +68,7 @@ export const defaultUsage = {
     minutesPerMonth: 60,
     maxUploadBytes: 5368709120,
     maxVideoDurationSeconds: 3600,
-    exportResolution: 'source',
+    exportResolution: '1080p',
     watermark: false,
     queuePriority: 1,
     maxConcurrentHeavyJobs: 1,

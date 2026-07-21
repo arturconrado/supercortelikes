@@ -31,6 +31,7 @@ export interface ObjectStorage {
   abortMultipart(key: string, uploadId: string): Promise<void>;
   metadata(key: string): Promise<StoredObjectMetadata>;
   upload(key: string, body: Readable, contentType: string): Promise<StoredObject>;
+  uploadUrl(key: string, contentType: string, expiresInSeconds?: number): Promise<string>;
   delete(key: string): Promise<void>;
   deletePrefix(prefix: string): Promise<number>;
   downloadUrl(key: string, expiresInSeconds?: number, options?: DownloadUrlOptions): Promise<string>;

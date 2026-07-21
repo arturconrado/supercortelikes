@@ -4,16 +4,26 @@ import { z } from 'zod';
 import type { Environment } from '../config/env';
 import type { PipelineJob } from '../queues/pipeline.constants';
 
-const artifactSchema = z.object({
+const artifactBaseSchema = z.object({
   kind: z.string(),
-  path: z.string(),
   sha256: z.string().length(64),
   bytes: z.number().int().nonnegative(),
   media_type: z.string(),
 });
 
+const artifactSchema = z.union([
+  artifactBaseSchema.extend({ path: z.string(), location: z.undefined().optional() }),
+  artifactBaseSchema.extend({
+    path: z.string().optional(),
+    location: z.discriminatedUnion('type', [
+      z.object({ type: z.literal('local'), path: z.string() }),
+      z.object({ type: z.literal('object'), bucket: z.string(), key: z.string() }),
+    ]),
+  }),
+]);
+
 const stageResponseSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
   pipelineRunId: z.string(),
   stageExecutionId: z.string(),
   videoId: z.string(),

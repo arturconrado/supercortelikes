@@ -16,6 +16,7 @@ def find_clips(
     score_by_id = {
         value.get("segmentId"): float(value.get("score", 0)) for value in scores
     }
+    score_details = {value.get("segmentId"): value for value in scores}
     candidates: List[Tuple[float, int, int]] = []
     for start_index in range(len(segments)):
         for end_index in range(start_index, len(segments)):
@@ -57,7 +58,10 @@ def find_clips(
         selected.append(
             (score_by_id.get(segments[0].get("id"), 0.0), 0, len(segments) - 1)
         )
-    return [_build_clip(index, value, segments) for index, value in enumerate(selected)]
+    return [
+        _build_clip(index, value, segments, score_details)
+        for index, value in enumerate(selected)
+    ]
 
 
 def overlap_ratio(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
@@ -67,7 +71,10 @@ def overlap_ratio(start_a: float, end_a: float, start_b: float, end_b: float) ->
 
 
 def _build_clip(
-    index: int, candidate: Tuple[float, int, int], segments: Sequence[Mapping[str, Any]]
+    index: int,
+    candidate: Tuple[float, int, int],
+    segments: Sequence[Mapping[str, Any]],
+    score_details: Mapping[Any, Mapping[str, Any]],
 ) -> Dict[str, Any]:
     score, start_index, end_index = candidate
     values = segments[start_index : end_index + 1]
@@ -75,25 +82,56 @@ def _build_clip(
     title_seed = _title_seed(text)
     genre = _genre(text)
     hook = _hook(text)
+    first_editorial = _editorial(score_details.get(values[0].get("id")))
+    last_editorial = _editorial(score_details.get(values[-1].get("id")))
+    start = _bounded_timestamp(
+        first_editorial.get("suggestedStart"),
+        float(values[0]["start"]),
+        float(values[0]["start"]),
+        float(values[0]["end"]),
+    )
+    end = _bounded_timestamp(
+        last_editorial.get("suggestedEnd"),
+        float(values[-1]["end"]),
+        float(values[-1]["start"]),
+        float(values[-1]["end"]),
+    )
+    if end - start < 3:
+        start, end = float(values[0]["start"]), float(values[-1]["end"])
+    curated_title = str(first_editorial.get("title") or "").strip()
+    curated_hook = str(first_editorial.get("hook") or "").strip()
     return {
         "id": "clip-%03d" % (index + 1),
-        "start": round(float(values[0]["start"]), 3),
-        "end": round(float(values[-1]["end"]), 3),
-        "durationSeconds": round(
-            float(values[-1]["end"]) - float(values[0]["start"]), 3
-        ),
+        "start": round(start, 3),
+        "end": round(end, 3),
+        "durationSeconds": round(end - start, 3),
         "score": round(score, 2),
         "titleSuggestions": [
-            title_seed,
+            curated_title or title_seed,
             "O que ninguém te contou sobre %s" % title_seed.lower(),
             "%s: entenda em poucos segundos" % title_seed,
         ],
         "reason": "Trecho autossuficiente priorizado por força do gancho, densidade temática e duração",
         "genre": genre,
-        "hook": hook,
+        "hook": curated_hook or hook,
+        "keyword": str(first_editorial.get("keyword") or "").strip(),
         "segmentIds": [value.get("id") for value in values],
         "text": text,
     }
+
+
+def _editorial(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping) and isinstance(value.get("editorial"), Mapping):
+        return value["editorial"]
+    return {}
+
+
+def _bounded_timestamp(value: Any, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, min(maximum, number))
 
 
 def _title_seed(text: str) -> str:

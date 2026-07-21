@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { HttpException, Inject, Injectable, NotFoundException } from '@nestjs/common';
@@ -21,6 +22,14 @@ export class MediaStageProcessor {
   private readonly ffmpegPreset: string;
   private readonly ffmpegCrf: number;
   private readonly renderMaxSourceShortSide: number;
+  private readonly compositionV1Enabled: boolean;
+  private readonly compositionV1RolloutPercent: number;
+  private readonly mediaAccelerator: 'cpu' | 'cuda';
+  private readonly aiExecutionMode: 'local' | 'hybrid';
+  private readonly sttProvider: 'whisperx' | 'deepgram';
+  private readonly gpuProvider: 'none' | 'runpod';
+  private readonly aiCostLimitUsdPerSourceHour: number;
+  private readonly finalMaxShortSide: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -35,6 +44,14 @@ export class MediaStageProcessor {
     this.ffmpegPreset = config.get('FFMPEG_PRESET', { infer: true });
     this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
     this.renderMaxSourceShortSide = config.get('RENDER_MAX_SOURCE_SHORT_SIDE', { infer: true });
+    this.compositionV1Enabled = config.get('COMPOSITION_V1_ENABLED', { infer: true });
+    this.compositionV1RolloutPercent = config.get('COMPOSITION_V1_ROLLOUT_PERCENT', { infer: true }) ?? 100;
+    this.mediaAccelerator = config.get('MEDIA_ACCELERATOR', { infer: true });
+    this.aiExecutionMode = config.get('AI_EXECUTION_MODE', { infer: true });
+    this.sttProvider = config.get('STT_PROVIDER', { infer: true });
+    this.gpuProvider = config.get('GPU_PROVIDER', { infer: true });
+    this.aiCostLimitUsdPerSourceHour = config.get('AI_COST_LIMIT_USD_PER_SOURCE_HOUR', { infer: true });
+    this.finalMaxShortSide = config.get('FINAL_MAX_SHORT_SIDE', { infer: true });
   }
 
   async process(job: PipelineJob): Promise<void> {
@@ -53,16 +70,24 @@ export class MediaStageProcessor {
       },
     });
     if (!video) throw new NotFoundException('Video not found for pipeline stage');
+    if (!video.storageBucket) throw new UnrecoverableError('Video storage bucket is required for media processing');
     const processingOptions = normalizeVideoProcessingOptions(video.processingOptions as never);
     const options = await this.options(job, video.storageBucket, processingOptions, video);
     await this.markExportProcessing(job);
+    const remoteSource = this.usesRemoteSource(job.stage);
+    const sourceUri = remoteSource
+      ? await this.storage.downloadUrl(video.storageKey, 3600)
+      : job.stage === 'ingestion' ? video.sourceUrl ?? undefined : undefined;
+    const sourceStorage = job.stage === 'ingestion' && video.sourceUrl
+      ? undefined
+      : { bucket: video.storageBucket, key: video.storageKey };
     let response: MediaStageResponse;
     try {
       response = await this.media.execute(
         job,
-        video.sourceUrl ? undefined : { bucket: video.storageBucket, key: video.storageKey },
+        sourceStorage,
         options,
-        video.sourceUrl ?? undefined,
+        sourceUri,
       );
     } catch (error) {
       const terminal = asUnrecoverableMediaError(error);
@@ -70,6 +95,13 @@ export class MediaStageProcessor {
       throw error;
     }
     await this.persist(job, response, video);
+    await this.recordProviderUsage(video.workspaceId, job.videoId, response);
+  }
+
+  private usesRemoteSource(stage: string): boolean {
+    if (this.aiExecutionMode !== 'hybrid') return false;
+    if (stage === 'transcription') return this.sttProvider === 'deepgram';
+    return stage === 'rendering' && this.gpuProvider === 'runpod';
   }
 
   private async options(
@@ -77,14 +109,18 @@ export class MediaStageProcessor {
     bucket: string,
     processing: ReturnType<typeof normalizeVideoProcessingOptions>,
     video?: {
+      checksumSha256?: string | null;
+      storageEtag?: string | null;
       workspace?: {
         brandKits: Array<{ logoKey: string | null; watermark: Prisma.JsonValue | null }>;
       } | null;
     },
   ): Promise<Record<string, unknown>> {
     const stage = job.stage;
+    const compositionEnabled = this.compositionEnabledFor(job.videoId);
+    const providerBudget = await this.providerBudget(job.videoId);
     if (stage === 'transcription') {
-      return { diarize: this.diarizationEnabled, batchSize: this.transcriptionBatchSize };
+      return { diarize: this.diarizationEnabled, batchSize: this.transcriptionBatchSize, ...providerBudget };
     }
     if (stage === 'clips') {
       return {
@@ -93,18 +129,41 @@ export class MediaStageProcessor {
         maximumDuration: processing.maximumDurationSeconds,
       };
     }
-    if (stage === 'captions') return { template: 'podcast', wordsPerCue: 4 };
+    if (stage === 'captions') return { template: 'podcast', wordsPerCue: 6 };
+    if (stage === 'scoring') return providerBudget;
+    if (stage === 'composition') {
+      const analysisFps = Number(providerBudget.analysisFps ?? (this.mediaAccelerator === 'cuda' ? 10 : 2));
+      return {
+        enabled: compositionEnabled,
+        aspectRatio: processing.aspectRatio,
+        detector: this.mediaAccelerator === 'cuda' ? 'yolo' : 'opencv',
+        sampleSeconds: 1 / Math.max(1, analysisFps),
+        analysisFps,
+        minimumSpeakerConfidence: 0.65,
+        focusSwitchDelaySeconds: 0.6,
+        analysisBudgetRatio: 1,
+        remote: this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod',
+        ...this.sourceIntegrityOptions(video),
+        ...providerBudget,
+      };
+    }
     if (stage === 'rendering') {
+      if (!job.clipId) return this.batchRenderOptions(job, bucket, processing, video, providerBudget);
       const render = await this.clipRenderContext(job);
+      const remote = this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod';
+      const outputKey = `exports/${job.videoId}/${job.exportId}/clip-${String(render.clipIndex + 1).padStart(3, '0')}.mp4`;
       return {
         smartReframe: true,
+        compositionV1: compositionEnabled,
         aspectRatio: render.aspectRatio,
         targetPlatform: processing.targetPlatform,
         detector: 'opencv',
         preset: this.ffmpegPreset,
-        crf: this.ffmpegCrf,
+        crf: render.purpose === 'PREVIEW' ? 24 : this.ffmpegCrf,
+        cq: 19,
         preserveSourceQuality: true,
-        maxSourceShortSide: this.renderMaxSourceShortSide,
+        maxSourceShortSide: render.purpose === 'PREVIEW' ? 540 : Math.min(this.finalMaxShortSide, this.renderMaxSourceShortSide),
+        purpose: render.purpose,
         clipIndex: render.clipIndex,
         clipOverride: render.clipOverride,
         ...(render.captionOverride ? { captionOverride: render.captionOverride } : {}),
@@ -112,10 +171,27 @@ export class MediaStageProcessor {
         exportId: job.exportId,
         sourcePipelineRunId: job.sourcePipelineRunId,
         renderFingerprint: job.renderFingerprint,
-        ...(await this.watermarkOptions(job.pipelineRunId, video)),
+        regenerateComposition: job.regenerateComposition ?? false,
+        ...(await this.watermarkOptions(job.pipelineRunId, video, remote)),
+        remote,
+        ...(remote
+          ? {
+              batchOutputs: [{
+                clipIndex: render.clipIndex,
+                clipId: job.clipId,
+                exportId: job.exportId,
+                bucket,
+                key: outputKey,
+                uploadUrl: await this.storage.uploadUrl(outputKey, 'video/mp4', 3600),
+              }],
+            }
+          : {}),
+        ...this.sourceIntegrityOptions(video),
+        ...providerBudget,
       };
     }
     if (stage === 'exports') {
+      if (!job.clipId) return this.batchExportOptions(job, bucket);
       const render = await this.clipRenderContext(job);
       return {
         bucket,
@@ -125,9 +201,228 @@ export class MediaStageProcessor {
         exportId: job.exportId,
         sourcePipelineRunId: job.sourcePipelineRunId,
         renderFingerprint: job.renderFingerprint,
+        purpose: render.purpose,
       };
     }
     return {};
+  }
+
+  private async batchRenderOptions(
+    job: PipelineJob,
+    bucket: string,
+    processing: ReturnType<typeof normalizeVideoProcessingOptions>,
+    video: {
+      checksumSha256?: string | null;
+      storageEtag?: string | null;
+      workspace?: {
+        brandKits: Array<{ logoKey: string | null; watermark: Prisma.JsonValue | null }>;
+      } | null;
+    } | undefined,
+    providerBudget: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const remote = this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod';
+    const clips = await this.prisma.clip.findMany({
+      where: { videoId: job.videoId },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        captions: { orderBy: { createdAt: 'asc' }, take: 1 },
+        composition: true,
+      },
+    });
+    if (!clips.length) throw new UnrecoverableError('Automatic rendering requires at least one clip');
+    const batchOutputs = [];
+    for (const [index, clip] of clips.entries()) {
+      const fingerprint = automaticRenderFingerprint({
+        clipId: clip.id,
+        startMs: clip.startMs.toString(),
+        endMs: clip.endMs.toString(),
+        aspectRatio: clip.aspectRatio,
+        captionUpdatedAt: clip.captions[0]?.updatedAt?.toISOString(),
+        compositionUpdatedAt: clip.composition?.updatedAt?.toISOString(),
+        compositionVersion: clip.composition?.version,
+        maxSourceShortSide: Math.min(this.finalMaxShortSide, this.renderMaxSourceShortSide),
+        preset: this.ffmpegPreset,
+        crf: this.ffmpegCrf,
+        accelerator: this.mediaAccelerator,
+      });
+      let exportJob = await this.prisma.export.findFirst({
+        where: {
+          clipId: clip.id,
+          purpose: 'FINAL',
+          renderFingerprint: fingerprint,
+          OR: [
+            { status: 'READY' },
+            { sourcePipelineRunId: job.pipelineRunId, status: { in: ['QUEUED', 'PROCESSING'] } },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!exportJob) {
+        exportJob = await this.prisma.export.create({
+          data: {
+            id: randomUUID(),
+            clipId: clip.id,
+            format: 'MP4',
+            purpose: 'FINAL',
+            aspectRatio: clip.aspectRatio,
+            renderFingerprint: fingerprint,
+            sourcePipelineRunId: job.pipelineRunId,
+            status: 'QUEUED',
+          },
+        });
+      }
+      const key = `exports/${job.videoId}/${exportJob.id}/clip-${String(index + 1).padStart(3, '0')}.mp4`;
+      const uploadUrl = !remote || (exportJob.status === 'READY' && exportJob.storageKey)
+        ? undefined
+        : await this.storage.uploadUrl(key, 'video/mp4', 3600);
+      batchOutputs.push({
+        clipIndex: index,
+        clipId: clip.id,
+        exportId: exportJob.id,
+        bucket,
+        key,
+        ...(uploadUrl ? { uploadUrl } : {}),
+        ready: exportJob.status === 'READY' && Boolean(exportJob.storageKey),
+      });
+    }
+    await this.prisma.clip.updateMany({
+      where: { videoId: job.videoId, status: { in: ['SUGGESTED', 'APPROVED', 'FAILED'] } },
+      data: { status: 'RENDERING' },
+    });
+    await this.prisma.export.updateMany({
+      where: { id: { in: batchOutputs.filter((item) => !item.ready).map((item) => item.exportId) } },
+      data: { status: 'PROCESSING', errorCode: null },
+    });
+    return {
+      smartReframe: true,
+      compositionV1: true,
+      aspectRatio: processing.aspectRatio,
+      targetPlatform: processing.targetPlatform,
+      detector: this.gpuProvider === 'runpod' ? 'yolo' : 'opencv',
+      preset: this.ffmpegPreset,
+      crf: this.ffmpegCrf,
+      cq: 19,
+      preserveSourceQuality: true,
+      maxSourceShortSide: Math.min(this.finalMaxShortSide, this.renderMaxSourceShortSide),
+      purpose: 'FINAL',
+      clipIndexes: clips.map((_, index) => index),
+      sourcePipelineRunId: job.pipelineRunId,
+      batchOutputs,
+      remote,
+      ...this.sourceIntegrityOptions(video),
+      ...(await this.watermarkOptions(
+        job.pipelineRunId,
+        video,
+        remote,
+      )),
+      ...providerBudget,
+    };
+  }
+
+  private async batchExportOptions(job: PipelineJob, bucket: string): Promise<Record<string, unknown>> {
+    const clips = await this.prisma.clip.findMany({ where: { videoId: job.videoId }, orderBy: { createdAt: 'asc' } });
+    const exports = await this.prisma.export.findMany({
+      where: { sourcePipelineRunId: job.pipelineRunId, purpose: 'FINAL' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const byClip = new Map(exports.map((item) => [item.clipId, item]));
+    const batchOutputs = clips.flatMap((clip, index) => {
+      const item = byClip.get(clip.id);
+      if (!item) return [];
+      const prefix = `exports/${job.videoId}/${item.id}`;
+      return [{
+        clipIndex: index,
+        clipId: clip.id,
+        exportId: item.id,
+        key: item.storageKey ?? `${prefix}/clip-${String(index + 1).padStart(3, '0')}.mp4`,
+        prefix,
+      }];
+    });
+    return {
+      batch: true,
+      bucket,
+      purpose: 'FINAL',
+      clipIndexes: clips.map((_, index) => index),
+      sourcePipelineRunId: job.pipelineRunId,
+      batchOutputs,
+    };
+  }
+
+  private async providerBudget(videoId: string): Promise<Record<string, unknown>> {
+    if (this.aiExecutionMode !== 'hybrid') return {};
+    const [video, usage] = await Promise.all([
+      this.prisma.video.findUnique({ where: { id: videoId }, select: { durationMs: true } }),
+      this.prisma.usageEvent.aggregate({
+        where: { videoId, type: { in: ['ai.deepgram', 'ai.openrouter', 'gpu.runpod'] } },
+        _sum: { costCents: true },
+      }),
+    ]);
+    const sourceDurationSeconds = Number(video?.durationMs ?? 0n) / 1000;
+    const costLimitUsd = sourceDurationSeconds / 3600 * this.aiCostLimitUsdPerSourceHour;
+    const spentUsd = Number(usage._sum.costCents ?? 0) / 100;
+    const remainingUsd = Math.max(0, costLimitUsd - spentUsd);
+    const remainingRatio = costLimitUsd > 0 ? remainingUsd / costLimitUsd : 0;
+    return {
+      sourceDurationSeconds,
+      costLimitUsd: roundMoney(costLimitUsd),
+      costRemainingUsd: roundMoney(remainingUsd),
+      visualQaEnabled: remainingRatio >= 0.5,
+      analysisFps: remainingRatio >= 0.25 ? 10 : 6,
+    };
+  }
+
+  private async recordProviderUsage(workspaceId: string | null, videoId: string, response: MediaStageResponse): Promise<void> {
+    if (!workspaceId) return;
+    const metrics = response.metrics as { providerUsage?: unknown };
+    if (!Array.isArray(metrics.providerUsage)) return;
+    for (const raw of metrics.providerUsage) {
+      if (!raw || typeof raw !== 'object') continue;
+      const value = raw as Record<string, unknown>;
+      const provider = typeof value.provider === 'string' ? value.provider.toLowerCase() : '';
+      const requestId = typeof value.requestId === 'string' ? value.requestId : '';
+      if (!['deepgram', 'openrouter', 'runpod'].includes(provider) || !requestId) continue;
+      const rawQuantity = Number(value.quantity ?? 0);
+      const rawCostUsd = Number(value.costUsd ?? 0);
+      const quantity = Number.isFinite(rawQuantity) ? Math.max(0, rawQuantity) : 0;
+      const costUsd = Number.isFinite(rawCostUsd) ? Math.max(0, rawCostUsd) : 0;
+      const idempotencyKey = `${provider}:${requestId}`.slice(0, 160);
+      await this.prisma.usageEvent.upsert({
+        where: { idempotencyKey },
+        create: {
+          idempotencyKey,
+          workspaceId,
+          videoId,
+          type: provider === 'runpod' ? 'gpu.runpod' : `ai.${provider}`,
+          quantity: new Prisma.Decimal(quantity),
+          unit: typeof value.unit === 'string' ? value.unit : 'request',
+          costCents: costUsd > 0 ? Math.max(1, Math.ceil(costUsd * 100)) : 0,
+          metadata: {
+            costUsd: roundMoney(costUsd),
+            latencyMs: Number(value.latencyMs ?? 0),
+            model: String(value.model ?? ''),
+          },
+        },
+        update: {},
+      });
+    }
+  }
+
+  private compositionEnabledFor(videoId: string): boolean {
+    if (!this.compositionV1Enabled || this.compositionV1RolloutPercent <= 0) return false;
+    if (this.compositionV1RolloutPercent >= 100) return true;
+    let hash = 2_166_136_261;
+    for (const character of videoId) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16_777_619);
+    }
+    return (hash >>> 0) % 100 < this.compositionV1RolloutPercent;
+  }
+
+  private sourceIntegrityOptions(video?: { checksumSha256?: string | null; storageEtag?: string | null }): Record<string, string> {
+    if (video?.checksumSha256 && /^[a-f0-9]{64}$/i.test(video.checksumSha256)) {
+      return { sourceSha256: video.checksumSha256.toLowerCase() };
+    }
+    return video?.storageEtag ? { sourceEtag: video.storageEtag } : {};
   }
 
   private async persist(
@@ -145,9 +440,24 @@ export class MediaStageProcessor {
     if (job.stage === 'scoring') return this.persistScores(job.videoId, response);
     if (job.stage === 'clips') return this.persistClips(job.videoId, response);
     if (job.stage === 'captions') return this.persistCaptions(job.videoId, response);
+    if (job.stage === 'composition') return this.persistComposition(job.videoId, response);
     if (job.stage === 'rendering') {
-      if (!job.clipId) throw new UnrecoverableError('On-demand render jobs require clipId');
-      await this.prisma.clip.update({ where: { id: job.clipId }, data: { status: 'RENDERING' } });
+      await this.verifyStoredObjects(providerStorage(response));
+      if (response.artifacts.some((item) => item.kind === 'composition-manifest')) {
+        await this.persistComposition(job.videoId, response);
+      }
+      if (!job.clipId) {
+        await this.persistQualityStatus(job.videoId, response);
+        return;
+      }
+      const finalExport = await this.prisma.export.findFirst({
+        where: { id: job.exportId, clipId: job.clipId, purpose: 'FINAL' },
+        select: { id: true },
+      });
+      if (finalExport) {
+        await this.prisma.clip.update({ where: { id: job.clipId }, data: { status: 'RENDERING' } });
+      }
+      await this.persistQualityStatus(job.videoId, response);
       return;
     }
     await this.persistExports(job, response);
@@ -164,6 +474,7 @@ export class MediaStageProcessor {
   private async clipRenderContext(job: PipelineJob): Promise<{
     clipIndex: number;
     aspectRatio: string;
+    purpose: 'PREVIEW' | 'FINAL';
     clipOverride: { clipIndex: number; start: number; end: number };
     captionOverride?: { template: string; cues: Prisma.JsonValue; style: Prisma.JsonValue | null };
   }> {
@@ -188,7 +499,7 @@ export class MediaStageProcessor {
       }),
       this.prisma.export.findFirst({
         where: { id: job.exportId, clipId: job.clipId },
-        select: { aspectRatio: true, renderFingerprint: true },
+        select: { aspectRatio: true, renderFingerprint: true, purpose: true },
       }),
     ]);
     const clipIndex = clips.findIndex((clip) => clip.id === job.clipId);
@@ -201,6 +512,7 @@ export class MediaStageProcessor {
     return {
       clipIndex,
       aspectRatio: exportJob.aspectRatio ?? clip.aspectRatio,
+      purpose: exportJob.purpose,
       clipOverride: {
         clipIndex,
         start: Number(clip.startMs) / 1000,
@@ -423,6 +735,38 @@ export class MediaStageProcessor {
     }
   }
 
+  private async persistComposition(videoId: string, response: MediaStageResponse): Promise<void> {
+    const value = await this.artifactJson<{
+      compositions: Array<{
+        clipId: string;
+        version: string;
+        diagnostics?: unknown;
+        [key: string]: unknown;
+      }>;
+    }>(response, 'composition-manifest');
+    const clips = await this.prisma.clip.findMany({ where: { videoId }, orderBy: { createdAt: 'asc' } });
+    for (const composition of value.compositions) {
+      const index = Math.max(0, Number.parseInt(composition.clipId.replace('clip-', ''), 10) - 1);
+      const clip = clips[index];
+      if (!clip) continue;
+      const diagnostics = composition.diagnostics ?? {};
+      await this.prisma.clipComposition.upsert({
+        where: { clipId: clip.id },
+        create: {
+          clipId: clip.id,
+          version: composition.version,
+          plan: composition as Prisma.InputJsonObject,
+          diagnostics: diagnostics as Prisma.InputJsonValue,
+        },
+        update: {
+          version: composition.version,
+          plan: composition as Prisma.InputJsonObject,
+          diagnostics: diagnostics as Prisma.InputJsonValue,
+        },
+      });
+    }
+  }
+
   private async seoForClip(clip: {
     titleSuggestions: string[];
     text: string;
@@ -460,18 +804,23 @@ export class MediaStageProcessor {
   }
 
   private async persistExports(job: PipelineJob, response: MediaStageResponse): Promise<void> {
-    if (!job.clipId || !job.exportId) {
-      throw new UnrecoverableError('On-demand export jobs require clipId and exportId');
-    }
     const metrics = response.metrics as {
-      storage?: Array<{ key: string; bytes: number; mediaType: string }>;
+      storage?: StoredMediaObject[];
     };
     const value = metrics.storage
       ? { storage: metrics.storage }
       : await this.artifactJson<{
-          storage: Array<{ key: string; bytes: number; mediaType: string }>;
+          storage: StoredMediaObject[];
         }>(response, 'export-manifest');
-    const clips = await this.prisma.clip.findMany({ where: { videoId: job.videoId }, orderBy: { createdAt: 'asc' }, include: { captions: true } });
+    await this.verifyStoredObjects(value.storage);
+    if (!job.clipId || !job.exportId) {
+      return this.persistBatchExports(job, value.storage);
+    }
+    const [clips, exportJob] = await Promise.all([
+      this.prisma.clip.findMany({ where: { videoId: job.videoId }, orderBy: { createdAt: 'asc' }, include: { captions: true } }),
+      this.prisma.export.findUnique({ where: { id: job.exportId }, select: { purpose: true } }),
+    ]);
+    if (!exportJob) throw new UnrecoverableError('On-demand export job references an unavailable export');
     const targetClip = clips.find((clip) => clip.id === job.clipId);
     if (!targetClip) throw new UnrecoverableError('On-demand export job references an unavailable clip');
     let storedMp4 = false;
@@ -496,9 +845,11 @@ export class MediaStageProcessor {
           where: { id: job.exportId },
           data,
         });
-        await this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'READY' } });
+        if (exportJob.purpose === 'FINAL' && clip.status !== 'REVIEW_REQUIRED') {
+          await this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'READY' } });
+        }
         storedMp4 = true;
-      } else if (clip.captions[0]) {
+      } else if (clip.captions[0] && exportJob.purpose === 'FINAL') {
         if (match[2] === 'srt') storedSrt = true;
         if (match[2] === 'ass') storedAss = true;
         await this.prisma.captionTrack.update({
@@ -507,7 +858,7 @@ export class MediaStageProcessor {
         });
       }
     }
-    if (targetClip.captions[0] && (!storedSrt || !storedAss)) {
+    if (exportJob.purpose === 'FINAL' && targetClip.captions[0] && (!storedSrt || !storedAss)) {
       await this.prisma.captionTrack.update({
         where: { id: targetClip.captions[0].id },
         data: {
@@ -519,10 +870,107 @@ export class MediaStageProcessor {
     if (!storedMp4) throw new UnrecoverableError('On-demand export did not upload the requested MP4');
   }
 
+  private async persistBatchExports(job: PipelineJob, storage: StoredMediaObject[]): Promise<void> {
+    const exportIds = [...new Set(storage.map((item) => item.exportId).filter((value): value is string => Boolean(value)))];
+    const exports = await this.prisma.export.findMany({
+      where: {
+        id: { in: exportIds },
+        sourcePipelineRunId: job.pipelineRunId,
+        clip: { videoId: job.videoId },
+      },
+      include: {
+        clip: {
+          include: { captions: { orderBy: { createdAt: 'asc' }, take: 1 } },
+        },
+      },
+    });
+    const byId = new Map(exports.map((item) => [item.id, item]));
+    const completed = new Set<string>();
+    for (const stored of storage) {
+      if (!stored.exportId) continue;
+      const exportJob = byId.get(stored.exportId);
+      if (!exportJob) continue;
+      const extension = stored.key.split('.').at(-1)?.toLowerCase();
+      if (extension === 'mp4') {
+        await this.prisma.export.update({
+          where: { id: exportJob.id },
+          data: {
+            format: 'MP4',
+            aspectRatio: exportJob.clip.aspectRatio,
+            storageKey: stored.key,
+            sizeBytes: BigInt(stored.bytes),
+            status: 'READY',
+            errorCode: null,
+          },
+        });
+        if (exportJob.clip.status !== 'REVIEW_REQUIRED') {
+          await this.prisma.clip.update({ where: { id: exportJob.clipId }, data: { status: 'READY' } });
+        }
+        completed.add(exportJob.id);
+      } else if (extension === 'srt' || extension === 'ass') {
+        const caption = exportJob.clip.captions[0];
+        if (caption) {
+          await this.prisma.captionTrack.update({
+            where: { id: caption.id },
+            data: extension === 'srt' ? { srtKey: stored.key } : { assKey: stored.key },
+          });
+        }
+      }
+    }
+    const missing = exports.filter((item) => item.status !== 'READY' && !completed.has(item.id));
+    if (missing.length) {
+      throw new UnrecoverableError(`Automatic export is missing ${missing.length} rendered MP4 file(s)`);
+    }
+  }
+
+  private async verifyStoredObjects(values: StoredMediaObject[]): Promise<void> {
+    for (const value of values) {
+      if (!value.key || !Number.isSafeInteger(value.bytes) || value.bytes <= 0) {
+        throw new UnrecoverableError('Remote media output has invalid storage metadata');
+      }
+      const metadata = await this.storage.metadata(value.key);
+      if (metadata.bytes !== BigInt(value.bytes)) {
+        throw new UnrecoverableError('Remote media output size does not match object storage');
+      }
+    }
+  }
+
+  private async persistQualityStatus(videoId: string, response: MediaStageResponse): Promise<void> {
+    const metrics = response.metrics as { quality?: { failedClipIds?: unknown } | null };
+    const failed = metrics.quality?.failedClipIds;
+    if (!Array.isArray(failed) || !failed.length) return;
+    const indexes = new Set(
+      failed
+        .map((value) => /^clip-(\d{3})$/.exec(String(value)))
+        .filter((value): value is RegExpExecArray => Boolean(value))
+        .map((value) => Number(value[1]) - 1),
+    );
+    const clips = await this.prisma.clip.findMany({
+      where: { videoId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    const ids = clips.filter((_, index) => indexes.has(index)).map((clip) => clip.id);
+    if (ids.length) {
+      await this.prisma.clip.updateMany({
+        where: { id: { in: ids } },
+        data: { status: 'REVIEW_REQUIRED' },
+      });
+    }
+  }
+
   private async artifactJson<T>(response: MediaStageResponse, kind: string): Promise<T> {
     const artifact = response.artifacts.find((value) => value.kind === kind);
     if (!artifact) throw Object.assign(new Error(`Media worker did not produce ${kind}`), { code: 'ARTIFACT_MISSING' });
-    return JSON.parse(await readFile(this.resolveArtifactPath(artifact.path), 'utf8')) as T;
+    if (artifact.location?.type === 'object') {
+      const url = await this.storage.downloadUrl(artifact.location.key, 300);
+      const remote = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      if (!remote.ok) {
+        throw Object.assign(new Error(`Unable to download media artifact ${kind}`), { code: 'ARTIFACT_DOWNLOAD_FAILED' });
+      }
+      return JSON.parse(await remote.text()) as T;
+    }
+    return JSON.parse(await readFile(this.resolveArtifactPath(localArtifactPath(artifact)), 'utf8')) as T;
   }
 
   private async uploadArtifact(
@@ -533,7 +981,8 @@ export class MediaStageProcessor {
   ): Promise<string | undefined> {
     const artifact = response.artifacts.find((value) => value.kind === kind);
     if (!artifact) return undefined;
-    return this.uploadLocalFile(this.resolveArtifactPath(artifact.path), key, contentType);
+    if (artifact.location?.type === 'object') return artifact.location.key;
+    return this.uploadLocalFile(this.resolveArtifactPath(localArtifactPath(artifact)), key, contentType);
   }
 
   private artifactMediaType(response: MediaStageResponse, kind: string): string | undefined {
@@ -563,6 +1012,7 @@ export class MediaStageProcessor {
         brandKits: Array<{ logoKey: string | null; watermark: Prisma.JsonValue | null }>;
       } | null;
     },
+    remote = false,
   ): Promise<Record<string, unknown>> {
     const workspace = video?.workspace;
     if (!workspace) return {};
@@ -576,6 +1026,14 @@ export class MediaStageProcessor {
     const text = typeof config.text === 'string' ? config.text.trim() : '';
     if (kit?.logoKey) {
       try {
+        if (remote) {
+          return {
+            watermarkUrl: await this.storage.downloadUrl(kit.logoKey, 3600),
+            watermarkPosition: position,
+            watermarkOpacity: opacity,
+            watermarkLogoWidth: logoWidth,
+          };
+        }
         const watermarkPath = await this.materializeBrandLogo(pipelineRunId, kit.logoKey);
         return {
           watermarkPath,
@@ -696,4 +1154,38 @@ function seoKeywords(value: string): string[] {
     if (seen.size >= 8) break;
   }
   return [...seen];
+}
+
+function automaticRenderFingerprint(value: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function localArtifactPath(artifact: MediaStageResponse['artifacts'][number]): string {
+  if (artifact.location?.type === 'local') return artifact.location.path;
+  if (artifact.path) return artifact.path;
+  throw Object.assign(new Error(`Media worker artifact ${artifact.kind} has no local path`), {
+    code: 'ARTIFACT_PATH_MISSING',
+  });
+}
+
+interface StoredMediaObject {
+  key: string;
+  bytes: number;
+  mediaType: string;
+  clipId?: string;
+  exportId?: string;
+  clipIndex?: number;
+  sha256?: string;
+}
+
+function providerStorage(response: MediaStageResponse): StoredMediaObject[] {
+  const value = response.metrics as { storage?: unknown };
+  return Array.isArray(value.storage)
+    ? value.storage.filter((item): item is StoredMediaObject => Boolean(item) && typeof item === 'object')
+    : [];
 }

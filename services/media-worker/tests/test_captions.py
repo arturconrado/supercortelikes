@@ -25,8 +25,30 @@ def test_caption_output_contains_word_timing_and_karaoke():
     ass = render_ass(cues, TEMPLATES["podcast"], "podcast")
     assert "00:00:00,000 --> 00:00:01,000" in srt
     assert "Olá mundo" in srt
-    assert "{\\k40}OLÁ" in ass
-    assert "{\\k60}MUNDO" in ass
+    assert "\\k40" in ass and "OLÁ" in ass
+    assert "\\k60\\c&H0000D7FF" in ass and "MUNDO" in ass
+    assert cues[0]["keywordIndex"] == 1
+
+
+def test_caption_grouping_respects_punctuation_pauses_and_editor_vocabulary():
+    words = [
+        {"word": "Primeira", "start": 0.0, "end": 0.25},
+        {"word": "frase.", "start": 0.25, "end": 0.6},
+        {"word": "Outra", "start": 1.1, "end": 1.4},
+        {"word": "ideia", "start": 1.4, "end": 1.8},
+    ]
+    cues = group_words(words, clip_start=0, clip_end=2, words_per_cue=6)
+    assert len(cues) == 2
+    style = caption_style("podcast", {
+        "activeColor": "#00ff00",
+        "keywordColor": "#ffcc00",
+        "animation": "none",
+        "case": "preserve",
+        "position": "auto",
+    })
+    ass = render_ass(cues, style, "podcast")
+    assert "&H0000FF00" in ass
+    assert "Primeira" in ass
 
 
 def test_caption_templates_use_five_distinct_bundled_font_families():

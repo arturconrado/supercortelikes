@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Badge, Button, Card, Input, Label, PageHeader, Skeleton, StatusBadge, Textarea } from '@/components/ui';
 import { useResource } from '@/hooks/use-resource';
 import { api } from '@/lib/api';
@@ -46,8 +46,11 @@ export default function ClipViewerPage() {
   const [captionTemplate, setCaptionTemplate] = useState('podcast');
   const [captionPrimaryColor, setCaptionPrimaryColor] = useState('#ffffff');
   const [captionHighlightColor, setCaptionHighlightColor] = useState('#c6ff3a');
+  const [captionKeywordColor, setCaptionKeywordColor] = useState('#ffd700');
   const [captionFontSize, setCaptionFontSize] = useState('42');
-  const [captionPosition, setCaptionPosition] = useState('bottom');
+  const [captionPosition, setCaptionPosition] = useState('auto');
+  const [captionAnimation, setCaptionAnimation] = useState('pop');
+  const [captionCase, setCaptionCase] = useState('upper');
   const [captionBackground, setCaptionBackground] = useState(true);
   const [activeTab, setActiveTab] = useState<EditorTab>('preview');
   const [saving, setSaving] = useState(false);
@@ -56,6 +59,7 @@ export default function ClipViewerPage() {
   const [exporting, setExporting] = useState(false);
   const [exportRequested, setExportRequested] = useState(false);
   const [message, setMessage] = useState('');
+  const previewRequested = useRef(false);
 
   const caption = clip?.captions?.[0];
   const captionCues = useMemo(() => caption?.cues ?? [], [caption?.cues]);
@@ -71,11 +75,44 @@ export default function ClipViewerPage() {
     setCaptionTemplate(caption?.template ?? 'podcast');
     const style = caption?.style ?? {};
     setCaptionPrimaryColor(typeof style.primaryColor === 'string' ? style.primaryColor : '#ffffff');
-    setCaptionHighlightColor(typeof style.highlightColor === 'string' ? style.highlightColor : '#c6ff3a');
+    setCaptionHighlightColor(typeof style.activeColor === 'string' ? style.activeColor : typeof style.highlightColor === 'string' ? style.highlightColor : '#c6ff3a');
+    setCaptionKeywordColor(typeof style.keywordColor === 'string' ? style.keywordColor : '#ffd700');
     setCaptionFontSize(typeof style.fontSize === 'number' ? String(style.fontSize) : typeof style.fontSize === 'string' ? style.fontSize : '42');
-    setCaptionPosition(typeof style.position === 'string' ? style.position : 'bottom');
+    setCaptionPosition(typeof style.position === 'string' ? style.position : 'auto');
+    setCaptionAnimation(typeof style.animation === 'string' ? style.animation : 'pop');
+    setCaptionCase(typeof style.case === 'string' ? style.case : 'upper');
     setCaptionBackground(typeof style.background === 'boolean' ? style.background : true);
   }, [clip, caption?.style, caption?.template]);
+
+  useEffect(() => {
+    if (!clip || clip.previewUrl || clip.previewStatus || previewRequested.current) return;
+    previewRequested.current = true;
+    void requestPreview(false);
+  }, [clip]);
+
+  useEffect(() => {
+    if (!['QUEUED', 'PROCESSING'].includes((clip?.previewStatus ?? '').toUpperCase())) return;
+    const timer = window.setInterval(async () => {
+      try {
+        setData(await api<Clip>(`/clips/${id}`));
+      } catch {
+        // The next poll or manual refresh can recover.
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [clip?.previewStatus, id, setData]);
+
+  async function requestPreview(force: boolean) {
+    try {
+      await api(`/clips/${id}/preview`, {
+        method: 'POST',
+        body: JSON.stringify({ aspectRatio: force ? aspectRatio : clip?.aspectRatio ?? aspectRatio, force }),
+      });
+      setData(await api<Clip>(`/clips/${id}`));
+    } catch (reason) {
+      if (force) setMessage(reason instanceof Error ? reason.message : 'Não foi possível atualizar o preview.');
+    }
+  }
 
   useEffect(() => {
     if (!exportRequested) return;
@@ -141,7 +178,8 @@ export default function ClipViewerPage() {
         });
       }
       setData(updated);
-      setMessage('Timing e formato salvos. Renderize novamente para aplicar.');
+      setMessage('Timing e formato salvos. Atualizando o preview fiel.');
+      void requestPreview(true);
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : 'Não foi possível salvar timing/formato.');
     } finally {
@@ -161,15 +199,19 @@ export default function ClipViewerPage() {
           template: captionTemplate,
           style: {
             primaryColor: captionPrimaryColor,
-            highlightColor: captionHighlightColor,
+            activeColor: captionHighlightColor,
+            keywordColor: captionKeywordColor,
             fontSize: Number(captionFontSize),
             position: captionPosition,
+            animation: captionAnimation,
+            case: captionCase,
             background: captionBackground,
           },
         }),
       });
       setData(updated);
-      setMessage('Estilo de legenda salvo. Renderize novamente para aplicar.');
+      setMessage('Estilo de legenda salvo. Atualizando o preview fiel.');
+      void requestPreview(true);
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : 'Não foi possível salvar as legendas.');
     } finally {
@@ -202,7 +244,8 @@ export default function ClipViewerPage() {
   if (error || !clip) return <Alert>{error ?? 'Corte não encontrado.'}</Alert>;
 
   const duration = clip.durationSeconds ?? ((clip.endSeconds ?? 0) - (clip.startSeconds ?? 0));
-  const source = clip.renderUrl ?? clip.playbackUrl;
+  const source = clip.previewUrl ?? clip.renderUrl ?? clip.playbackUrl;
+  const hasBurnedPreview = Boolean(clip.previewUrl ?? clip.renderUrl);
   const sampleCaption = extractCaptionSample(captionCues);
   const captionSize = Math.max(18, Math.min(72, Number(captionFontSize) || 42));
   const previewAspectClass = aspectRatio === '1:1'
@@ -265,7 +308,7 @@ export default function ClipViewerPage() {
           <div role="region" aria-label="Prévia do corte" className={cn('relative mx-auto max-h-[680px] bg-black', previewAspectClass)}>
             {source ? (
               <video src={source} poster={clip.thumbnailUrl} controls crossOrigin="anonymous" className="h-full w-full object-contain">
-                {captionTrackDataUrl(clip.captions?.[0]?.cues) && <track kind="captions" src={captionTrackDataUrl(clip.captions?.[0]?.cues)} srcLang="pt" label="Português" default/>}
+                {!hasBurnedPreview && captionTrackDataUrl(clip.captions?.[0]?.cues) && <track kind="captions" src={captionTrackDataUrl(clip.captions?.[0]?.cues)} srcLang="pt" label="Português" default/>}
               </video>
             ) : (
               <div className="grid h-full place-items-center text-center">
@@ -275,14 +318,19 @@ export default function ClipViewerPage() {
                 </div>
               </div>
             )}
-            <div className={cn('pointer-events-none absolute inset-x-5 flex justify-center', captionPosition === 'top' ? 'top-8' : captionPosition === 'middle' ? 'top-1/2 -translate-y-1/2' : 'bottom-10')}>
+            {['QUEUED', 'PROCESSING'].includes((clip.previewStatus ?? '').toUpperCase()) && (
+              <div className="absolute right-3 top-3 flex items-center gap-2 rounded-full bg-black/75 px-3 py-1 text-xs text-lime">
+                <LoaderCircle className="size-3 animate-spin"/>Gerando proxy fiel
+              </div>
+            )}
+            {!hasBurnedPreview && <div className={cn('pointer-events-none absolute inset-x-5 flex justify-center', captionPosition === 'top' ? 'top-8' : captionPosition === 'middle' ? 'top-1/2 -translate-y-1/2' : 'bottom-10')}>
               <div
-                className={cn('max-w-[92%] rounded-xl px-3 py-2 text-center font-black uppercase leading-tight shadow-2xl', captionBackground && 'bg-black/70 backdrop-blur')}
+                className={cn('max-w-[92%] rounded-xl px-3 py-2 text-center font-black leading-tight shadow-2xl', captionCase === 'upper' && 'uppercase', captionCase === 'lower' && 'lowercase', captionCase === 'title' && 'capitalize', captionBackground && 'bg-black/70 backdrop-blur')}
                 style={{ color: captionPrimaryColor, fontSize: `${captionSize}px` }}
               >
                 {sampleCaption}
               </div>
-            </div>
+            </div>}
           </div>
         </Card>
 
@@ -357,8 +405,12 @@ export default function ClipViewerPage() {
                 <Input id="caption-primary" type="color" value={captionPrimaryColor} onChange={(event) => setCaptionPrimaryColor(event.target.value)}/>
               </div>
               <div>
-                <Label htmlFor="caption-highlight">Cor destaque</Label>
+                <Label htmlFor="caption-highlight">Palavra falada</Label>
                 <Input id="caption-highlight" type="color" value={captionHighlightColor} onChange={(event) => setCaptionHighlightColor(event.target.value)}/>
+              </div>
+              <div>
+                <Label htmlFor="caption-keyword">Keyword</Label>
+                <Input id="caption-keyword" type="color" value={captionKeywordColor} onChange={(event) => setCaptionKeywordColor(event.target.value)}/>
               </div>
             </div>
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
@@ -374,9 +426,26 @@ export default function ClipViewerPage() {
                   onChange={(event) => setCaptionPosition(event.target.value)}
                   className="h-11 w-full rounded-xl border border-white/10 bg-panel px-3 text-sm text-zinc-200 outline-none"
                 >
+                  <option value="auto">Automática</option>
                   <option value="top">Topo</option>
                   <option value="middle">Centro</option>
                   <option value="bottom">Base</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="caption-animation">Animação</Label>
+                <select id="caption-animation" value={captionAnimation} onChange={(event) => setCaptionAnimation(event.target.value)} className="h-11 w-full rounded-xl border border-white/10 bg-panel px-3 text-sm text-zinc-200 outline-none">
+                  <option value="pop">Pop</option>
+                  <option value="none">Sem animação</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="caption-case">Caixa</Label>
+                <select id="caption-case" value={captionCase} onChange={(event) => setCaptionCase(event.target.value)} className="h-11 w-full rounded-xl border border-white/10 bg-panel px-3 text-sm text-zinc-200 outline-none">
+                  <option value="upper">Maiúsculas</option>
+                  <option value="preserve">Original</option>
+                  <option value="title">Título</option>
+                  <option value="lower">Minúsculas</option>
                 </select>
               </div>
               <label className="flex items-center gap-3 pt-7 text-sm text-zinc-300">
@@ -393,7 +462,7 @@ export default function ClipViewerPage() {
               <p className="text-xs text-zinc-600">Prévia da legenda</p>
               <div className="mt-3 flex min-h-24 items-end justify-center rounded-xl bg-gradient-to-br from-zinc-800 to-zinc-950 p-4">
                 <span
-                  className={cn('rounded-lg px-3 py-2 text-center font-black uppercase leading-tight', captionBackground && 'bg-black/70')}
+                  className={cn('rounded-lg px-3 py-2 text-center font-black leading-tight', captionCase === 'upper' && 'uppercase', captionCase === 'lower' && 'lowercase', captionCase === 'title' && 'capitalize', captionBackground && 'bg-black/70')}
                   style={{ color: captionPrimaryColor, fontSize: `${captionSize / 2}px` }}
                 >
                   {sampleCaption}

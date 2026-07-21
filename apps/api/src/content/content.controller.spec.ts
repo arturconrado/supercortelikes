@@ -80,6 +80,7 @@ function prisma(overrides: Record<string, unknown> = {}) {
       create: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({}),
     },
+    clipComposition: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     export: {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({ id: 'export', clipId: clip.id, format: 'MP4', aspectRatio: '9:16', status: 'QUEUED', sizeBytes: null }),
@@ -127,7 +128,7 @@ describe('ContentController', () => {
 
   it('exposes pipeline, transcript and video clip state', async () => {
     const { controller } = makeController();
-    await expect(controller.videoPipeline(user, clip.videoId)).resolves.toMatchObject({ progress: 17, run: { openDeadLetters: [{ id: 'dlq' }] } });
+    await expect(controller.videoPipeline(user, clip.videoId)).resolves.toMatchObject({ progress: 14, run: { openDeadLetters: [{ id: 'dlq' }] } });
     await expect(controller.videoTranscript(user, clip.videoId)).resolves.toMatchObject({ language: 'pt', detectedLanguage: 'pt', durationSeconds: 20 });
     const clips = await controller.videoClips(user, clip.videoId) as Array<Record<string, unknown>>;
     expect(clips).toMatchObject([
@@ -154,6 +155,8 @@ describe('ContentController', () => {
     const { controller, db } = makeController();
     await expect(controller.updateClip(user, clip.id, { title: 'New', description: 'Desc', hashtags: ['#new'] })).resolves.toMatchObject({ id: clip.id });
     expect(db.seoMetadata.upsert).toHaveBeenCalled();
+    await expect(controller.updateClip(user, clip.id, { aspectRatio: '1:1' })).resolves.toMatchObject({ id: clip.id });
+    expect(db.clipComposition.deleteMany).toHaveBeenCalledWith({ where: { clipId: clip.id } });
     await expect(controller.updateTiming(user, clip.id, { startSeconds: 2, endSeconds: 12 })).resolves.toMatchObject({ id: clip.id });
     await expect(controller.updateTiming(user, clip.id, { startSeconds: 12, endSeconds: 2 })).rejects.toBeInstanceOf(BadRequestException);
     await expect(controller.updateTiming(user, clip.id, { startSeconds: 2, endSeconds: 21 })).rejects.toBeInstanceOf(BadRequestException);
@@ -167,6 +170,9 @@ describe('ContentController', () => {
     const { controller, renderRequests } = makeController();
     await expect(controller.renderClip(user, clip.id, { aspectRatio: '1:1', force: true })).resolves.toMatchObject({ status: 'QUEUED' });
     expect(renderRequests.request).toHaveBeenCalledWith(user, { clipId: clip.id, format: 'MP4', aspectRatio: '1:1', force: true });
+
+    await expect(controller.previewClip(user, clip.id, { force: false })).resolves.toMatchObject({ status: 'QUEUED' });
+    expect(renderRequests.request).toHaveBeenCalledWith(user, expect.objectContaining({ clipId: clip.id, purpose: 'PREVIEW' }));
 
     renderRequests.request.mockResolvedValueOnce({ id: 'ready', clipId: clip.id, format: 'MP4', aspectRatio: '9:16', status: 'READY', sizeBytes: '10' });
     await expect(controller.exportClip(user, clip.id, { format: 'MP4' })).resolves.toMatchObject({ id: 'ready', sizeBytes: '10' });

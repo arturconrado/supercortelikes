@@ -5,7 +5,7 @@ import { Button } from '@/components/ui';
 const benefits = [
   ['Importe em segundos', 'Cole um link público ou envie arquivos grandes direto para o storage privado.'],
   ['IA encontra os melhores cortes', 'Transcrição, score viral, títulos, hashtags e legendas em um fluxo guiado.'],
-  ['Exporte para cada canal', 'Renderize em 9:16, 1:1, 4:5 ou 16:9 com H.264 e qualidade da origem até 4K.'],
+  ['Exporte para cada canal', 'Renderize em 9:16, 1:1, 4:5 ou 16:9 com H.264 e qualidade de até 1080p.'],
 ];
 
 const steps = [

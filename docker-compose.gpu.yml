@@ -1,0 +1,25 @@
+services:
+  worker:
+    environment:
+      MEDIA_ACCELERATOR: cuda
+      MEDIA_DIARIZATION_ENABLED: "true"
+      MEDIA_TRANSCRIPTION_BATCH_SIZE: "4"
+
+  media-worker:
+    image: picashorts/media-worker-gpu:local
+    build:
+      context: services/media-worker
+      dockerfile: Dockerfile.gpu
+    environment:
+      MEDIA_ACCELERATOR: cuda
+      WHISPERX_MODEL: large-v3-turbo
+      WHISPERX_DEVICE: cuda
+      WHISPERX_COMPUTE_TYPE: float16
+      MEDIA_DIARIZATION_ENABLED: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

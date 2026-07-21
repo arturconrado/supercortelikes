@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma, type PipelineStage } from '@prisma/client';
+import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import {
   completedEventType,
@@ -12,7 +14,14 @@ import {
 
 @Injectable()
 export class PipelineOrchestratorService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly autoRenderMode: 'off' | 'all';
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() config?: ConfigService<Environment, true>,
+  ) {
+    this.autoRenderMode = config?.get('AUTO_RENDER_MODE', { infer: true }) ?? 'off';
+  }
 
   async begin(jobInput: PipelineJob): Promise<'started' | 'already-completed'> {
     const job = pipelineJobSchema.parse(jobInput);
@@ -36,7 +45,7 @@ export class PipelineOrchestratorService {
 
   async complete(jobInput: PipelineJob): Promise<PipelineJob | null> {
     const job = pipelineJobSchema.parse(jobInput);
-    const following = nextStage(job.stage);
+    const following = job.stage === 'composition' && this.autoRenderMode === 'off' ? null : nextStage(job.stage);
     return this.prisma.$transaction(async (tx) => {
       const completed = await tx.stageExecution.updateMany({
         where: { id: job.stageExecutionId, status: 'PROCESSING' },
@@ -140,6 +149,17 @@ export class PipelineOrchestratorService {
             status: 'FAILED',
             errorCode: errorCode(error),
           },
+        }),
+      );
+    } else if (job.stage === 'rendering' || job.stage === 'exports') {
+      operations.push(
+        this.prisma.export.updateMany({
+          where: { sourcePipelineRunId: job.pipelineRunId, status: { in: ['QUEUED', 'PROCESSING'] } },
+          data: { status: 'FAILED', errorCode: errorCode(error) },
+        }),
+        this.prisma.clip.updateMany({
+          where: { videoId: job.videoId, status: 'RENDERING' },
+          data: { status: 'FAILED' },
         }),
       );
     }

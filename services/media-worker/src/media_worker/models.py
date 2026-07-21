@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StorageObject(BaseModel):
@@ -40,16 +40,40 @@ class PipelineRequest(BaseModel):
         return value
 
 
+class ArtifactLocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["local", "object"]
+    path: Optional[str] = None
+    bucket: Optional[str] = None
+    key: Optional[str] = None
+
+    @model_validator(mode="after")
+    def valid_location(self) -> "ArtifactLocation":
+        if self.type == "local" and not self.path:
+            raise ValueError("local artifact locations require path")
+        if self.type == "object" and (not self.bucket or not self.key):
+            raise ValueError("object artifact locations require bucket and key")
+        return self
+
+
 class ArtifactDescriptor(BaseModel):
     kind: str
-    path: str
-    sha256: str
-    bytes: int
+    path: Optional[str] = None
+    location: Optional[ArtifactLocation] = None
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    bytes: int = Field(ge=0)
     media_type: str
+
+    @model_validator(mode="after")
+    def valid_artifact(self) -> "ArtifactDescriptor":
+        if not self.path and not self.location:
+            raise ValueError("artifact requires path or location")
+        return self
 
 
 class StageResponse(BaseModel):
-    schema_version: Literal[1] = Field(1, alias="schemaVersion")
+    schema_version: Literal[1, 2] = Field(1, alias="schemaVersion")
     pipeline_run_id: str = Field(alias="pipelineRunId")
     stage_execution_id: str = Field(alias="stageExecutionId")
     video_id: str = Field(alias="videoId")

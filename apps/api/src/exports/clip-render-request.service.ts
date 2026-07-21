@@ -8,7 +8,7 @@ import { PrismaService } from '../database/prisma.service';
 import { MetricsService } from '../observability/metrics.service';
 import type { PipelineJob } from '../queues/pipeline.constants';
 
-const RENDER_CACHE_VERSION = 'clip-render-source-quality-v6';
+const RENDER_CACHE_VERSION = 'clip-composition-v1';
 const REUSABLE_EXPORT_STATUSES = ['READY', 'QUEUED', 'PROCESSING'] as const;
 
 type RenderRequestInput = {
@@ -16,6 +16,7 @@ type RenderRequestInput = {
   format?: string;
   aspectRatio?: string;
   force?: boolean;
+  purpose?: 'PREVIEW' | 'FINAL';
 };
 
 @Injectable()
@@ -23,6 +24,7 @@ export class ClipRenderRequestService {
   private readonly ffmpegPreset: string;
   private readonly ffmpegCrf: number;
   private readonly renderMaxSourceShortSide: number;
+  private readonly mediaAccelerator: 'cpu' | 'cuda';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -32,6 +34,7 @@ export class ClipRenderRequestService {
     this.ffmpegPreset = config.get('FFMPEG_PRESET', { infer: true });
     this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
     this.renderMaxSourceShortSide = config.get('RENDER_MAX_SOURCE_SHORT_SIDE', { infer: true });
+    this.mediaAccelerator = config.get('MEDIA_ACCELERATOR', { infer: true });
   }
 
   async request(user: AuthenticatedUser, input: RenderRequestInput): Promise<Record<string, unknown>> {
@@ -57,6 +60,7 @@ export class ClipRenderRequestService {
       where: { id: input.clipId, video: { workspaceId: user.workspaceId } },
       include: {
         captions: { orderBy: { createdAt: 'asc' }, take: 1 },
+        composition: true,
         video: {
           include: {
             workspace: {
@@ -75,6 +79,7 @@ export class ClipRenderRequestService {
     if (!clip) throw new NotFoundException('Clip not found');
     const format = input.format ?? 'MP4';
     const aspectRatio = input.aspectRatio ?? clip.aspectRatio;
+    const purpose = input.purpose ?? 'FINAL';
     if (format !== 'MP4') throw new ConflictException('Only MP4 exports are supported');
     const sourceRun = await this.findSourcePipelineRun(clip.videoId);
     if (aspectRatio !== clip.aspectRatio) {
@@ -97,6 +102,10 @@ export class ClipRenderRequestService {
           }
         : null,
       watermark: watermarkFingerprintPayload(clip.video.workspace),
+      composition: clip.composition
+        ? { version: clip.composition.version, accelerator: jsonRecord(clip.composition.plan).accelerator ?? 'legacy' }
+        : null,
+      purpose,
       render: {
         version: RENDER_CACHE_VERSION,
         preset: this.ffmpegPreset,
@@ -109,6 +118,7 @@ export class ClipRenderRequestService {
       const existing = await this.prisma.export.findFirst({
         where: {
           clipId: clip.id,
+          purpose,
           renderFingerprint: fingerprint,
           status: { in: [...REUSABLE_EXPORT_STATUSES] },
         },
@@ -117,6 +127,12 @@ export class ClipRenderRequestService {
       if (existing) return { response: exportResponse(existing), result: 'cache' };
     }
 
+    const compositionPlan = clip.composition ? jsonRecord(clip.composition.plan) : {};
+    const compositionDiagnostics = clip.composition ? jsonRecord(clip.composition.diagnostics) : {};
+    const regenerateComposition = !clip.composition
+      || compositionDiagnostics.reason === 'disabled'
+      || compositionPlan.accelerator !== this.mediaAccelerator
+      || aspectRatio !== clip.aspectRatio;
     const eventId = randomUUID();
     const exportId = randomUUID();
     const pipelineRunId = randomUUID();
@@ -131,6 +147,7 @@ export class ClipRenderRequestService {
       exportId,
       sourcePipelineRunId: sourceRun.id,
       renderFingerprint: fingerprint,
+      regenerateComposition,
       stage: 'rendering',
       correlationId: pipelineRunId,
       causationId: eventId,
@@ -144,11 +161,14 @@ export class ClipRenderRequestService {
           format,
           aspectRatio,
           status: 'QUEUED',
+          purpose,
           renderFingerprint: fingerprint,
           sourcePipelineRunId: sourceRun.id,
         },
       }),
-      this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'RENDERING' } }),
+      ...(purpose === 'FINAL'
+        ? [this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'RENDERING' } })]
+        : []),
       this.prisma.pipelineRun.create({
         data: {
           id: pipelineRunId,

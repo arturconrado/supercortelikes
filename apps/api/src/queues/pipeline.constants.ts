@@ -8,6 +8,7 @@ export const PIPELINE_STAGES = [
   'scoring',
   'clips',
   'captions',
+  'composition',
   'rendering',
   'exports',
 ] as const;
@@ -30,6 +31,7 @@ export const pipelineJobSchema = z.object({
   exportId: z.string().uuid().optional(),
   sourcePipelineRunId: z.string().uuid().optional(),
   renderFingerprint: z.string().min(16).max(256).optional(),
+  regenerateComposition: z.boolean().optional(),
   stage: z.enum(PIPELINE_STAGES),
   correlationId: z.string().uuid(),
   causationId: z.string().uuid(),
@@ -52,6 +54,8 @@ const eventRoutes: Readonly<Record<string, PipelineStageName>> = {
   'pipeline.segmentation.completed.v1': 'scoring',
   'pipeline.scoring.completed.v1': 'clips',
   'pipeline.clips.completed.v1': 'captions',
+  'pipeline.captions.completed.v1': 'composition',
+  'pipeline.composition.completed.v1': 'rendering',
   'clip.render.requested.v1': 'rendering',
   'pipeline.rendering.completed.v1': 'exports',
 };
@@ -69,6 +73,7 @@ const attemptsByQueue: Readonly<Record<PipelineStageName, number>> = {
   scoring: 3,
   clips: 3,
   captions: 3,
+  composition: 3,
   rendering: 3,
   exports: 5,
 };
@@ -80,6 +85,7 @@ const backoffByQueue: Readonly<Record<PipelineStageName, number>> = {
   scoring: 10_000,
   clips: 10_000,
   captions: 15_000,
+  composition: 30_000,
   rendering: 60_000,
   exports: 10_000,
 };
@@ -96,7 +102,6 @@ export function queueJobOptions(queue: PipelineStageName, jobId: string, priorit
 }
 
 export function nextStage(stage: PipelineStageName): PipelineStageName | null {
-  if (stage === 'captions') return null;
   const index = PIPELINE_STAGES.indexOf(stage);
   return index === PIPELINE_STAGES.length - 1 ? null : PIPELINE_STAGES[index + 1];
 }

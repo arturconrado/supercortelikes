@@ -89,9 +89,29 @@ def group_words(
     words_per_cue: int = 4,
 ) -> List[Dict[str, Any]]:
     words_per_cue = max(1, min(8, words_per_cue))
+    groups: List[List[Mapping[str, Any]]] = []
+    pending: List[Mapping[str, Any]] = []
+    for index, word in enumerate(words):
+        pending.append(word)
+        next_word = words[index + 1] if index + 1 < len(words) else None
+        pause = (
+            float(next_word["start"]) - float(word["end"])
+            if next_word is not None
+            else 0.0
+        )
+        duration = float(word["end"]) - float(pending[0]["start"])
+        punctuation_break = str(word.get("word", "")).rstrip().endswith((".", "!", "?", ":", ";"))
+        if (
+            len(pending) >= words_per_cue
+            or pause >= 0.32
+            or duration >= 2.2
+            or (punctuation_break and len(pending) >= 2)
+            or next_word is None
+        ):
+            groups.append(pending)
+            pending = []
     cues = []
-    for index in range(0, len(words), words_per_cue):
-        group = words[index : index + words_per_cue]
+    for group in groups:
         start = max(0.0, float(group[0]["start"]) - clip_start)
         end = min(clip_end - clip_start, float(group[-1]["end"]) - clip_start)
         normalized = [
@@ -104,7 +124,14 @@ def group_words(
             if str(value.get("word", "")).strip()
         ]
         if normalized and end > start:
-            cues.append({"start": start, "end": end, "words": normalized})
+            cues.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "words": normalized,
+                    "keywordIndex": _keyword_index(normalized),
+                }
+            )
     return cues
 
 
@@ -129,6 +156,9 @@ def render_ass(
         "shadow": 2,
         "alignment": 2,
         "margin_v": 260,
+        "keyword": "&H0000D7FF",
+        "case": "upper",
+        "animation": "pop",
         **style,
     }
     header = """[Script Info]
@@ -148,12 +178,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines = []
     for cue in cues:
         karaoke = []
-        for word in cue["words"]:
+        keyword_index = int(cue.get("keywordIndex", -1))
+        for index, word in enumerate(cue["words"]):
             duration_cs = max(
                 1, round((float(word["end"]) - float(word["start"])) * 100)
             )
-            escaped = ass_escape(str(word["word"]).upper())
-            karaoke.append("{\\k%d}%s" % (duration_cs, escaped))
+            escaped = ass_escape(_caption_case(str(word["word"]), str(resolved_style["case"])))
+            prefix = "\\k%d\\c%s" % (
+                duration_cs,
+                resolved_style["keyword"]
+                if index == keyword_index
+                else resolved_style["primary"],
+            )
+            if resolved_style["animation"] == "pop":
+                prefix += "\\fscx108\\fscy108\\t(0,140,\\fscx100\\fscy100)"
+            karaoke.append("{%s}%s" % (prefix, escaped))
         lines.append(
             "Dialogue: 0,%s,%s,Default,,0,0,0,karaoke,%s"
             % (
@@ -168,12 +207,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def caption_style(template_name: str, overrides: Mapping[str, Any]) -> Dict[str, Any]:
     template = dict(TEMPLATES.get(template_name.lower(), TEMPLATES["podcast"]))
     template["primary"] = _ass_color(overrides.get("primaryColor"), template["primary"])
-    template["highlight"] = _ass_color(overrides.get("highlightColor"), template["highlight"])
+    template["highlight"] = _ass_color(
+        overrides.get("activeColor", overrides.get("highlightColor")), template["highlight"]
+    )
+    template["keyword"] = _ass_color(overrides.get("keywordColor"), template["highlight"])
+    template["case"] = str(overrides.get("case", "upper")).lower()
+    if template["case"] not in {"upper", "lower", "title", "preserve"}:
+        template["case"] = "upper"
+    template["animation"] = str(overrides.get("animation", "pop")).lower()
+    if template["animation"] not in {"none", "pop"}:
+        template["animation"] = "pop"
     try:
         template["size"] = max(18, min(96, int(overrides.get("fontSize", template["size"]))))
     except (TypeError, ValueError):
         pass
-    position = str(overrides.get("position", "bottom"))
+    position = str(overrides.get("position", "auto"))
     if position == "top":
         template.update({"alignment": 8, "margin_v": 140})
     elif position == "middle":
@@ -233,6 +281,29 @@ def _ass_color(value: Any, fallback: str) -> str:
     except ValueError:
         return fallback
     return "&H00%02X%02X%02X" % (blue, green, red)
+
+
+def _caption_case(value: str, mode: str) -> str:
+    if mode == "lower":
+        return value.lower()
+    if mode == "title":
+        return value.title()
+    if mode == "preserve":
+        return value
+    return value.upper()
+
+
+def _keyword_index(words: Sequence[Mapping[str, Any]]) -> int:
+    stopwords = {
+        "a", "as", "o", "os", "e", "de", "da", "do", "das", "dos", "em", "um", "uma",
+        "que", "para", "por", "com", "na", "no", "nas", "nos", "the", "and", "for",
+    }
+    candidates = []
+    for index, word in enumerate(words):
+        normalized = "".join(character for character in str(word.get("word", "")).lower() if character.isalnum())
+        if normalized and normalized not in stopwords:
+            candidates.append((len(normalized), index))
+    return max(candidates, default=(0, -1))[1]
 
 
 def srt_timestamp(seconds: float) -> str:

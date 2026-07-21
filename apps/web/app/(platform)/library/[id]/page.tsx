@@ -394,9 +394,9 @@ export default function VideoPage() {
         title={previewClip?.title ?? 'Preview do corte'}
         description={previewClip ? `${formatDuration(previewClip.durationSeconds ?? 0)} · ${previewClip.aspectRatio ?? '9:16'}` : undefined}
       >
-        {previewClip?.renderUrl || previewClip?.playbackUrl ? (
+        {previewClip?.previewUrl || previewClip?.renderUrl || previewClip?.playbackUrl ? (
           <div className="overflow-hidden rounded-2xl bg-black">
-            <video src={previewClip.renderUrl ?? previewClip.playbackUrl} poster={previewClip.thumbnailUrl} controls crossOrigin="anonymous" className="mx-auto max-h-[70vh] w-full object-contain">
+            <video src={previewClip.previewUrl ?? previewClip.renderUrl ?? previewClip.playbackUrl} poster={previewClip.thumbnailUrl} controls crossOrigin="anonymous" className="mx-auto max-h-[70vh] w-full object-contain">
               {captionTrackDataUrl(previewClip.captions?.[0]?.cues) && <track kind="captions" src={captionTrackDataUrl(previewClip.captions?.[0]?.cues)} srcLang="pt" label="Português" default/>}
             </video>
           </div>

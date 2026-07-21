@@ -10,6 +10,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   DeleteObjectCommand: class { constructor(public input: any) {} },
   DeleteObjectsCommand: class { constructor(public input: any) {} },
   GetObjectCommand: class { constructor(public input: any) {} },
+  PutObjectCommand: class { constructor(public input: any) {} },
   ListObjectsV2Command: class { constructor(public input: any) {} },
 }));
 vi.mock('@aws-sdk/lib-storage', () => ({ Upload: class { constructor(public options: any) {} done = aws.uploadDone; } }));
@@ -49,6 +50,8 @@ describe('R2StorageService release endpoints', () => {
       ResponseContentType: 'video/mp4',
     });
     expect(String(signedCommand.input?.ResponseContentDisposition)).toContain("filename*=UTF-8''Caf%C3%A9-%20corte%20final.mp4");
+    expect(await service.uploadUrl('exports/clip.mp4', 'video/mp4', 7200)).toBe('http://localhost:9000/signed');
+    expect(aws.signed).toHaveBeenLastCalledWith(aws.clients[1], expect.anything(), { expiresIn: 3600 });
   });
 
   it('deletes every paginated object under an explicit directory prefix', async () => {

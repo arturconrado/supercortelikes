@@ -19,7 +19,7 @@ export class ExportsController {
   @Get()
   async list(@CurrentUser() user: AuthenticatedUser): Promise<unknown> {
     const exports = await this.prisma.export.findMany({
-      where: { clip: { video: { workspaceId: user.workspaceId } } },
+      where: { purpose: 'FINAL', clip: { video: { workspaceId: user.workspaceId } } },
       orderBy: { createdAt: 'desc' },
       include: { clip: { select: { title: true } } },
     });
@@ -37,6 +37,7 @@ export class ExportsController {
       clipId: input.clipId,
       format: input.format,
       aspectRatio: input.aspectRatio,
+      purpose: 'FINAL',
     });
   }
 
@@ -46,7 +47,7 @@ export class ExportsController {
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<{ url: string; expiresInSeconds: number }> {
     const item = await this.prisma.export.findFirst({
-      where: { id, status: 'READY', clip: { video: { workspaceId: user.workspaceId } } },
+      where: { id, purpose: 'FINAL', status: 'READY', clip: { video: { workspaceId: user.workspaceId } } },
       include: { clip: { include: { video: true } } },
     });
     if (!item?.storageKey) throw new NotFoundException('Ready export not found');
