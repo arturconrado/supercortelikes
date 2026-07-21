@@ -51,7 +51,7 @@ describe('environment validation', () => {
       AI_EXECUTION_MODE: 'local',
       STT_PROVIDER: 'whisperx',
       GPU_PROVIDER: 'none',
-      AUTO_RENDER_MODE: 'all',
+      AUTO_RENDER_MODE: 'off',
       FINAL_MAX_SHORT_SIDE: 1080,
     });
   });

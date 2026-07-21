@@ -186,7 +186,7 @@ class Settings:
                 0.0, float(os.getenv("AI_COST_LIMIT_USD_PER_SOURCE_HOUR", "1.00"))
             ),
             remote_max_concurrency=max(1, min(8, int(os.getenv("REMOTE_MAX_CONCURRENCY", "2")))),
-            auto_render_mode=os.getenv("AUTO_RENDER_MODE", "all").strip().lower(),
+            auto_render_mode=os.getenv("AUTO_RENDER_MODE", "off").strip().lower(),
             final_max_short_side=max(
                 360, min(1080, int(os.getenv("FINAL_MAX_SHORT_SIDE", "1080")))
             ),

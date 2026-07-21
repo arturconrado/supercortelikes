@@ -78,7 +78,7 @@ const environmentSchema = z.object({
   RUNPOD_COST_USD_PER_SECOND: z.coerce.number().min(0).max(1).default(0.00019),
   AI_COST_LIMIT_USD_PER_SOURCE_HOUR: z.coerce.number().min(0).max(100).default(1),
   REMOTE_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
-  AUTO_RENDER_MODE: z.enum(['off', 'all']).default('all'),
+  AUTO_RENDER_MODE: z.enum(['off', 'all']).default('off'),
   FINAL_MAX_SHORT_SIDE: z.coerce.number().int().min(360).max(1080).default(1080),
   MEDIA_TRANSCRIPTION_BATCH_SIZE: z.coerce.number().int().min(1).max(64).default(16),
   MEDIA_HEAVY_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),

@@ -230,12 +230,28 @@ def _capacity_kind(stage: str) -> str:
     return "heavy" if stage in HEAVY_STAGES else "light"
 
 
+def _should_remove_completed_workspace(stage: str, body: PipelineRequest) -> bool:
+    """Remove only an ephemeral render workspace after its export completes.
+
+    The source pipeline workspace owns the downloaded media and the derived
+    transcript/composition artifacts needed by later clip edits.  It is removed
+    by the authenticated video lifecycle cleanup endpoint instead.
+    """
+    if stage != "exports" or settings.retain_downloads:
+        return False
+    source_pipeline_run_id = str(body.options.get("sourcePipelineRunId") or "")
+    return bool(
+        source_pipeline_run_id
+        and source_pipeline_run_id != body.pipeline_run_id
+    )
+
+
 def _run_stage(stage: str, body: PipelineRequest):
     with _capacity_for(stage):
         with observe_stage(stage, _capacity_kind(stage)):
             try:
                 result = pipeline.execute(stage, body)
-                if stage == "exports" and not settings.retain_downloads:
+                if _should_remove_completed_workspace(stage, body):
                     shutil.rmtree(
                         settings.data_dir / body.pipeline_run_id, ignore_errors=True
                     )

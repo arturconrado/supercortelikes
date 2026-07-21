@@ -197,14 +197,29 @@ def test_source_is_explicitly_required_for_ingestion(tmp_path, monkeypatch):
     assert response.json()["error"]["code"] == "SOURCE_REQUIRED"
 
 
-def test_completed_export_workspace_is_removed_when_retention_is_disabled(tmp_path, monkeypatch):
+def test_source_workspace_is_preserved_for_later_clip_edits(tmp_path, monkeypatch):
     worker_app = import_module("media_worker.app")
-    run = tmp_path / "pipeline-cleanup"
+    run = tmp_path / "pipeline-source"
     run.mkdir()
     monkeypatch.setattr(worker_app, "settings", replace(worker_app.settings, data_dir=tmp_path, retain_downloads=False))
     monkeypatch.setattr(worker_app.pipeline, "execute", lambda *_args: {"status": "succeeded"})
     result = worker_app._run_stage("exports", PipelineRequest(
-        pipelineRunId="pipeline-cleanup", stageExecutionId="execution-cleanup", videoId="video-cleanup",
+        pipelineRunId="pipeline-source", stageExecutionId="execution-source", videoId="video-source",
+        options={"sourcePipelineRunId": "pipeline-source"},
+    ))
+    assert result == {"status": "succeeded"}
+    assert run.exists()
+
+
+def test_completed_on_demand_export_workspace_is_removed_when_retention_is_disabled(tmp_path, monkeypatch):
+    worker_app = import_module("media_worker.app")
+    run = tmp_path / "pipeline-render"
+    run.mkdir()
+    monkeypatch.setattr(worker_app, "settings", replace(worker_app.settings, data_dir=tmp_path, retain_downloads=False))
+    monkeypatch.setattr(worker_app.pipeline, "execute", lambda *_args: {"status": "succeeded"})
+    result = worker_app._run_stage("exports", PipelineRequest(
+        pipelineRunId="pipeline-render", stageExecutionId="execution-render", videoId="video-render",
+        options={"sourcePipelineRunId": "pipeline-source"},
     ))
     assert result == {"status": "succeeded"}
     assert not run.exists()
