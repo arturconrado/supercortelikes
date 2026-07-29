@@ -121,8 +121,6 @@ def test_pipeline_executes_every_stage_and_reframe(tmp_path, monkeypatch):
 
 
 def test_rendering_rejects_invalid_aspect_ratio(tmp_path, monkeypatch):
-    import media_worker.pipeline as module
-
     pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path))
     workspace = tmp_path / "pipeline-123" / "media"
     workspace.mkdir(parents=True)
@@ -282,7 +280,7 @@ def test_rendering_uses_persisted_timing_and_caption_editor_overrides(tmp_path, 
     assert "&H006633FF" in rendered_ass
 
 
-def test_rendering_lazily_regenerates_and_exposes_missing_composition(tmp_path, monkeypatch):
+def test_rendering_lazily_regenerates_and_exposes_stale_composition(tmp_path, monkeypatch):
     import media_worker.pipeline as module
 
     pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path, media_accelerator="cpu"))
@@ -297,13 +295,19 @@ def test_rendering_lazily_regenerates_and_exposes_missing_composition(tmp_path, 
     captions_dir = tmp_path / "pipeline-123" / "captions"
     captions_dir.mkdir()
     (captions_dir / "manifest.json").write_text('{"captions": []}')
+    composition_dir = tmp_path / "pipeline-123" / "composition"
+    composition_dir.mkdir()
+    (composition_dir / "manifest.json").write_text(
+        '{"compositions": [{"clipId": "clip-001", "version": "composition-v1", '
+        '"accelerator": "cpu", "scenes": [{"start": 0, "end": 5, "layout": "fit"}]}]}'
+    )
     captured = {}
 
     def compositions(_source, clips, settings, _options):
         return [
             {
                 "clipId": clips[0]["id"],
-                "version": "composition-v1",
+                "version": "composition-v2",
                 "accelerator": settings.media_accelerator,
                 "source": {"width": 1280, "height": 720},
                 "scenes": [{"start": 0, "end": 5, "layout": "fit"}],
@@ -324,13 +328,13 @@ def test_rendering_lazily_regenerates_and_exposes_missing_composition(tmp_path, 
     body.options = {
         "clipIndex": 0,
         "compositionV1": True,
-        "regenerateComposition": True,
         "aspectRatio": "9:16",
     }
 
     response = pipeline.execute("rendering", body)
 
     assert captured["plans"]["clip-001"]["accelerator"] == "cpu"
+    assert captured["plans"]["clip-001"]["version"] == "composition-v2"
     assert any(item.kind == "composition-manifest" for item in response.artifacts)
     persisted = json.loads(
         (tmp_path / "pipeline-123" / "composition" / "manifest.json").read_text()

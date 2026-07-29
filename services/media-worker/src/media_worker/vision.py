@@ -33,15 +33,16 @@ def analyze_focus(
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 25.0)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    detection_step = max(1, round(fps * sample_seconds))
-    tracking_step = max(1, round(detection_step / 2))
-    start_frame = max(0, round(start_seconds * fps))
-    end_frame = round(end_seconds * fps) if end_seconds is not None else None
-    if start_frame:
-        capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    detection_interval = max(0.04, float(sample_seconds))
+    tracking_interval = max(0.04, detection_interval / 2)
+    if start_seconds > 0:
+        capture.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000)
     backend, detect = _detector(detector, cv2, settings)
     samples: List[Dict[str, Any]] = []
-    frame_index = start_frame
+    frame_index = max(0, round(start_seconds * fps))
+    next_detection_time = start_seconds
+    next_tracking_time = start_seconds
+    last_timestamp = start_seconds - (1.0 / max(1.0, fps))
     previous_gray = None
     tracked_boxes: List[Tuple[float, float, float, float, float]] = []
     deadline = time.monotonic() + time_budget_seconds if time_budget_seconds else None
@@ -49,16 +50,24 @@ def analyze_focus(
         while True:
             if deadline is not None and time.monotonic() > deadline:
                 raise WorkerError("VISION_TIME_BUDGET_EXCEEDED", "Composition analysis exceeded its CPU time budget")
-            if end_frame is not None and frame_index > end_frame:
-                break
             ok, frame = capture.read()
             if not ok:
                 break
-            relative_frame = frame_index - start_frame
-            if relative_frame % tracking_step == 0:
+            reported_msec = float(capture.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+            timestamp = frame_timestamp(
+                reported_msec,
+                frame_index=frame_index,
+                fps=fps,
+                last_timestamp=last_timestamp,
+            )
+            last_timestamp = timestamp
+            if end_seconds is not None and timestamp > end_seconds + 0.001:
+                break
+            if timestamp + 0.001 >= next_tracking_time:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                if relative_frame % detection_step == 0 or not tracked_boxes:
+                if timestamp + 0.001 >= next_detection_time or not tracked_boxes:
                     tracked_boxes = detect(frame)
+                    next_detection_time = timestamp + detection_interval
                 else:
                     tracked_boxes = _track_boxes(previous_gray, gray, tracked_boxes, cv2)
                 boxes = tracked_boxes
@@ -88,7 +97,7 @@ def analyze_focus(
                 focus = _weighted_center(weighted_boxes, width, height)
                 samples.append(
                     {
-                        "time": round(frame_index / fps, 3),
+                        "time": round(timestamp, 3),
                         "x": round(focus[0], 2),
                         "y": round(focus[1], 2),
                         "detections": len(weighted_boxes),
@@ -109,6 +118,7 @@ def analyze_focus(
                     }
                 )
                 previous_gray = gray
+                next_tracking_time = timestamp + tracking_interval
             frame_index += 1
     finally:
         capture.release()
@@ -133,10 +143,27 @@ def analyze_focus(
         },
         "detectionRate": round(len(detected) / len(samples), 4),
         "activeSpeakerMethod": "face-region-motion",
-        "detectionFps": round(fps / detection_step, 3),
-        "trackingFps": round(fps / tracking_step, 3),
+        "detectionFps": round(1.0 / detection_interval, 3),
+        "trackingFps": round(1.0 / tracking_interval, 3),
         "range": {"start": start_seconds, "end": end_seconds},
     }
+
+
+def frame_timestamp(
+    reported_msec: float,
+    *,
+    frame_index: int,
+    fps: float,
+    last_timestamp: float,
+) -> float:
+    timestamp = (
+        reported_msec / 1000
+        if reported_msec > 0
+        else frame_index / max(1.0, fps)
+    )
+    if timestamp <= last_timestamp:
+        timestamp = last_timestamp + (1.0 / max(1.0, fps))
+    return timestamp
 
 
 def smart_crop_geometry(

@@ -57,6 +57,7 @@ export default function ClipViewerPage() {
   const [savingTiming, setSavingTiming] = useState(false);
   const [savingCaptions, setSavingCaptions] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [correctingFocus, setCorrectingFocus] = useState(false);
   const [exportRequested, setExportRequested] = useState(false);
   const [message, setMessage] = useState('');
   const previewRequested = useRef(false);
@@ -102,15 +103,35 @@ export default function ClipViewerPage() {
     return () => window.clearInterval(timer);
   }, [clip?.previewStatus, id, setData]);
 
-  async function requestPreview(force: boolean) {
+  async function requestPreview(force: boolean, regenerateComposition = false) {
     try {
       await api(`/clips/${id}/preview`, {
         method: 'POST',
-        body: JSON.stringify({ aspectRatio: force ? aspectRatio : clip?.aspectRatio ?? aspectRatio, force }),
+        body: JSON.stringify({
+          aspectRatio: force ? aspectRatio : clip?.aspectRatio ?? aspectRatio,
+          force,
+          regenerateComposition,
+        }),
       });
       setData(await api<Clip>(`/clips/${id}`));
+      return true;
     } catch (reason) {
       if (force) setMessage(reason instanceof Error ? reason.message : 'Não foi possível atualizar o preview.');
+      return false;
+    }
+  }
+
+  async function correctFramingWithAi() {
+    setCorrectingFocus(true);
+    setMessage('');
+    try {
+      const requested = await requestPreview(true, true);
+      if (requested) {
+        setMessage('A IA está recalculando o orador ativo e validará o novo enquadramento no vídeo com áudio.');
+        setActiveTab('preview');
+      }
+    } finally {
+      setCorrectingFocus(false);
     }
   }
 
@@ -287,6 +308,41 @@ export default function ClipViewerPage() {
       />
 
       {message && <div className="mb-5 rounded-xl border border-white/10 bg-white/[.04] p-3 text-sm text-zinc-300">{message}</div>}
+      {clip.quality && clip.quality.status !== 'PASSED' && (
+        <div className={cn(
+          'mb-5 rounded-xl border p-4',
+          clip.quality.status === 'REVIEW_REQUIRED'
+            ? 'border-red-500/20 bg-red-500/[.08]'
+            : 'border-amber-500/20 bg-amber-500/[.08]',
+        )}>
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div>
+              <div className="flex items-center gap-2">
+                <StatusBadge status={clip.quality.status}/>
+                <span className="text-sm font-semibold text-white">
+                  {clip.quality.status === 'REVIEW_REQUIRED'
+                    ? 'O enquadramento automático precisa de correção'
+                    : 'A validação temporal do modelo não foi concluída'}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-zinc-400">
+                {clip.quality.issues.length
+                  ? clip.quality.issues.map(qualityIssueLabel).join(' · ')
+                  : 'O preview foi preservado, mas ainda não foi marcado como validado.'}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void correctFramingWithAi()}
+              disabled={correctingFocus}
+            >
+              {correctingFocus ? <LoaderCircle className="size-4 animate-spin"/> : <Sparkles className="size-4"/>}
+              Corrigir enquadramento com IA
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="sticky top-16 z-20 mb-5 -mx-4 border-y border-white/[.06] bg-canvas/95 px-4 py-2 backdrop-blur-xl sm:-mx-7 sm:px-7 lg:hidden">
         <div className="flex gap-2 overflow-x-auto">
@@ -379,6 +435,16 @@ export default function ClipViewerPage() {
               <Button type="button" size="sm" onClick={() => void saveTimingAndFormat()} disabled={savingTiming}>
                 {savingTiming ? <LoaderCircle className="size-4 animate-spin"/> : <Check className="size-4"/>}
                 Salvar timing
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void correctFramingWithAi()}
+                disabled={correctingFocus}
+              >
+                {correctingFocus ? <LoaderCircle className="size-4 animate-spin"/> : <Sparkles className="size-4"/>}
+                Corrigir enquadramento com IA
               </Button>
             </div>
           </Card>
@@ -579,4 +645,18 @@ function extractCaptionSample(cues: unknown[]): string {
   if (typeof record.text === 'string' && record.text.trim()) return record.text.trim().split(' ').slice(0, 7).join(' ');
   const words = Array.isArray(record.words) ? record.words.map((word) => word.word).filter((word): word is string => typeof word === 'string') : [];
   return words.length ? words.slice(0, 7).join(' ') : fallback;
+}
+
+function qualityIssueLabel(issue: string): string {
+  const labels: Record<string, string> = {
+    wrong_speaker: 'orador incorreto',
+    late_switch: 'troca de orador atrasada',
+    subject_unsafe: 'pessoa fora da área segura',
+    face_cut: 'rosto cortado',
+    caption_on_face: 'legenda sobre o rosto',
+    black_bars: 'barras pretas',
+    av_sync: 'áudio e imagem fora de sincronia',
+    stream_timing: 'timing do arquivo inconsistente',
+  };
+  return labels[issue] ?? issue.replaceAll('_', ' ');
 }

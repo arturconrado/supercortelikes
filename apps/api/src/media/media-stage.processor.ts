@@ -30,6 +30,7 @@ export class MediaStageProcessor {
   private readonly gpuProvider: 'none' | 'runpod';
   private readonly aiCostLimitUsdPerSourceHour: number;
   private readonly finalMaxShortSide: number;
+  private readonly llmProvider: 'none' | 'openai' | 'openrouter';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -52,6 +53,7 @@ export class MediaStageProcessor {
     this.gpuProvider = config.get('GPU_PROVIDER', { infer: true });
     this.aiCostLimitUsdPerSourceHour = config.get('AI_COST_LIMIT_USD_PER_SOURCE_HOUR', { infer: true });
     this.finalMaxShortSide = config.get('FINAL_MAX_SHORT_SIDE', { infer: true });
+    this.llmProvider = config.get('LLM_PROVIDER', { infer: true });
   }
 
   async process(job: PipelineJob): Promise<void> {
@@ -140,7 +142,7 @@ export class MediaStageProcessor {
         sampleSeconds: 1 / Math.max(1, analysisFps),
         analysisFps,
         minimumSpeakerConfidence: 0.65,
-        focusSwitchDelaySeconds: 0.6,
+        focusSwitchDelaySeconds: 0.25,
         analysisBudgetRatio: 1,
         remote: this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod',
         ...this.sourceIntegrityOptions(video),
@@ -349,7 +351,7 @@ export class MediaStageProcessor {
   }
 
   private async providerBudget(videoId: string): Promise<Record<string, unknown>> {
-    if (this.aiExecutionMode !== 'hybrid') return {};
+    if (this.aiExecutionMode !== 'hybrid' && this.llmProvider !== 'openrouter') return {};
     const [video, usage] = await Promise.all([
       this.prisma.video.findUnique({ where: { id: videoId }, select: { durationMs: true } }),
       this.prisma.usageEvent.aggregate({
@@ -366,7 +368,7 @@ export class MediaStageProcessor {
       sourceDurationSeconds,
       costLimitUsd: roundMoney(costLimitUsd),
       costRemainingUsd: roundMoney(remainingUsd),
-      visualQaEnabled: remainingRatio >= 0.5,
+      visualQaEnabled: true,
       analysisFps: remainingRatio >= 0.25 ? 10 : 6,
     };
   }
@@ -455,7 +457,10 @@ export class MediaStageProcessor {
         select: { id: true },
       });
       if (finalExport) {
-        await this.prisma.clip.update({ where: { id: job.clipId }, data: { status: 'RENDERING' } });
+        await this.prisma.clip.updateMany({
+          where: { id: job.clipId, status: { not: 'REVIEW_REQUIRED' } },
+          data: { status: 'RENDERING' },
+        });
       }
       await this.persistQualityStatus(job.videoId, response);
       return;
@@ -936,26 +941,73 @@ export class MediaStageProcessor {
   }
 
   private async persistQualityStatus(videoId: string, response: MediaStageResponse): Promise<void> {
-    const metrics = response.metrics as { quality?: { failedClipIds?: unknown } | null };
-    const failed = metrics.quality?.failedClipIds;
-    if (!Array.isArray(failed) || !failed.length) return;
-    const indexes = new Set(
-      failed
-        .map((value) => /^clip-(\d{3})$/.exec(String(value)))
-        .filter((value): value is RegExpExecArray => Boolean(value))
-        .map((value) => Number(value[1]) - 1),
+    const metrics = response.metrics as {
+      quality?: {
+        status?: unknown;
+        failedClipIds?: unknown;
+        reviews?: unknown;
+        attempts?: unknown;
+        model?: unknown;
+        reviewedAt?: unknown;
+      } | null;
+    };
+    const quality = metrics.quality;
+    if (!quality) return;
+    const rawReviews = Array.isArray(quality.reviews) ? quality.reviews : [];
+    const reviews = rawReviews.filter(
+      (value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value),
     );
+    const failed = Array.isArray(quality.failedClipIds) ? quality.failedClipIds.map(String) : [];
+    const logicalIds = new Set([
+      ...failed,
+      ...reviews.map((review) => String(review.clipId ?? '')).filter(Boolean),
+    ]);
+    if (!logicalIds.size) return;
     const clips = await this.prisma.clip.findMany({
       where: { videoId },
       orderBy: { createdAt: 'asc' },
-      select: { id: true },
+      select: { id: true, status: true, composition: { select: { diagnostics: true } } },
     });
-    const ids = clips.filter((_, index) => indexes.has(index)).map((clip) => clip.id);
-    if (ids.length) {
-      await this.prisma.clip.updateMany({
-        where: { id: { in: ids } },
-        data: { status: 'REVIEW_REQUIRED' },
-      });
+    for (const logicalId of logicalIds) {
+      const match = /^clip-(\d{3})$/.exec(logicalId);
+      const clip = match ? clips[Number(match[1]) - 1] : undefined;
+      if (!clip) continue;
+      const review = reviews.find((value) => String(value.clipId ?? '') === logicalId);
+      const issues = Array.isArray(review?.issues) ? review.issues.map(String) : [];
+      const verified = review?.verified === true;
+      const passed = review?.passed === true && verified && issues.length === 0;
+      const status = failed.includes(logicalId) || issues.length
+        ? 'REVIEW_REQUIRED'
+        : passed
+          ? 'PASSED'
+          : 'UNVERIFIED';
+      const snapshot = {
+        status,
+        issues,
+        confidence: finiteNumber(review?.confidence, 0),
+        attempts: Math.max(1, Math.trunc(finiteNumber(quality.attempts, 1))),
+        model: typeof quality.model === 'string' ? quality.model : null,
+        reviewedAt: typeof quality.reviewedAt === 'string' ? quality.reviewedAt : new Date().toISOString(),
+        verified,
+        reasons: Array.isArray(review?.reasons) ? review.reasons.map(String).slice(0, 8) : [],
+      };
+      if (clip.composition) {
+        const diagnostics = jsonObject(clip.composition.diagnostics);
+        await this.prisma.clipComposition.update({
+          where: { clipId: clip.id },
+          data: {
+            diagnostics: {
+              ...diagnostics,
+              quality: snapshot,
+            } as Prisma.InputJsonObject,
+          },
+        });
+      }
+      if (status === 'REVIEW_REQUIRED') {
+        await this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'REVIEW_REQUIRED' } });
+      } else if (status === 'PASSED' && clip.status === 'REVIEW_REQUIRED') {
+        await this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'RENDERING' } });
+      }
     }
   }
 
@@ -1163,6 +1215,17 @@ function automaticRenderFingerprint(value: Record<string, unknown>): string {
 function roundMoney(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function jsonObject(value: Prisma.JsonValue | null): Record<string, Prisma.JsonValue> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, Prisma.JsonValue>
+    : {};
 }
 
 function localArtifactPath(artifact: MediaStageResponse['artifacts'][number]): string {

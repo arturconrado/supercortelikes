@@ -1,6 +1,16 @@
 {
-  "version": 1,
+  "version": 2,
   "language": "pt-BR",
+  "qualityThresholds": {
+    "correctSpeakerRate": 0.92,
+    "speakerSwitchP95Ms": 400,
+    "safeSubjectRate": 0.95,
+    "maxJumpWidthRatio": 0.08,
+    "avStartDeltaMs": 40,
+    "avDurationDeltaMs": 80,
+    "qualityFalsePasses": 0,
+    "costUsdPerSourceHour": 1
+  },
   "samples": [
     { "id": "solo-01", "category": "solo", "source": "TODO" },
     { "id": "solo-02", "category": "solo", "source": "TODO" },

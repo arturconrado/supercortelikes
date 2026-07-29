@@ -6,7 +6,7 @@ from .config import Settings
 from .vision import analyze_focus
 
 
-COMPOSITION_VERSION = "composition-v1"
+COMPOSITION_VERSION = "composition-v2"
 SUPPORTED_ASPECTS = {"9:16", "1:1", "4:5", "16:9"}
 
 
@@ -53,6 +53,13 @@ def build_compositions(
                     analysis,
                     aspect=aspect,
                     minimum_confidence=minimum_confidence,
+                    focus_switch_delay_seconds=max(
+                        0.0,
+                        min(
+                            0.4,
+                            float(options.get("focusSwitchDelaySeconds", 0.25)),
+                        ),
+                    ),
                 )
             )
         except Exception as error:
@@ -83,6 +90,7 @@ def _combine_voice_activity(analysis: Dict[str, Any], intervals: Any) -> None:
                     float(interval["start"]),
                     float(interval["end"]),
                     str(interval.get("speaker") or ""),
+                    0.04 if interval.get("kind") == "word" else 0.1,
                 )
             )
         except (KeyError, TypeError, ValueError):
@@ -91,8 +99,8 @@ def _combine_voice_activity(analysis: Dict[str, Any], intervals: Any) -> None:
         time = float(sample.get("time", 0.0))
         active_intervals = [
             (start, end, speaker)
-            for start, end, speaker in normalized
-            if start - 0.1 <= time <= end + 0.1
+            for start, end, speaker, padding in normalized
+            if start - padding <= time <= end + padding
         ]
         voice_active = bool(active_intervals)
         sample["voiceActive"] = voice_active
@@ -119,8 +127,18 @@ def _associate_speakers_with_tracks(samples: Sequence[Dict[str, Any]]) -> Dict[s
     scores: Dict[str, Dict[int, float]] = {}
     for sample in samples:
         current = [box for box in sample.get("boxes", []) if isinstance(box, dict)]
+        if not current:
+            continue
         available = list(previous)
         for box in current:
+            if box.get("trackId") is not None:
+                track_id = int(box["trackId"])
+                available = [
+                    value for value in available if int(value.get("trackId", -1)) != track_id
+                ]
+                next_track_id = max(next_track_id, track_id + 1)
+                box["trackId"] = track_id
+                continue
             best = max(available, key=lambda value: _box_iou(box, value), default=None)
             if best is not None and _box_iou(box, best) >= 0.2:
                 track_id = int(best["trackId"])
@@ -216,6 +234,7 @@ def composition_plan(
     *,
     aspect: str,
     minimum_confidence: float = 0.65,
+    focus_switch_delay_seconds: float = 0.25,
 ) -> Dict[str, Any]:
     width, height = int(analysis["width"]), int(analysis["height"])
     samples = list(analysis.get("samples") or [])
@@ -267,13 +286,31 @@ def composition_plan(
                 "focusX": focus_x,
                 "focusY": focus_y,
                 "boxes": boxes[:2],
+                "activeTrackId": (
+                    int(primary["trackId"])
+                    if primary and primary.get("trackId") is not None
+                    else None
+                ),
             }
         )
 
     labeled = stabilize_layouts(labeled, minimum_seconds=0.6)
+    labeled = stabilize_active_tracks(
+        labeled, focus_switch_delay_seconds=focus_switch_delay_seconds
+    )
     keyframes = smooth_keyframes(labeled, width, height)
     scenes = _scenes(labeled, keyframes, float(clip["start"]), float(clip["end"]), width, height)
     mean_confidence = sum(float(value["confidence"]) for value in labeled) / len(labeled)
+    layout_switches = sum(
+        1
+        for previous, current in zip(scenes, scenes[1:])
+        if previous.get("layout") != current.get("layout")
+    )
+    focus_switches = sum(
+        1
+        for previous, current in zip(scenes, scenes[1:])
+        if previous.get("activeTrackId") != current.get("activeTrackId")
+    )
     return {
         "clipId": clip["id"],
         "version": COMPOSITION_VERSION,
@@ -284,7 +321,8 @@ def composition_plan(
             "status": "ready",
             "detectionRate": round(detection_rate, 4),
             "trackingConfidence": round(mean_confidence, 4),
-            "layoutSwitches": max(0, len(scenes) - 1),
+            "layoutSwitches": layout_switches,
+            "focusSwitches": focus_switches,
             "sampleCount": len(labeled),
             "sampleSeconds": round(
                 max(0.0, labeled[1]["time"] - labeled[0]["time"])
@@ -292,8 +330,52 @@ def composition_plan(
                 else 0.0,
                 3,
             ),
+            "focusSwitchDelaySeconds": round(focus_switch_delay_seconds, 3),
         },
     }
+
+
+def stabilize_active_tracks(
+    samples: Sequence[Mapping[str, Any]], *, focus_switch_delay_seconds: float
+) -> List[Dict[str, Any]]:
+    values = [dict(sample) for sample in samples]
+    if len(values) < 2 or focus_switch_delay_seconds <= 0:
+        return values
+    current = values[0].get("activeTrackId")
+    candidate = None
+    candidate_since = 0.0
+    for sample in values:
+        proposed = sample.get("activeTrackId")
+        now = float(sample.get("time", 0.0))
+        if current is None and proposed is not None:
+            current = proposed
+            candidate = None
+            continue
+        if proposed is None or proposed == current:
+            candidate = None
+            continue
+        if proposed != candidate:
+            candidate = proposed
+            candidate_since = now
+        if now - candidate_since + 1e-6 >= focus_switch_delay_seconds:
+            current = proposed
+            candidate = None
+            continue
+        current_box = next(
+            (
+                box
+                for box in sample.get("boxes", [])
+                if box.get("trackId") == current
+            ),
+            None,
+        )
+        if current_box is not None:
+            sample["activeTrackId"] = current
+            sample["focusX"] = float(current_box["x"]) + float(current_box["width"]) / 2
+            sample["focusY"] = float(current_box["y"]) + float(current_box["height"]) * 0.45
+        if len(sample.get("boxes", [])) >= 2:
+            sample["layout"] = "split"
+    return values
 
 
 def stabilize_layouts(
@@ -358,7 +440,12 @@ def _scenes(
     index = 0
     while index < len(samples):
         end = index + 1
-        while end < len(samples) and samples[end]["layout"] == samples[index]["layout"]:
+        while (
+            end < len(samples)
+            and samples[end]["layout"] == samples[index]["layout"]
+            and samples[end].get("activeTrackId")
+            == samples[index].get("activeTrackId")
+        ):
             end += 1
         scene_start = clip_start if index == 0 else float(samples[index]["time"])
         scene_end = clip_end if end == len(samples) else float(samples[end]["time"])
@@ -370,6 +457,9 @@ def _scenes(
                 "y": round((float(box["y"]) + float(box["height"]) * 0.45) / height, 5),
                 "width": round(float(box["width"]) / width, 5),
                 "height": round(float(box["height"]) / height, 5),
+                "trackId": (
+                    int(box["trackId"]) if box.get("trackId") is not None else None
+                ),
             }
             for box in boxes[:2]
         ]
@@ -378,6 +468,7 @@ def _scenes(
                 "start": round(max(clip_start, scene_start), 3),
                 "end": round(min(clip_end, max(scene_start + 0.04, scene_end)), 3),
                 "layout": str(samples[index]["layout"]),
+                "activeTrackId": samples[index].get("activeTrackId"),
                 "confidence": round(
                     sum(float(value["confidence"]) for value in scene_samples)
                     / len(scene_samples),

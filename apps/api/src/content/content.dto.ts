@@ -66,6 +66,10 @@ export class RenderClipDto {
   @IsOptional()
   @IsBoolean()
   force?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  regenerateComposition?: boolean;
 }
 
 export class ClipExportDto {

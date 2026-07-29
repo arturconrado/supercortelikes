@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List
 
 from .captions import build_caption_files, caption_style, normalize_cues, render_ass, render_srt
 from .clips import find_clips
-from .composition import build_compositions, fallback_plan
+from .composition import COMPOSITION_VERSION, build_compositions, fallback_plan
 from .config import Settings
 from .deepgram import transcribe_url as transcribe_with_deepgram
 from .errors import WorkerError
@@ -19,7 +19,7 @@ from .media import (
 )
 from .models import ArtifactDescriptor, ArtifactLocation, PipelineRequest, ReframeRequest, StageResponse
 from .rendering import render_clips
-from .quality import conservative_compositions, review_renders
+from .quality import corrected_compositions, merge_rerender_quality, review_renders
 from .runpod import execute_remote_job
 from .scoring import score_all
 from .segmentation import semantic_segments
@@ -396,6 +396,8 @@ class Pipeline:
                     not regenerate
                     and str(plan.get("accelerator", "legacy"))
                     == self.settings.media_accelerator
+                    and str(plan.get("version", "legacy"))
+                    == COMPOSITION_VERSION
                 )
             ]
             reusable_ids = {str(plan.get("clipId")) for plan in reusable_plans}
@@ -589,8 +591,13 @@ class Pipeline:
         quality = review_renders(
             outputs,
             self.settings,
-            workspace.path("quality/contact-sheets"),
+            workspace.path("quality/video-proxies"),
             cost_remaining_usd=_optional_float(request.options.get("costRemainingUsd")),
+            composition_plans=(
+                render_options.get("compositionPlans")
+                if isinstance(render_options.get("compositionPlans"), dict)
+                else None
+            ),
         ) if request.options.get("visualQaEnabled", True) else None
         provider_usage = list(remote_provider_usage)
         if quality:
@@ -598,8 +605,9 @@ class Pipeline:
         if quality and quality.get("failedClipIds") and isinstance(render_options.get("compositionPlans"), dict):
             failed_ids = set(str(value) for value in quality["failedClipIds"])
             failed_clips = [clip for clip in selected_clips if str(clip.get("id")) in failed_ids]
-            conservative_plans = conservative_compositions(
-                render_options["compositionPlans"], list(failed_ids)
+            conservative_plans = corrected_compositions(
+                render_options["compositionPlans"],
+                quality.get("reviews", []),
             )
             render_options["compositionPlans"] = conservative_plans
             persisted_plans = {
@@ -623,18 +631,17 @@ class Pipeline:
             second_quality = review_renders(
                 [value for value in outputs if str(value.get("clipId")) in failed_ids],
                 self.settings,
-                workspace.path("quality/contact-sheets-rerender"),
+                workspace.path("quality/video-proxies-rerender"),
                 cost_remaining_usd=_remaining_after_usage(
                     request.options.get("costRemainingUsd"), provider_usage
                 ),
+                composition_plans=conservative_plans,
             )
             if second_quality:
                 provider_usage.extend(second_quality.get("providerUsage", []))
-                quality = {
-                    **second_quality,
-                    "rerendered": sorted(failed_ids),
-                    "status": "review" if second_quality.get("failedClipIds") else "passed",
-                }
+                quality = merge_rerender_quality(
+                    quality, second_quality, sorted(failed_ids)
+                )
         manifest = workspace.write_json("renders/manifest.json", {"renders": outputs, "captions": captions})
         artifacts = [artifact(manifest, "renders-manifest", "application/json")]
         artifacts.extend(
@@ -710,7 +717,7 @@ class Pipeline:
                 "clips": len(plans),
                 "ready": ready,
                 "fallbacks": fallbacks,
-                "version": plans[0]["version"] if plans else "composition-v1",
+                "version": plans[0]["version"] if plans else "composition-v2",
                 "providerUsage": [],
                 "remote": False,
                 "deferred": deferred,
@@ -997,15 +1004,38 @@ def _voice_activity(workspace: Workspace) -> List[Dict[str, Any]]:
         segments = workspace.read_json("transcription/transcript.json").get("segments", [])
     except (OSError, ValueError, TypeError):
         return []
-    return [
-        {
-            "start": segment.get("start", 0),
-            "end": segment.get("end", 0),
-            "speaker": segment.get("speaker"),
-        }
-        for segment in segments
-        if isinstance(segment, dict)
-    ]
+    intervals = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        words = segment.get("words")
+        added_word = False
+        if isinstance(words, list):
+            for word in words:
+                if not isinstance(word, dict):
+                    continue
+                start, end = word.get("start"), word.get("end")
+                if start is None or end is None:
+                    continue
+                intervals.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "speaker": word.get("speaker") or segment.get("speaker"),
+                        "kind": "word",
+                    }
+                )
+                added_word = True
+        if not added_word:
+            intervals.append(
+                {
+                    "start": segment.get("start", 0),
+                    "end": segment.get("end", 0),
+                    "speaker": segment.get("speaker"),
+                    "kind": "segment",
+                }
+            )
+    return intervals
 
 
 def _source_video_dimensions(workspace: Workspace) -> Dict[str, int]:

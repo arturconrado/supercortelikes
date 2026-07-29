@@ -394,6 +394,7 @@ export class ContentController {
       format: 'MP4',
       aspectRatio: input.aspectRatio ?? clip.aspectRatio,
       force: input.force ?? false,
+      regenerateComposition: input.regenerateComposition ?? false,
     }));
   }
 
@@ -409,6 +410,7 @@ export class ContentController {
       format: 'MP4',
       aspectRatio: input.aspectRatio ?? clip.aspectRatio,
       force: input.force ?? false,
+      regenerateComposition: input.regenerateComposition ?? false,
       purpose: 'PREVIEW',
     }));
   }
@@ -479,8 +481,10 @@ export class ContentController {
       : undefined;
     const sourcePreviewUrl = renderUrl || previewUrl ? undefined : await this.sourcePreviewUrl(clip);
     const { video: _video, ...clipFields } = clip;
+    const quality = clipQuality(clip.composition);
     return {
       ...clipFields,
+      quality,
       startSeconds: clip.startMs !== undefined ? Number(clip.startMs) / 1000 : undefined,
       endSeconds: clip.endMs !== undefined ? Number(clip.endMs) / 1000 : undefined,
       durationSeconds:
@@ -554,4 +558,25 @@ function appendMediaFragment(url: string, startSeconds?: number, endSeconds?: nu
 
 function formatMediaTime(value: number): string {
   return Math.max(0, value).toFixed(3).replace(/\.?0+$/, '');
+}
+
+function clipQuality(composition: unknown): Record<string, unknown> | undefined {
+  if (!composition || typeof composition !== 'object') return undefined;
+  const diagnostics = (composition as { diagnostics?: unknown }).diagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object' || Array.isArray(diagnostics)) return undefined;
+  const quality = (diagnostics as Record<string, unknown>).quality;
+  if (!quality || typeof quality !== 'object' || Array.isArray(quality)) return undefined;
+  const value = quality as Record<string, unknown>;
+  const status = String(value.status ?? '');
+  if (!['PASSED', 'UNVERIFIED', 'REVIEW_REQUIRED'].includes(status)) return undefined;
+  return {
+    status,
+    issues: Array.isArray(value.issues) ? value.issues.map(String) : [],
+    confidence: Number(value.confidence ?? 0),
+    attempts: Number(value.attempts ?? 0),
+    model: typeof value.model === 'string' ? value.model : null,
+    reviewedAt: typeof value.reviewedAt === 'string' ? value.reviewedAt : null,
+    verified: value.verified === true,
+    reasons: Array.isArray(value.reasons) ? value.reasons.map(String) : [],
+  };
 }

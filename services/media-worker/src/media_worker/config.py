@@ -70,6 +70,11 @@ class Settings:
     deepgram_cost_usd_per_hour: float
     openrouter_editor_model: str
     openrouter_qa_enabled: bool
+    openrouter_video_enabled: bool
+    openrouter_video_model: str
+    openrouter_video_max_bytes: int
+    openrouter_video_timeout_seconds: int
+    openrouter_video_retries: int
     gpu_provider: str
     runpod_api_key: str
     runpod_endpoint_id: str
@@ -174,6 +179,28 @@ class Settings:
                 os.getenv("LLM_MODEL", "google/gemini-2.5-flash"),
             ).strip() or "google/gemini-2.5-flash",
             openrouter_qa_enabled=_bool_env("OPENROUTER_QA_ENABLED", True),
+            openrouter_video_enabled=_bool_env("OPENROUTER_VIDEO_ENABLED", True),
+            openrouter_video_model=os.getenv(
+                "OPENROUTER_VIDEO_MODEL",
+                os.getenv(
+                    "OPENROUTER_EDITOR_MODEL",
+                    "google/gemini-2.5-flash",
+                ),
+            ).strip() or "google/gemini-2.5-flash",
+            openrouter_video_max_bytes=max(
+                1024 * 1024,
+                min(
+                    50 * 1024 * 1024,
+                    int(os.getenv("OPENROUTER_VIDEO_MAX_BYTES", str(20 * 1024 * 1024))),
+                ),
+            ),
+            openrouter_video_timeout_seconds=max(
+                10,
+                min(300, int(os.getenv("OPENROUTER_VIDEO_TIMEOUT_SECONDS", "90"))),
+            ),
+            openrouter_video_retries=max(
+                1, min(5, int(os.getenv("OPENROUTER_VIDEO_RETRIES", "3")))
+            ),
             gpu_provider=os.getenv("GPU_PROVIDER", "none").strip().lower(),
             runpod_api_key=os.getenv("RUNPOD_API_KEY", "").strip(),
             runpod_endpoint_id=os.getenv("RUNPOD_ENDPOINT_ID", "").strip(),

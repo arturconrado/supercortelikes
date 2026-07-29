@@ -8,7 +8,8 @@ import { PrismaService } from '../database/prisma.service';
 import { MetricsService } from '../observability/metrics.service';
 import type { PipelineJob } from '../queues/pipeline.constants';
 
-const RENDER_CACHE_VERSION = 'clip-composition-v1';
+const RENDER_CACHE_VERSION = 'clip-composition-v2';
+const COMPOSITION_VERSION = 'composition-v2';
 const REUSABLE_EXPORT_STATUSES = ['READY', 'QUEUED', 'PROCESSING'] as const;
 
 type RenderRequestInput = {
@@ -16,6 +17,7 @@ type RenderRequestInput = {
   format?: string;
   aspectRatio?: string;
   force?: boolean;
+  regenerateComposition?: boolean;
   purpose?: 'PREVIEW' | 'FINAL';
 };
 
@@ -25,6 +27,7 @@ export class ClipRenderRequestService {
   private readonly ffmpegCrf: number;
   private readonly renderMaxSourceShortSide: number;
   private readonly mediaAccelerator: 'cpu' | 'cuda';
+  private readonly openrouterVideoModel: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -35,6 +38,7 @@ export class ClipRenderRequestService {
     this.ffmpegCrf = config.get('FFMPEG_CRF', { infer: true });
     this.renderMaxSourceShortSide = config.get('RENDER_MAX_SOURCE_SHORT_SIDE', { infer: true });
     this.mediaAccelerator = config.get('MEDIA_ACCELERATOR', { infer: true });
+    this.openrouterVideoModel = config.get('OPENROUTER_VIDEO_MODEL', { infer: true });
   }
 
   async request(user: AuthenticatedUser, input: RenderRequestInput): Promise<Record<string, unknown>> {
@@ -103,7 +107,13 @@ export class ClipRenderRequestService {
         : null,
       watermark: watermarkFingerprintPayload(clip.video.workspace),
       composition: clip.composition
-        ? { version: clip.composition.version, accelerator: jsonRecord(clip.composition.plan).accelerator ?? 'legacy' }
+        ? {
+            version: clip.composition.version,
+            accelerator: jsonRecord(clip.composition.plan).accelerator ?? 'legacy',
+            planHash: renderFingerprint(clip.composition.plan),
+            updatedAt: clip.composition.updatedAt.toISOString(),
+            model: this.openrouterVideoModel,
+          }
         : null,
       purpose,
       render: {
@@ -114,7 +124,7 @@ export class ClipRenderRequestService {
         maxSourceShortSide: this.renderMaxSourceShortSide,
       },
     });
-    if (!input.force) {
+    if (!input.force && !input.regenerateComposition) {
       const existing = await this.prisma.export.findFirst({
         where: {
           clipId: clip.id,
@@ -129,7 +139,9 @@ export class ClipRenderRequestService {
 
     const compositionPlan = clip.composition ? jsonRecord(clip.composition.plan) : {};
     const compositionDiagnostics = clip.composition ? jsonRecord(clip.composition.diagnostics) : {};
-    const regenerateComposition = !clip.composition
+    const regenerateComposition = Boolean(input.regenerateComposition)
+      || !clip.composition
+      || clip.composition.version !== COMPOSITION_VERSION
       || compositionDiagnostics.reason === 'disabled'
       || compositionPlan.accelerator !== this.mediaAccelerator
       || aspectRatio !== clip.aspectRatio;
@@ -166,7 +178,7 @@ export class ClipRenderRequestService {
           sourcePipelineRunId: sourceRun.id,
         },
       }),
-      ...(purpose === 'FINAL'
+      ...(purpose === 'FINAL' && clip.status !== 'REVIEW_REQUIRED'
         ? [this.prisma.clip.update({ where: { id: clip.id }, data: { status: 'RENDERING' } })]
         : []),
       this.prisma.pipelineRun.create({

@@ -13,13 +13,13 @@ sys.modules.setdefault(
     types.SimpleNamespace(serverless=types.SimpleNamespace(start=lambda *_args, **_kwargs: None)),
 )
 
-from media_worker import deepgram, runpod
-from media_worker import quality, runpod_handler
-from media_worker.errors import WorkerError
-from media_worker.models import ArtifactDescriptor, ArtifactLocation, PipelineRequest
-from media_worker.pipeline import Pipeline
-from media_worker.quality import conservative_compositions
-from media_worker.workspace import Workspace
+from media_worker import deepgram, runpod  # noqa: E402
+from media_worker import openrouter_video, quality, runpod_handler  # noqa: E402
+from media_worker.errors import WorkerError  # noqa: E402
+from media_worker.models import ArtifactDescriptor, ArtifactLocation, PipelineRequest  # noqa: E402
+from media_worker.pipeline import Pipeline  # noqa: E402
+from media_worker.quality import conservative_compositions, corrected_compositions  # noqa: E402
+from media_worker.workspace import Workspace  # noqa: E402
 
 
 class JsonResponse:
@@ -186,8 +186,44 @@ def test_visual_qa_conservative_rerender_preserves_other_clips():
     value = conservative_compositions(plans, ["clip-001"])
 
     assert value["clip-001"]["scenes"][0]["layout"] == "fit"
-    assert value["clip-001"]["diagnostics"]["reason"] == "visual-qa-rerender"
+    assert value["clip-001"]["diagnostics"]["reason"] == "video-qa-rerender"
     assert value["clip-002"] == plans["clip-002"]
+
+
+def test_video_qa_correction_can_retarget_a_known_visual_track():
+    plans = {
+        "clip-001": {
+            "source": {"width": 1000, "height": 500},
+            "scenes": [{
+                "start": 10,
+                "end": 12,
+                "layout": "fill",
+                "activeTrackId": 1,
+                "keyframes": [{"time": 10, "x": 100, "y": 200}],
+                "subjects": [
+                    {"trackId": 1, "x": 0.2, "y": 0.4},
+                    {"trackId": 2, "x": 0.8, "y": 0.45},
+                ],
+            }],
+            "diagnostics": {"status": "ready"},
+        },
+    }
+
+    corrected = corrected_compositions(plans, [{
+        "clipId": "clip-001",
+        "issues": ["wrong_speaker"],
+        "corrections": [{
+            "startMs": 0,
+            "endMs": 2000,
+            "layout": "fill",
+            "activeTrackId": 2,
+        }],
+    }])
+
+    scene = corrected["clip-001"]["scenes"][0]
+    assert scene["activeTrackId"] == 2
+    assert scene["keyframes"][0]["x"] == 800
+    assert scene["keyframes"][0]["y"] == 225
 
 
 def test_deepgram_rejects_invalid_sources_and_payloads(monkeypatch):
@@ -421,12 +457,18 @@ def qa_settings(**overrides):
         "llm_provider_sort": "latency",
         "llm_timeout_seconds": 5,
         "ffmpeg_binary": "ffmpeg",
+        "ffprobe_binary": "ffprobe",
+        "openrouter_video_enabled": True,
+        "openrouter_video_model": "google/gemini-2.5-flash",
+        "openrouter_video_max_bytes": 20 * 1024 * 1024,
+        "openrouter_video_timeout_seconds": 10,
+        "openrouter_video_retries": 3,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def test_visual_qa_early_exits_and_contact_sheet_failure(tmp_path, monkeypatch):
+def test_video_qa_early_exits_and_proxy_failure_become_unverified(tmp_path, monkeypatch):
     assert quality.review_renders([], qa_settings(openrouter_qa_enabled=False), tmp_path) is None
     assert quality.review_renders([], qa_settings(llm_provider="none"), tmp_path) is None
     assert quality.review_renders([], qa_settings(llm_api_key=""), tmp_path) is None
@@ -435,32 +477,42 @@ def test_visual_qa_early_exits_and_contact_sheet_failure(tmp_path, monkeypatch):
 
     render = tmp_path / "render.mp4"
     render.write_bytes(b"video")
-    monkeypatch.setattr(quality, "_contact_sheet", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("ffmpeg")))
-    assert quality.review_renders([{"path": render, "clipId": "a"}], qa_settings(), tmp_path) is None
+    monkeypatch.setattr(quality, "_technical_review", lambda *_args: {
+        "status": "passed", "hardFailure": False, "issues": [], "confidence": 1
+    })
+    monkeypatch.setattr(quality, "create_proxy", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("ffmpeg")))
+    unavailable = quality.review_renders([{"path": render, "clipId": "a"}], qa_settings(), tmp_path)
+    assert unavailable["status"] == "UNVERIFIED"
+    assert unavailable["reviews"][0]["passed"] is False
 
 
 def test_visual_qa_normalizes_reviews_and_usage(tmp_path, monkeypatch):
     render = tmp_path / "render.mp4"
     render.write_bytes(b"video")
 
-    def contact_sheet(_path, clip_id, _duration, output_dir, _settings):
-        output_dir.mkdir(parents=True, exist_ok=True)
-        sheet = output_dir / (clip_id + ".jpg")
-        sheet.write_bytes(b"jpeg")
-        return sheet
-
-    body = {
-        "choices": [{"message": {"content": "```json\n" + json.dumps({
+    content = "```json\n" + json.dumps({
             "reviews": [
                 {"clipId": "clip-1", "passed": True, "issues": ["face_cut", "unknown"], "confidence": 2},
                 {"clipId": "other", "passed": False},
                 "invalid",
             ]
-        }) + "\n```"}}],
-        "usage": {"total_tokens": 20, "cost": 0.002},
-    }
-    monkeypatch.setattr(quality, "_contact_sheet", contact_sheet)
-    monkeypatch.setattr(quality.urllib.request, "urlopen", lambda *_args, **_kwargs: JsonResponse(body))
+        }) + "\n```"
+    monkeypatch.setattr(quality, "_technical_review", lambda *_args: {
+        "status": "passed", "hardFailure": False, "issues": [], "confidence": 1
+    })
+    monkeypatch.setattr(quality, "create_proxy", lambda *_args, **_kwargs: render)
+    monkeypatch.setattr(quality, "analyze_video", lambda *_args, **_kwargs: {
+        "content": content,
+        "usage": {
+            "provider": "openrouter",
+            "requestId": "openrouter-qa-test",
+            "quantity": 20,
+            "unit": "token",
+            "costUsd": 0.002,
+            "latencyMs": 12,
+            "model": "google/gemini-2.5-flash",
+        },
+    })
     value = quality.review_renders(
         [{"path": render, "clipId": "clip-1", "durationSeconds": 0}],
         qa_settings(),
@@ -470,32 +522,156 @@ def test_visual_qa_normalizes_reviews_and_usage(tmp_path, monkeypatch):
     assert value["failedClipIds"] == ["clip-1"]
     assert value["reviews"][0]["issues"] == ["face_cut"]
     assert value["reviews"][0]["confidence"] == 1.0
-    assert value["providerUsage"][0]["requestId"].startswith("openrouter-qa-")
+    assert "model-returned-unknown-issue" in value["reviews"][0]["reasons"]
+    assert value["providerUsage"][0]["requestId"] == "openrouter-qa-test"
     assert value["providerUsage"][0]["costUsd"] == 0.002
 
-    monkeypatch.setattr(quality.urllib.request, "urlopen", lambda *_args, **_kwargs: JsonResponse([]))
-    assert quality.review_renders(
+    monkeypatch.setattr(quality, "analyze_video", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        openrouter_video.OpenRouterVideoError("invalid")
+    ))
+    unavailable = quality.review_renders(
         [{"path": render, "clipId": "clip-1", "durationSeconds": 1}],
         qa_settings(),
         tmp_path / "sheets-invalid",
-    ) is None
+    )
+    assert unavailable["status"] == "UNVERIFIED"
 
 
 def test_visual_qa_helpers_cover_default_and_invalid_values(tmp_path, monkeypatch):
     assert quality._json_content('{"reviews": []}') == {"reviews": []}
     with pytest.raises(ValueError):
         quality._json_content("[]")
-    assert quality._reviews({"reviews": "invalid"}, ["clip"])[0]["passed"] is True
+    assert quality._reviews({"reviews": "invalid"}, ["clip"])[0]["passed"] is False
+    assert quality._reviews({"reviews": "invalid"}, ["clip"])[0]["reviewed"] is False
     assert quality._reviews({"reviews": [{"clipId": "clip", "confidence": -1}]}, ["clip"])[0]["confidence"] == 0
-    assert quality._cost({"cost": "invalid", "total_cost": "1.25"}) == 1.25
-    assert quality._cost({}) == 0
-    assert quality._response_id({"b": 2, "a": 1}).startswith("openrouter-qa-")
+    assert quality._reviews(
+        {"reviews": [{"clipId": "clip", "passed": True, "issues": ["unexpected"]}]},
+        ["clip"],
+    )[0]["passed"] is False
 
+
+def test_video_qa_does_not_pass_a_low_confidence_model_review(tmp_path, monkeypatch):
+    render = tmp_path / "render.mp4"
+    render.write_bytes(b"video")
+    monkeypatch.setattr(quality, "_technical_review", lambda *_args: {
+        "status": "passed", "hardFailure": False, "issues": [], "confidence": 1
+    })
+    monkeypatch.setattr(quality, "create_proxy", lambda *_args, **_kwargs: render)
+    monkeypatch.setattr(quality, "analyze_video", lambda *_args, **_kwargs: {
+        "content": json.dumps({
+            "reviews": [{
+                "clipId": "clip-1",
+                "passed": True,
+                "issues": [],
+                "confidence": 0.4,
+            }]
+        }),
+        "usage": {"costUsd": 0, "model": "google/gemini-2.5-flash"},
+    })
+
+    value = quality.review_renders(
+        [{"path": render, "clipId": "clip-1"}],
+        qa_settings(),
+        tmp_path / "proxies",
+    )
+
+    assert value["status"] == "UNVERIFIED"
+    assert value["reviews"][0]["passed"] is False
+    assert "model-confidence-below-threshold" in value["reviews"][0]["reasons"]
+
+
+def test_openrouter_video_request_enforces_privacy_and_embeds_mp4(tmp_path, monkeypatch):
+    video = tmp_path / "proxy.mp4"
+    video.write_bytes(b"mp4")
     captured = {}
-    monkeypatch.setattr(quality, "run_command", lambda command, timeout: captured.update(command=command, timeout=timeout))
-    destination = quality._contact_sheet(tmp_path / "in.mp4", "clip/unsafe", 2, tmp_path / "out", qa_settings())
-    assert destination.name == "clip-unsafe.jpg"
-    assert captured["timeout"] == 180
+
+    def request(payload, _settings):
+        captured.update(payload)
+        return {
+            "id": "request-1",
+            "choices": [{"message": {"content": '{"reviews":[]}'}}],
+            "usage": {"total_tokens": 4, "cost": 0.001},
+        }
+
+    monkeypatch.setattr(openrouter_video, "_request_json", request)
+    value = openrouter_video.analyze_video(video, {"task": "review"}, qa_settings())
+
+    assert captured["provider"]["zdr"] is True
+    assert captured["provider"]["data_collection"] == "deny"
+    assert captured["provider"]["require_parameters"] is True
+    video_content = captured["messages"][0]["content"][1]
+    assert video_content["type"] == "video_url"
+    assert video_content["video_url"]["url"].startswith("data:video/mp4;base64,")
+    assert value["usage"]["requestId"] == "request-1"
+
+
+def test_openrouter_video_proxy_keeps_audio_and_resets_pts(tmp_path, monkeypatch):
+    source = tmp_path / "render.mp4"
+    source.write_bytes(b"render")
+    captured = {}
+
+    def run(command, timeout):
+        captured.update(command=command, timeout=timeout)
+        (tmp_path / "proxies").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "proxies" / "clip-1-480p-12fps.mp4").write_bytes(b"proxy")
+
+    monkeypatch.setattr(openrouter_video, "run_command", run)
+    proxy = openrouter_video.create_proxy(
+        source,
+        tmp_path / "proxies",
+        qa_settings(),
+        clip_id="clip-1",
+    )
+
+    assert proxy.name == "clip-1-480p-12fps.mp4"
+    assert captured["timeout"] == 300
+    assert captured["command"][captured["command"].index("-map") + 1] == "0:v:0"
+    assert "0:a:0?" in captured["command"]
+    assert "aresample=async=1:first_pts=0" in captured["command"]
+
+
+def test_openrouter_video_retries_rate_limits(monkeypatch):
+    rate_limit = urllib.error.HTTPError(
+        "https://openrouter.ai",
+        429,
+        "rate limited",
+        {"retry-after": "0"},
+        io.BytesIO(b"retry"),
+    )
+    responses = iter([
+        rate_limit,
+        JsonResponse({"choices": [{"message": {"content": "{}"}}]}),
+    ])
+
+    def urlopen(*_args, **_kwargs):
+        value = next(responses)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(openrouter_video.time, "sleep", lambda *_args: None)
+    monkeypatch.setattr(openrouter_video.urllib.request, "urlopen", urlopen)
+
+    response = openrouter_video._request_json(
+        {"model": "google/gemini-2.5-flash"},
+        qa_settings(openrouter_video_retries=2),
+    )
+
+    assert response["choices"][0]["message"]["content"] == "{}"
+
+
+def test_technical_review_rejects_av_start_and_duration_drift(tmp_path, monkeypatch):
+    monkeypatch.setattr(quality, "run_command", lambda *_args, **_kwargs: {
+        "streams": [
+            {"codec_type": "video", "start_time": "0.000", "duration": "2.000"},
+            {"codec_type": "audio", "start_time": "0.050", "duration": "1.900"},
+        ]
+    })
+
+    review = quality._technical_review(tmp_path / "render.mp4", qa_settings())
+
+    assert review["issues"] == ["av_sync", "stream_timing"]
+    assert review["hardFailure"] is True
 
 
 def test_runpod_handler_validates_input_and_helper_contracts(tmp_path, monkeypatch):
@@ -668,7 +844,7 @@ def test_runpod_handler_composition_and_render_paths(tmp_path, monkeypatch):
         }],
     }})
     assert render_calls == [["clip"], ["clip"]]
-    assert rendered["quality"]["status"] == "passed"
+    assert rendered["quality"]["status"] == "PASSED"
     assert rendered["quality"]["rerendered"] == ["clip"]
     assert rendered["storage"][0]["sha256"] == hashlib.sha256(b"render").hexdigest()
     assert len(rendered["providerUsage"]) == 2

@@ -1,9 +1,11 @@
 from pathlib import Path
 
 from media_worker.composition import (
+    COMPOSITION_VERSION,
     _combine_voice_activity,
     composition_plan,
     fallback_plan,
+    stabilize_active_tracks,
     smooth_keyframes,
 )
 from media_worker.rendering import _composition_filter_graph
@@ -54,6 +56,19 @@ def test_voice_activity_gates_lip_motion_and_keyframes_never_jump_over_eight_per
     assert analysis["samples"][0]["voiceActive"] is True
     assert analysis["samples"][1]["activeSpeakerConfidence"] == 0.2
 
+    word_analysis = {
+        "samples": [
+            {"time": 0.13, "activeSpeakerConfidence": 1, "boxes": [{"activity": 1}]},
+            {"time": 0.16, "activeSpeakerConfidence": 1, "boxes": [{"activity": 1}]},
+        ]
+    }
+    _combine_voice_activity(
+        word_analysis,
+        [{"start": 0, "end": 0.1, "speaker": "SPEAKER_00", "kind": "word"}],
+    )
+    assert word_analysis["samples"][0]["voiceActive"] is True
+    assert word_analysis["samples"][1]["voiceActive"] is False
+
     keyframes = smooth_keyframes(
         [
             {"time": 0, "focusX": 0, "focusY": 0, "confidence": 1},
@@ -97,6 +112,77 @@ def test_diarization_speaker_ids_are_associated_with_stable_visual_tracks():
     assert analysis["speakerTrackMap"] == {"SPEAKER_00": 1, "SPEAKER_01": 2}
     assert analysis["samples"][0]["boxes"][0]["activity"] >= 0.85
     assert analysis["samples"][2]["boxes"][1]["activity"] >= 0.85
+
+
+def test_composition_v2_holds_a_new_track_for_250ms_and_uses_split_during_transition():
+    samples = [
+        {
+            "time": 0.0,
+            "layout": "fill",
+            "activeTrackId": 1,
+            "focusX": 200,
+            "focusY": 200,
+            "boxes": [{**_box(60, 1), "trackId": 1}, {**_box(1100, 0.1), "trackId": 2}],
+        },
+        {
+            "time": 0.1,
+            "layout": "fill",
+            "activeTrackId": 2,
+            "focusX": 1240,
+            "focusY": 200,
+            "boxes": [{**_box(60, 0.1), "trackId": 1}, {**_box(1100, 1), "trackId": 2}],
+        },
+        {
+            "time": 0.35,
+            "layout": "fill",
+            "activeTrackId": 2,
+            "focusX": 1240,
+            "focusY": 200,
+            "boxes": [{**_box(60, 0.1), "trackId": 1}, {**_box(1100, 1), "trackId": 2}],
+        },
+    ]
+
+    stabilized = stabilize_active_tracks(samples, focus_switch_delay_seconds=0.25)
+
+    assert COMPOSITION_VERSION == "composition-v2"
+    assert stabilized[1]["activeTrackId"] == 1
+    assert stabilized[1]["layout"] == "split"
+    assert stabilized[2]["activeTrackId"] == 2
+
+
+def test_composition_v2_persists_active_speaker_switches_as_scene_boundaries():
+    clip = {"id": "clip-001", "start": 0, "end": 1}
+    left = {**_box(100, 1), "trackId": 1}
+    right = {**_box(1100, 0.1), "trackId": 2}
+    analysis = {
+        "width": 1920,
+        "height": 1080,
+        "detectionRate": 1,
+        "samples": [
+            {"time": 0.0, "boxes": [left, right], "activeSpeakerConfidence": 1},
+            {
+                "time": 0.25,
+                "boxes": [{**left, "activity": 0.1}, {**right, "activity": 1}],
+                "activeSpeakerConfidence": 1,
+            },
+            {
+                "time": 0.5,
+                "boxes": [{**left, "activity": 0.1}, {**right, "activity": 1}],
+                "activeSpeakerConfidence": 1,
+            },
+        ],
+    }
+
+    plan = composition_plan(
+        clip,
+        analysis,
+        aspect="9:16",
+        focus_switch_delay_seconds=0.25,
+    )
+
+    assert [scene["activeTrackId"] for scene in plan["scenes"]] == [1, 1, 2]
+    assert [scene["layout"] for scene in plan["scenes"]] == ["fill", "split", "fill"]
+    assert plan["diagnostics"]["focusSwitches"] == 1
 
 
 def test_ffmpeg_composition_has_dynamic_crop_transition_captions_brand_and_no_upscale(tmp_path: Path):

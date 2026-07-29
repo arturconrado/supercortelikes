@@ -29,6 +29,16 @@ export type Clip = {
   startSeconds?: number; endSeconds?: number; durationSeconds?: number; aspectRatio?: string; thumbnailUrl?: string;
   playbackUrl?: string; previewUrl?: string; previewStatus?: string; renderUrl?: string; downloadUrl?: string; captionsUrl?: string; createdAt?: string;
   composition?: { version: string; plan?: Record<string, unknown>; diagnostics?: Record<string, unknown> } | null;
+  quality?: {
+    status: 'PASSED' | 'UNVERIFIED' | 'REVIEW_REQUIRED';
+    issues: string[];
+    confidence: number;
+    attempts: number;
+    model?: string | null;
+    reviewedAt?: string | null;
+    verified: boolean;
+    reasons?: string[];
+  };
   description?: string; hashtags?: string[]; titleSuggestions?: Array<string | { title: string; score?: number }>;
   genre?: string; hook?: string; sourceText?: string; captionsEdited?: boolean;
   captions?: Array<{ id: string; template: string; language: string; cues: unknown[]; style?: Record<string, unknown> }>;

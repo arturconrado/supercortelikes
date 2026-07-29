@@ -9,11 +9,11 @@ from typing import Any, Dict, List, Mapping
 
 import runpod
 
-from .composition import build_compositions
+from .composition import COMPOSITION_VERSION, build_compositions
 from .config import Settings
 from .errors import WorkerError
 from .rendering import render_clips
-from .quality import conservative_compositions, review_renders
+from .quality import corrected_compositions, merge_rerender_quality, review_renders
 
 
 def handler(job: Mapping[str, Any]) -> Dict[str, Any]:
@@ -55,7 +55,16 @@ def handler(job: Mapping[str, Any]) -> Dict[str, Any]:
 
         captions = _materialize_captions(payload.get("captions"), root / "captions")
         plans = payload.get("compositionPlans")
-        plan_by_id = dict(plans) if isinstance(plans, Mapping) else {}
+        plan_by_id = (
+            {
+                str(clip_id): dict(plan)
+                for clip_id, plan in plans.items()
+                if isinstance(plan, Mapping)
+                and str(plan.get("version", "legacy")) == COMPOSITION_VERSION
+            }
+            if isinstance(plans, Mapping)
+            else {}
+        )
         missing = [clip for clip in clips if str(clip.get("id")) not in plan_by_id]
         if missing:
             for plan in build_compositions(
@@ -80,14 +89,17 @@ def handler(job: Mapping[str, Any]) -> Dict[str, Any]:
         quality = review_renders(
             rendered,
             settings,
-            root / "quality" / "contact-sheets",
+            root / "quality" / "video-proxies",
             cost_remaining_usd=qa_budget,
+            composition_plans=plan_by_id,
         ) if options.get("visualQaEnabled", True) else None
         provider_usage = [] if not quality else list(quality.get("providerUsage", []))
         if quality and quality.get("failedClipIds"):
             failed_ids = set(str(value) for value in quality["failedClipIds"])
             failed_clips = [clip for clip in clips if str(clip.get("id")) in failed_ids]
-            plan_by_id = conservative_compositions(plan_by_id, list(failed_ids))
+            plan_by_id = corrected_compositions(
+                plan_by_id, quality.get("reviews", [])
+            )
             render_options["compositionPlans"] = plan_by_id
             render_clips(
                 source,
@@ -100,18 +112,17 @@ def handler(job: Mapping[str, Any]) -> Dict[str, Any]:
             second_quality = review_renders(
                 [value for value in rendered if str(value.get("clipId")) in failed_ids],
                 settings,
-                root / "quality" / "contact-sheets-rerender",
+                root / "quality" / "video-proxies-rerender",
                 cost_remaining_usd=_remaining_after_usage(
                     qa_budget, provider_usage
                 ),
+                composition_plans=plan_by_id,
             )
             if second_quality:
                 provider_usage.extend(second_quality.get("providerUsage", []))
-                quality = {
-                    **second_quality,
-                    "rerendered": sorted(failed_ids),
-                    "status": "review" if second_quality.get("failedClipIds") else "passed",
-                }
+                quality = merge_rerender_quality(
+                    quality, second_quality, sorted(failed_ids)
+                )
         selected_indexes = [int(value) for value in payload.get("clipIndexes", range(len(rendered)))]
         result_by_index = {
             index: value for index, value in zip(selected_indexes, rendered)

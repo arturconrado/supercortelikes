@@ -6,10 +6,26 @@ import media_worker.vision as vision
 from media_worker.vision import (
     crop_dimensions,
     even,
+    frame_timestamp,
     output_dimensions,
     smart_crop_geometry,
     source_quality_base,
 )
+
+
+def test_frame_timestamp_prefers_real_pts_for_vfr_and_remains_monotonic():
+    assert frame_timestamp(
+        1_137.5,
+        frame_index=25,
+        fps=25,
+        last_timestamp=1.0,
+    ) == 1.1375
+    assert frame_timestamp(
+        0,
+        frame_index=26,
+        fps=25,
+        last_timestamp=1.1375,
+    ) > 1.1375
 
 
 def test_crop_dimensions_preserve_requested_ratio_inside_source():
@@ -92,7 +108,9 @@ def test_render_clips_forces_square_pixels(monkeypatch, tmp_path: Path):
 
     command = commands[0]
     video_filter = command[command.index("-vf") + 1]
-    assert video_filter == "crop=606:1080:0:0,scale=720:1280:flags=lanczos,setsar=1"
+    assert video_filter == "setpts=PTS-STARTPTS,crop=606:1080:0:0,scale=720:1280:flags=lanczos,setsar=1"
+    assert command[command.index("-af") + 1].startswith("aresample=async=1:first_pts=0,")
+    assert "-shortest" in command
 
 
 def test_render_reframes_forces_square_pixels(monkeypatch, tmp_path: Path):

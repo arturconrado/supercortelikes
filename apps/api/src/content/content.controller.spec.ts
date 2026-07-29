@@ -169,7 +169,7 @@ describe('ContentController', () => {
   it('creates render/export jobs and reuses existing jobs', async () => {
     const { controller, renderRequests } = makeController();
     await expect(controller.renderClip(user, clip.id, { aspectRatio: '1:1', force: true })).resolves.toMatchObject({ status: 'QUEUED' });
-    expect(renderRequests.request).toHaveBeenCalledWith(user, { clipId: clip.id, format: 'MP4', aspectRatio: '1:1', force: true });
+    expect(renderRequests.request).toHaveBeenCalledWith(user, { clipId: clip.id, format: 'MP4', aspectRatio: '1:1', force: true, regenerateComposition: false });
 
     await expect(controller.previewClip(user, clip.id, { force: false })).resolves.toMatchObject({ status: 'QUEUED' });
     expect(renderRequests.request).toHaveBeenCalledWith(user, expect.objectContaining({ clipId: clip.id, purpose: 'PREVIEW' }));

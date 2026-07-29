@@ -67,6 +67,9 @@ function validateSuite(plan, samples) {
       'correctSpeakerDecisions',
       'maxOffSceneJumpWidthRatio',
       'captionMeanErrorMs',
+      'avStartDeltaMs',
+      'avDurationDeltaMs',
+      'qualityFalsePasses',
       'peakMemoryPercent',
       'vpsCpuP95Percent',
       'restarts',
@@ -75,6 +78,10 @@ function validateSuite(plan, samples) {
       if (!Number.isFinite(sample[field]) || sample[field] < 0) {
         throw new Error(`Plano ${plan}, vídeo ${sample.id}: campo ${field} inválido.`);
       }
+    }
+    if (!Array.isArray(sample.speakerSwitchLatenciesMs)
+      || sample.speakerSwitchLatenciesMs.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error(`Plano ${plan}, vídeo ${sample.id}: campo speakerSwitchLatenciesMs inválido.`);
     }
     if (plan === 'hybrid') {
       for (const field of ['allFinalsAvailableSeconds', 'variableCostUsd']) {
@@ -102,6 +109,10 @@ function evaluate(plan, samples) {
     correctSpeakerRate: ratio(sum(samples, 'correctSpeakerDecisions'), speakerDecisions),
     maxJumpRate: Math.max(...samples.map((sample) => sample.maxOffSceneJumpWidthRatio)),
     captionMeanErrorMs: weightedMean(samples, 'captionMeanErrorMs', 'clipDurationSeconds'),
+    speakerSwitchP95Ms: percentile95(samples.flatMap((sample) => sample.speakerSwitchLatenciesMs)),
+    avStartDeltaMs: Math.max(...samples.map((sample) => sample.avStartDeltaMs)),
+    avDurationDeltaMs: Math.max(...samples.map((sample) => sample.avDurationDeltaMs)),
+    qualityFalsePasses: sum(samples, 'qualityFalsePasses'),
     opusParityRate: samples.filter((sample) => sample.preference !== 'OPUSCLIP').length / samples.length,
     pipelineP95Ratio: percentile95(samples.map((sample) => sample.pipelineToCompositionSeconds / sample.sourceDurationSeconds)),
     renderP95Ratio: percentile95(samples.map((sample) => sample.renderSeconds / sample.clipDurationSeconds)),
@@ -116,8 +127,12 @@ function evaluate(plan, samples) {
   const checks = [
     check('Sujeito em área segura', metrics.soloSafeRate, '>=', 0.95, 'percent'),
     check('Falante correto', metrics.correctSpeakerRate, '>=', plan === 'hybrid' ? 0.92 : 0.85, 'percent'),
+    check('Latência p95 da troca de falante', metrics.speakerSwitchP95Ms, '<=', 400, 'milliseconds'),
     check('Maior salto fora de corte de cena', metrics.maxJumpRate, '<=', 0.08, 'percent'),
     check('Erro médio de captions', metrics.captionMeanErrorMs, '<=', 120, 'milliseconds'),
+    check('Delta inicial entre áudio e vídeo', metrics.avStartDeltaMs, '<=', 40, 'milliseconds'),
+    check('Delta de duração entre áudio e vídeo', metrics.avDurationDeltaMs, '<=', 80, 'milliseconds'),
+    check('Clips reprovados marcados como aprovados', metrics.qualityFalsePasses, '<=', 0, 'integer'),
     check('Igual ou melhor que OpusClip', metrics.opusParityRate, '>=', 0.8, 'percent'),
     ...(plan === 'cpu'
       ? [

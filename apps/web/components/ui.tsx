@@ -41,8 +41,8 @@ export function Badge({ children, tone = 'neutral', className }: { children: Rea
 }
 export function StatusBadge({ status }: { status?: string }) {
   const value = (status || 'PENDING').toUpperCase();
-  const tone = ['COMPLETED', 'SUCCEEDED', 'READY', 'ACTIVE', 'UPLOADED'].includes(value) ? 'good' : ['FAILED', 'CANCELLED', 'EXPIRED'].includes(value) ? 'bad' : ['PROCESSING', 'RUNNING', 'RENDERING'].includes(value) ? 'lime' : 'warn';
-  const labels: Record<string, string> = { COMPLETED: 'Concluído', SUCCEEDED: 'Concluído', READY: 'Pronto', ACTIVE: 'Ativo', UPLOADED: 'Enviado', FAILED: 'Falhou', CANCELLED: 'Cancelado', PROCESSING: 'Processando', RUNNING: 'Processando', RENDERING: 'Renderizando', PENDING: 'Na fila', UPLOADING: 'Enviando' };
+  const tone = ['COMPLETED', 'SUCCEEDED', 'READY', 'ACTIVE', 'UPLOADED', 'PASSED'].includes(value) ? 'good' : ['FAILED', 'CANCELLED', 'EXPIRED', 'REVIEW_REQUIRED'].includes(value) ? 'bad' : ['PROCESSING', 'RUNNING', 'RENDERING'].includes(value) ? 'lime' : 'warn';
+  const labels: Record<string, string> = { COMPLETED: 'Concluído', SUCCEEDED: 'Concluído', READY: 'Pronto', ACTIVE: 'Ativo', UPLOADED: 'Enviado', PASSED: 'Validado', UNVERIFIED: 'Não verificado', REVIEW_REQUIRED: 'Revisão necessária', FAILED: 'Falhou', CANCELLED: 'Cancelado', PROCESSING: 'Processando', RUNNING: 'Processando', RENDERING: 'Renderizando', PENDING: 'Na fila', UPLOADING: 'Enviando' };
   return <Badge tone={tone}>{labels[value] ?? value.replaceAll('_', ' ')}</Badge>;
 }
 export function Progress({ value, className }: { value: number; className?: string }) { return <div className={cn('h-2 overflow-hidden rounded-full bg-white/[.07]', className)}><div className="h-full rounded-full bg-lime transition-[width] duration-300" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div>; }

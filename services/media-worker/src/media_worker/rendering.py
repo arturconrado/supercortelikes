@@ -42,7 +42,7 @@ def render_clips(
             "-i",
             str(source),
         ]
-        filters = []
+        filters = ["setpts=PTS-STARTPTS"]
         composition_plans = options.get("compositionPlans")
         composition = (
             composition_plans.get(str(clip["id"]))
@@ -164,11 +164,14 @@ def render_clips(
                 "-b:a",
                 "192k",
                 "-af",
-                "loudnorm=I=-14:LRA=11:TP=-1.5",
+                "aresample=async=1:first_pts=0,loudnorm=I=-14:LRA=11:TP=-1.5",
                 "-pix_fmt",
                 "yuv420p",
                 "-movflags",
                 "+faststart",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-shortest",
                 "-map_metadata",
                 "-1",
                 str(output),
