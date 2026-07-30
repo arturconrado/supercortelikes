@@ -86,10 +86,32 @@ if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
     echo "PRODUCT_E2E_PASSWORD is required when PRODUCT_E2E_EMAIL is supplied." >&2
     exit 1
   fi
+  media_container="$(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" ps -q media-worker)"
+  test -n "${media_container}"
+  product_fixture="$(mktemp --suffix=.mp4)"
+  container_fixture="/data/product-e2e-fixture-$(tr -d '-' </proc/sys/kernel/random/uuid).mp4"
+  trap 'rm -f "${product_fixture:-}"' EXIT
+  docker exec "${media_container}" ffmpeg \
+    -hide_banner \
+    -loglevel error \
+    -y \
+    -f lavfi \
+    -i testsrc2=size=1280x720:rate=25 \
+    -f lavfi \
+    -i "flite=text='A tecnologia muda rapidamente. Este teste valida um produto completo de ponta a ponta.'" \
+    -t 16 \
+    -c:v libx264 \
+    -pix_fmt yuv420p \
+    -c:a aac \
+    -shortest \
+    "${container_fixture}"
+  docker cp "${media_container}:${container_fixture}" "${product_fixture}"
+  docker exec "${media_container}" rm -f "${container_fixture}"
   docker run --rm \
     --network host \
     --user 0:0 \
     --mount "type=bind,src=${ROOT_DIR}/scripts/acceptance/product-e2e.mjs,dst=/workspace/acceptance.mjs,readonly" \
+    --mount "type=bind,src=${product_fixture},dst=/tmp/clipbr-product-e2e.mp4,readonly" \
     --env "DATABASE_URL=${database_url}" \
     --env "PRODUCT_E2E_API_URL=https://api.${APP_DOMAIN}" \
     --env "PRODUCT_E2E_WEB_URL=https://${APP_DOMAIN}" \
@@ -97,6 +119,8 @@ if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
     --env "PRODUCT_E2E_PASSWORD=${product_e2e_password}" \
     --env "PRODUCT_E2E_TURNSTILE_TOKEN=${PRODUCT_E2E_TURNSTILE_TOKEN:-}" \
     --env "PRODUCT_E2E_CLEANUP=true" \
+    --env "PRODUCT_E2E_GENERATE_FIXTURE=false" \
+    --env "PRODUCT_E2E_VIDEO_PATH=/tmp/clipbr-product-e2e.mp4" \
     --env "PRODUCT_E2E_TERMS_VERSION=${TERMS_VERSION:-terms-2026-06}" \
     --env "PRODUCT_E2E_PRIVACY_VERSION=${PRIVACY_VERSION:-privacy-2026-06}" \
     "${api_image}" \
