@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "npm run build --workspace @clipbr/api && npm run build --workspace @clipbr/web",
+    "audit:production": "node scripts/validate-production-resolutions.mjs && npm audit --omit=dev --audit-level=high",
     "lint": "eslint apps scripts",
     "typecheck": "npm run typecheck --workspace @clipbr/api && npm run typecheck --workspace @clipbr/web",
     "dev:api": "npm run start:dev --workspace @clipbr/api",
@@ -52,6 +53,10 @@
     "db:migrate:deploy": "npm run db:migrate:deploy --workspace @clipbr/api",
     "db:validate": "npm run db:validate --workspace @clipbr/api"
   },
+  "dependencies": {
+    "find-my-way": "9.7.0",
+    "gaxios": "7.3.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "dotenv-cli": "11.0.0",
@@ -60,7 +65,15 @@
     "typescript-eslint": "^8.56.0"
   },
   "overrides": {
+    "@nestjs/platform-fastify@11.1.28": {
+      "find-my-way": "9.7.0"
+    },
+    "gcp-metadata@8.1.4": {
+      "gaxios": "7.3.0"
+    },
     "ajv@^8.0.0": "$ajv",
-    "postcss": "8.5.15"
+    "find-my-way": "$find-my-way",
+    "gaxios": "$gaxios",
+    "postcss": "8.5.25"
   }
 }

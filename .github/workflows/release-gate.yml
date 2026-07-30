@@ -53,7 +53,7 @@ jobs:
       - name: Build API and web
         run: npm run build
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run audit:production
 
   containers:
     name: Build and scan four runtimes
