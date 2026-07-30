@@ -52,32 +52,70 @@ case "${metrics_status}" in
   *) echo "Expected public API /metrics to stay blocked with 404, got HTTP ${metrics_status}" >&2; exit 1 ;;
 esac
 
+api_container="$(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" ps -q api)"
+test -n "${api_container}"
+api_image="$(docker inspect -f '{{.Config.Image}}' "${api_container}")"
+test -n "${api_image}"
+database_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_LOCAL_PORT}/${POSTGRES_DB}?schema=public"
+
+run_node_acceptance() {
+  local script_path="$1"
+  shift
+  docker run --rm \
+    --network host \
+    --user 0:0 \
+    --mount "type=bind,src=${script_path},dst=/workspace/acceptance.mjs,readonly" \
+    "$@" \
+    "${api_image}" \
+    node /workspace/acceptance.mjs
+}
+
 if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
-  if [[ "${EMAIL_VERIFICATION_REQUIRED:-false}" == "true" && -z "${PRODUCT_E2E_EMAIL:-}" ]]; then
-    echo "EMAIL_VERIFICATION_REQUIRED=true. Set PRODUCT_E2E_EMAIL and PRODUCT_E2E_PASSWORD for an already verified smoke account, or run a separate verified-email flow before the full product E2E." >&2
+  product_e2e_email="${PRODUCT_E2E_EMAIL:-}"
+  product_e2e_password="${PRODUCT_E2E_PASSWORD:-}"
+  if [[ -z "${product_e2e_email}" ]]; then
+    product_e2e_email="product-e2e@clipbr.test"
+    product_e2e_password="Aa1-$(tr -d '-' </proc/sys/kernel/random/uuid)"
+    run_node_acceptance "${ROOT_DIR}/scripts/acceptance/provision-product-e2e-account.mjs" \
+      --env "DATABASE_URL=${database_url}" \
+      --env "PRODUCT_E2E_EMAIL=${product_e2e_email}" \
+      --env "PRODUCT_E2E_PASSWORD=${product_e2e_password}" \
+      --env "PRODUCT_E2E_TERMS_VERSION=${TERMS_VERSION:-terms-2026-06}" \
+      --env "PRODUCT_E2E_PRIVACY_VERSION=${PRIVACY_VERSION:-privacy-2026-06}"
+  elif [[ -z "${product_e2e_password}" ]]; then
+    echo "PRODUCT_E2E_PASSWORD is required when PRODUCT_E2E_EMAIL is supplied." >&2
     exit 1
   fi
-  PRODUCT_E2E_API_URL="https://api.${APP_DOMAIN}" \
-  PRODUCT_E2E_WEB_URL="https://${APP_DOMAIN}" \
-  PRODUCT_E2E_COMPOSE_FILE="${COMPOSE_FILE}" \
-  PRODUCT_E2E_MEDIA_PROFILE="vps" \
-  PRODUCT_E2E_TURNSTILE_TOKEN="${PRODUCT_E2E_TURNSTILE_TOKEN:-${TURNSTILE_BYPASS_TOKEN:-}}" \
-  PRODUCT_E2E_PASSWORD="${PRODUCT_E2E_PASSWORD:-ProductGate123!}" \
-  DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_LOCAL_PORT}/${POSTGRES_DB}?schema=public" \
-  COMPOSE_PROJECT_NAME="${PROJECT_NAME}" \
-  npm run acceptance:product
+  docker run --rm \
+    --network host \
+    --user 0:0 \
+    --mount "type=bind,src=${ROOT_DIR}/scripts/acceptance/product-e2e.mjs,dst=/workspace/acceptance.mjs,readonly" \
+    --env "DATABASE_URL=${database_url}" \
+    --env "PRODUCT_E2E_API_URL=https://api.${APP_DOMAIN}" \
+    --env "PRODUCT_E2E_WEB_URL=https://${APP_DOMAIN}" \
+    --env "PRODUCT_E2E_EMAIL=${product_e2e_email}" \
+    --env "PRODUCT_E2E_PASSWORD=${product_e2e_password}" \
+    --env "PRODUCT_E2E_TURNSTILE_TOKEN=${PRODUCT_E2E_TURNSTILE_TOKEN:-}" \
+    --env "PRODUCT_E2E_CLEANUP=true" \
+    --env "PRODUCT_E2E_TERMS_VERSION=${TERMS_VERSION:-terms-2026-06}" \
+    --env "PRODUCT_E2E_PRIVACY_VERSION=${PRIVACY_VERSION:-privacy-2026-06}" \
+    "${api_image}" \
+    sh -ec 'apk add --no-cache ffmpeg >/dev/null && node /workspace/acceptance.mjs'
 fi
 
 if [[ "${RUN_5G}" == "true" ]]; then
-  if [[ "${EMAIL_VERIFICATION_REQUIRED:-false}" == "true" && -z "${ACCEPTANCE_ACCESS_TOKEN:-}" && -z "${PRODUCT_E2E_EMAIL:-}" ]]; then
-    echo "EMAIL_VERIFICATION_REQUIRED=true. Set ACCEPTANCE_ACCESS_TOKEN or PRODUCT_E2E_EMAIL/PRODUCT_E2E_PASSWORD before the 5 GiB gate." >&2
+  acceptance_email="${ACCEPTANCE_EMAIL:-${product_e2e_email:-${PRODUCT_E2E_EMAIL:-}}}"
+  acceptance_password="${ACCEPTANCE_PASSWORD:-${product_e2e_password:-${PRODUCT_E2E_PASSWORD:-}}}"
+  if [[ -z "${ACCEPTANCE_ACCESS_TOKEN:-}" && ( -z "${acceptance_email}" || -z "${acceptance_password}" ) ]]; then
+    echo "Set ACCEPTANCE_ACCESS_TOKEN or run the product E2E/provide PRODUCT_E2E_EMAIL and PRODUCT_E2E_PASSWORD before the 5 GiB gate." >&2
     exit 1
   fi
-  ACCEPTANCE_API_URL="https://api.${APP_DOMAIN}" \
-  ACCEPTANCE_EMAIL="${ACCEPTANCE_EMAIL:-${PRODUCT_E2E_EMAIL:-}}" \
-  ACCEPTANCE_PASSWORD="${ACCEPTANCE_PASSWORD:-${PRODUCT_E2E_PASSWORD:-ProductGate123!}}" \
-  ACCEPTANCE_TURNSTILE_TOKEN="${ACCEPTANCE_TURNSTILE_TOKEN:-${PRODUCT_E2E_TURNSTILE_TOKEN:-${TURNSTILE_BYPASS_TOKEN:-}}}" \
-  npm run acceptance:direct:5g
+  run_node_acceptance "${ROOT_DIR}/scripts/acceptance/direct-upload-5g.mjs" \
+    --env "ACCEPTANCE_API_URL=https://api.${APP_DOMAIN}" \
+    --env "ACCEPTANCE_ACCESS_TOKEN=${ACCEPTANCE_ACCESS_TOKEN:-}" \
+    --env "ACCEPTANCE_EMAIL=${acceptance_email}" \
+    --env "ACCEPTANCE_PASSWORD=${acceptance_password}" \
+    --env "ACCEPTANCE_TURNSTILE_TOKEN=${ACCEPTANCE_TURNSTILE_TOKEN:-${PRODUCT_E2E_TURNSTILE_TOKEN:-}}"
 fi
 
 echo "Observing containers for ${OBSERVE_SECONDS}s..."
