@@ -3,12 +3,21 @@ from pathlib import Path
 from media_worker.composition import (
     COMPOSITION_VERSION,
     _combine_voice_activity,
+    _fill_is_safe,
+    _subject_focus,
+    _usable_subject_box,
     composition_plan,
+    enforce_safe_layouts,
     fallback_plan,
+    stabilize_layouts,
     stabilize_active_tracks,
     smooth_keyframes,
 )
-from media_worker.rendering import _composition_filter_graph
+from media_worker.rendering import (
+    _composition_filter_graph,
+    _crop_keyframes,
+    _framing_target,
+)
 
 
 def _box(x: int, activity: float):
@@ -185,7 +194,187 @@ def test_composition_v2_persists_active_speaker_switches_as_scene_boundaries():
     assert plan["diagnostics"]["focusSwitches"] == 1
 
 
-def test_ffmpeg_composition_has_dynamic_crop_transition_captions_brand_and_no_upscale(tmp_path: Path):
+def test_opus_like_framing_centers_safe_faces_and_falls_back_at_source_edges():
+    centered = _box(820, 1)
+    edge = {**_box(0, 1), "width": 120}
+
+    assert _fill_is_safe(centered, 1920, 1080, "9:16") is True
+    assert _fill_is_safe(edge, 1920, 1080, "9:16") is False
+
+    plan = composition_plan(
+        {"id": "clip-001", "start": 0, "end": 1},
+        {
+            "width": 1920,
+            "height": 1080,
+            "detectionRate": 1,
+            "samples": [
+                {
+                    "time": 0,
+                    "boxes": [edge],
+                    "activeSpeakerConfidence": 1,
+                },
+                {
+                    "time": 0.75,
+                    "boxes": [edge],
+                    "activeSpeakerConfidence": 1,
+                },
+            ],
+        },
+        aspect="9:16",
+    )
+
+    assert plan["framing"]["name"] == "social-center-v1"
+    assert plan["scenes"][0]["layout"] == "fit"
+    assert plan["scenes"][0]["framingFallback"] is True
+    assert plan["diagnostics"]["framingFallbackSamples"] == 2
+
+
+def test_yolo_person_boxes_target_the_head_instead_of_rejecting_the_full_body():
+    person = {
+        "x": 520,
+        "y": 50,
+        "width": 240,
+        "height": 620,
+        "confidence": 0.95,
+        "activity": 1,
+        "subjectKind": "person",
+        "trackId": 1,
+    }
+
+    assert _subject_focus(person) == (640, 174)
+    assert _fill_is_safe(person, 1280, 720, "9:16") is True
+
+    plan = composition_plan(
+        {"id": "clip-person", "start": 0, "end": 1},
+        {
+            "width": 1280,
+            "height": 720,
+            "detectionRate": 1,
+            "samples": [
+                {"time": 0, "boxes": [person], "activeSpeakerConfidence": 1},
+                {"time": 0.75, "boxes": [person], "activeSpeakerConfidence": 1},
+            ],
+        },
+        aspect="9:16",
+    )
+
+    assert plan["scenes"][0]["layout"] == "fill"
+    assert plan["scenes"][0]["subjects"][0]["subjectKind"] == "person"
+    assert plan["scenes"][0]["subjects"][0]["y"] == 0.24167
+
+
+def test_distant_background_people_do_not_drive_the_social_crop():
+    distant_person = {
+        "x": 1100,
+        "y": 205,
+        "width": 30,
+        "height": 61,
+        "confidence": 0.9,
+        "activity": 1,
+        "subjectKind": "person",
+    }
+
+    assert _usable_subject_box(distant_person, 1280, 720) is False
+    plan = composition_plan(
+        {"id": "background-person", "start": 0, "end": 1},
+        {
+            "width": 1280,
+            "height": 720,
+            "detectionRate": 1,
+            "samples": [
+                {"time": 0, "boxes": [distant_person], "activeSpeakerConfidence": 1},
+                {"time": 0.75, "boxes": [distant_person], "activeSpeakerConfidence": 1},
+            ],
+        },
+        aspect="9:16",
+    )
+
+    assert plan["scenes"][0]["layout"] == "fit"
+    assert plan["diagnostics"]["reason"] == "detection-rate"
+    assert plan["diagnostics"]["rawDetectionRate"] == 1
+    assert plan["diagnostics"]["detectionRate"] == 0
+
+
+def test_layout_stabilization_cannot_restore_an_unsafe_fill():
+    samples = [
+        {
+            "time": 0,
+            "layout": "fit",
+            "boxes": [],
+            "fillSafe": False,
+            "framingSafe": True,
+            "framingFallback": False,
+        },
+        {
+            "time": 0.25,
+            "layout": "fill",
+            "boxes": [_box(820, 1)],
+            "fillSafe": True,
+            "framingSafe": True,
+            "framingFallback": False,
+        },
+        {
+            "time": 1,
+            "layout": "fill",
+            "boxes": [_box(820, 1)],
+            "fillSafe": True,
+            "framingSafe": True,
+            "framingFallback": False,
+        },
+    ]
+
+    stabilized = stabilize_layouts(samples, minimum_seconds=0.6)
+    assert stabilized[0]["layout"] == "fill"
+
+    safe = enforce_safe_layouts(stabilized)
+    assert safe[0]["layout"] == "fit"
+    assert safe[0]["framingFallback"] is True
+    assert all(value["layout"] != "fill" or value["fillSafe"] for value in safe)
+
+
+def test_short_detection_dropout_holds_the_same_safe_speaker_crop():
+    tracked = {**_box(820, 1), "trackId": 1}
+    plan = composition_plan(
+        {"id": "dropout", "start": 0, "end": 1},
+        {
+            "width": 1920,
+            "height": 1080,
+            "detectionRate": 0.75,
+            "samples": [
+                {"time": 0, "boxes": [tracked], "activeSpeakerConfidence": 1},
+                {"time": 0.25, "boxes": [], "activeSpeakerConfidence": 0},
+                {"time": 0.5, "boxes": [tracked], "activeSpeakerConfidence": 1},
+                {"time": 0.75, "boxes": [tracked], "activeSpeakerConfidence": 1},
+            ],
+        },
+        aspect="9:16",
+    )
+
+    assert [scene["layout"] for scene in plan["scenes"]] == ["fill"]
+    assert plan["diagnostics"]["heldDetectionGapSamples"] == 1
+    assert plan["diagnostics"]["framingFallbackSamples"] == 0
+
+
+def test_rendering_uses_the_persisted_center_and_headroom_target():
+    assert _framing_target(
+        {"framing": {"targetX": 0.5, "targetFaceY": 0.38}}
+    ) == (0.5, 0.38)
+    xs, ys = _crop_keyframes(
+        [{"time": 0, "x": 960, "y": 410}],
+        0,
+        1920,
+        1080,
+        606,
+        1080,
+        0.5,
+        0.38,
+    )
+
+    assert xs == [(0.0, 656.0)]
+    assert ys == [(0.0, 0.0)]
+
+
+def test_ffmpeg_composition_has_dynamic_crop_transition_captions_brand_and_social_resolution(tmp_path: Path):
     plan = {
         "aspectRatio": "9:16",
         "source": {"width": 1920, "height": 1080},
@@ -211,7 +400,7 @@ def test_ffmpeg_composition_has_dynamic_crop_transition_captions_brand_and_no_up
         watermark=False,
     )
     assert "crop=606:1080:x='if(" in graph
-    assert "scale=606:1076" in graph
+    assert "scale=1080:1920" in graph
     assert "xfade=transition=fade:duration=0.180" in graph
     assert graph.count("fps=30,settb=AVTB,format=yuv420p") == 2
     assert "ass='" in graph and "drawtext=text='PicaShorts'" in graph

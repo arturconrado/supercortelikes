@@ -539,8 +539,12 @@ def test_visual_qa_normalizes_reviews_and_usage(tmp_path, monkeypatch):
 
 def test_visual_qa_helpers_cover_default_and_invalid_values(tmp_path, monkeypatch):
     assert quality._json_content('{"reviews": []}') == {"reviews": []}
+    assert quality._json_content("[]") == {"reviews": []}
+    assert quality._json_content(
+        json.dumps('```json\n{"reviews": []}\n```')
+    ) == {"reviews": []}
     with pytest.raises(ValueError):
-        quality._json_content("[]")
+        quality._json_content("1")
     assert quality._reviews({"reviews": "invalid"}, ["clip"])[0]["passed"] is False
     assert quality._reviews({"reviews": "invalid"}, ["clip"])[0]["reviewed"] is False
     assert quality._reviews({"reviews": [{"clipId": "clip", "confidence": -1}]}, ["clip"])[0]["confidence"] == 0
@@ -603,6 +607,89 @@ def test_openrouter_video_request_enforces_privacy_and_embeds_mp4(tmp_path, monk
     assert video_content["type"] == "video_url"
     assert video_content["video_url"]["url"].startswith("data:video/mp4;base64,")
     assert value["usage"]["requestId"] == "request-1"
+
+
+def test_openrouter_video_accepts_text_content_blocks(tmp_path, monkeypatch):
+    video = tmp_path / "proxy.mp4"
+    video.write_bytes(b"mp4")
+    monkeypatch.setattr(
+        openrouter_video,
+        "_request_json",
+        lambda *_args: {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": '{"reviews": []}'},
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    value = openrouter_video.analyze_video(
+        video, {"task": "review"}, qa_settings()
+    )
+
+    assert value["content"] == '{"reviews": []}'
+
+
+def test_visual_qa_retries_truncated_model_json_and_counts_both_usages(
+    tmp_path, monkeypatch
+):
+    render = tmp_path / "render.mp4"
+    render.write_bytes(b"video")
+    responses = iter(
+        [
+            {
+                "content": '{"reviews":[{"clipId":"clip-1"',
+                "usage": {"costUsd": 0.001, "requestId": "first"},
+            },
+            {
+                "content": json.dumps(
+                    {
+                        "reviews": [
+                            {
+                                "clipId": "clip-1",
+                                "passed": True,
+                                "issues": [],
+                                "confidence": 0.9,
+                            }
+                        ]
+                    }
+                ),
+                "usage": {"costUsd": 0.001, "requestId": "second"},
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        quality,
+        "_technical_review",
+        lambda *_args: {
+            "status": "passed",
+            "hardFailure": False,
+            "issues": [],
+            "confidence": 1,
+        },
+    )
+    monkeypatch.setattr(quality, "create_proxy", lambda *_args, **_kwargs: render)
+    monkeypatch.setattr(
+        quality, "analyze_video", lambda *_args, **_kwargs: next(responses)
+    )
+
+    value = quality.review_renders(
+        [{"path": render, "clipId": "clip-1"}],
+        qa_settings(),
+        tmp_path / "proxies",
+        cost_remaining_usd=1,
+    )
+
+    assert value["status"] == "PASSED"
+    assert [usage["requestId"] for usage in value["providerUsage"]] == [
+        "first",
+        "second",
+    ]
 
 
 def test_openrouter_video_proxy_keeps_audio_and_resets_pts(tmp_path, monkeypatch):

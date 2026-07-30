@@ -5,6 +5,11 @@ const booleanString = z
   .default('false')
   .transform((value) => value === 'true');
 
+const enabledBooleanString = z
+  .enum(['true', 'false'])
+  .default('true')
+  .transform((value) => value === 'true');
+
 const optionalSecret = z.preprocess((value) => (value === '' ? undefined : value), z.string().min(1).optional());
 const optionalUrl = z.preprocess((value) => (value === '' ? undefined : value), z.string().url().optional());
 const pipelineConcurrencyDefault =
@@ -58,7 +63,7 @@ const environmentSchema = z.object({
   MEDIA_WORKER_DATA_DIR: z.string().default('/data'),
   MEDIA_WORKER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(8 * 60 * 60 * 1000).default(7_200_000),
   MEDIA_DIARIZATION_ENABLED: booleanString,
-  COMPOSITION_V1_ENABLED: booleanString,
+  COMPOSITION_V1_ENABLED: enabledBooleanString,
   COMPOSITION_V1_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),
   MEDIA_ACCELERATOR: z.enum(['cpu', 'cuda']).default('cpu'),
   AI_EXECUTION_MODE: z.enum(['local', 'hybrid']).default('local'),
@@ -71,7 +76,7 @@ const environmentSchema = z.object({
   OPENROUTER_EDITOR_MODEL: z.string().min(1).default('google/gemini-2.5-flash'),
   OPENROUTER_QA_ENABLED: booleanString,
   OPENROUTER_VIDEO_ENABLED: booleanString,
-  OPENROUTER_VIDEO_MODEL: z.string().min(1).default('google/gemini-2.5-flash'),
+  OPENROUTER_VIDEO_MODEL: z.string().min(1).default('google/gemini-3-flash-preview'),
   OPENROUTER_VIDEO_MAX_BYTES: z.coerce.number().int().min(1024 * 1024).max(50 * 1024 * 1024).default(20 * 1024 * 1024),
   OPENROUTER_VIDEO_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(300).default(90),
   OPENROUTER_VIDEO_RETRIES: z.coerce.number().int().min(1).max(5).default(3),

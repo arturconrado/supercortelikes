@@ -5,7 +5,7 @@
 O runtime padrão continua no Plano A, sem custo novo:
 
 ```dotenv
-COMPOSITION_V1_ENABLED=false
+COMPOSITION_V1_ENABLED=true
 COMPOSITION_V1_ROLLOUT_PERCENT=100
 MEDIA_ACCELERATOR=cpu
 WHISPERX_MODEL=small
@@ -21,9 +21,11 @@ AUTO_RENDER_MODE=off
 FINAL_MAX_SHORT_SIDE=1080
 ```
 
-`COMPOSITION_V1_ENABLED=false` mantém o render anterior enquanto o código novo é implantado. Em QA, altere somente a flag para `true`. Cortes antigos criam a composição no próximo preview/export; não existe backfill.
+`COMPOSITION_V1_ENABLED=true` ativa o composition-v2 validado. Para rollback operacional, altere somente a flag para `false`. Cortes antigos criam a composição no próximo preview/export; não existe backfill.
 
 O estágio `COMPOSITION` gera `composition-v2`, escolhe `fill`, `split` ou o fallback seguro `fit`, persiste o plano por clipe e mantém captions depois do layout. Preview usa 540p; export final usa no máximo 1080p sem upscale, H.264/AAC, CRF 19, `faststart`, SAR 1:1, PTS reiniciado, `aresample=async=1:first_pts=0` e loudness de -14 LUFS.
+
+O enquadramento usa o perfil `social-center-v1`, ancorado no comportamento visual do OpusClip: o centro do rosto fica em 50% da largura e aproximadamente 38% da altura, preservando headroom e espaço inferior para captions. O centro facial precisa permanecer entre 20–80% da largura e 12–62% da altura; o rosto inteiro deve ficar dentro das margens seguras. Se o limite físico da fonte impedir esse enquadramento, `fill` é recusado: dois participantes usam `split` e um participante usa `fit`, em vez de entregar um rosto cortado ou descentralizado. A referência segue os princípios publicados pelo OpusClip para active speaker, centralização, movimento suave e layouts `fill`/`split`/`fit`; não replica componentes proprietários.
 
 ## Rollout do Plano A
 
@@ -52,7 +54,7 @@ LLM_API_KEY=...
 OPENROUTER_EDITOR_MODEL=google/gemini-2.5-flash
 OPENROUTER_QA_ENABLED=true
 OPENROUTER_VIDEO_ENABLED=true
-OPENROUTER_VIDEO_MODEL=google/gemini-2.5-flash
+OPENROUTER_VIDEO_MODEL=google/gemini-3-flash-preview
 OPENROUTER_VIDEO_MAX_BYTES=20971520
 OPENROUTER_VIDEO_TIMEOUT_SECONDS=90
 OPENROUTER_VIDEO_RETRIES=3
@@ -92,7 +94,7 @@ OpenRouter é usado na curadoria textual/scoring e como editor/revisor temporal 
 ```dotenv
 LLM_PROVIDER=openrouter
 OPENROUTER_EDITOR_MODEL=google/gemini-2.5-flash
-OPENROUTER_VIDEO_MODEL=google/gemini-2.5-flash
+OPENROUTER_VIDEO_MODEL=google/gemini-3-flash-preview
 LLM_PROVIDER_SORT=latency
 ```
 
@@ -114,8 +116,8 @@ O documento raiz deve informar `costs.cpuMonthlyTotal` e `costs.limitUsdPerSourc
   "pipelineToCompositionSeconds": 420,
   "clipDurationSeconds": 45,
   "renderSeconds": 55,
-  "soloSpokenFrames": 1000,
-  "soloSafeFrames": 980,
+  "spokenSubjectFrames": 1000,
+  "safeSubjectFrames": 980,
   "speakerDecisions": 100,
   "correctSpeakerDecisions": 90,
   "speakerSwitchLatenciesMs": [180, 240, 310],

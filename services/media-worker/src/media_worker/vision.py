@@ -38,6 +38,8 @@ def analyze_focus(
     if start_seconds > 0:
         capture.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000)
     backend, detect = _detector(detector, cv2, settings)
+    subject_kind = "person" if backend.startswith("ultralytics-yolo") else "face"
+    focus_y_ratio = 0.2 if subject_kind == "person" else 0.45
     samples: List[Dict[str, Any]] = []
     frame_index = max(0, round(start_seconds * fps))
     next_detection_time = start_seconds
@@ -94,7 +96,12 @@ def analyze_focus(
                     )
                     for index, box in enumerate(boxes)
                 ]
-                focus = _weighted_center(weighted_boxes, width, height)
+                focus = _weighted_center(
+                    weighted_boxes,
+                    width,
+                    height,
+                    vertical_ratio=focus_y_ratio,
+                )
                 samples.append(
                     {
                         "time": round(timestamp, 3),
@@ -112,6 +119,7 @@ def analyze_focus(
                                 "height": round(float(box[3]), 2),
                                 "confidence": round(float(box[4]), 4),
                                 "activity": round(float(activity[index]), 4),
+                                "subjectKind": subject_kind,
                             }
                             for index, box in enumerate(weighted_boxes)
                         ],
@@ -281,7 +289,11 @@ def even_coordinate(value: float) -> int:
 
 
 def _weighted_center(
-    boxes: Sequence[Tuple[float, float, float, float, float]], width: int, height: int
+    boxes: Sequence[Tuple[float, float, float, float, float]],
+    width: int,
+    height: int,
+    *,
+    vertical_ratio: float = 0.5,
 ) -> Tuple[float, float]:
     if not boxes:
         return width / 2, height / 2
@@ -295,7 +307,9 @@ def _weighted_center(
     )
     y = (
         sum(
-            (box[1] + box[3] / 2) * max(0.01, box[4]) * max(1.0, box[2] * box[3])
+            (box[1] + box[3] * vertical_ratio)
+            * max(0.01, box[4])
+            * max(1.0, box[2] * box[3])
             for box in boxes
         )
         / total
@@ -370,7 +384,7 @@ def _track_boxes(previous_gray: Any, current_gray: Any, boxes: Sequence[Tuple[fl
 
 def _detector(name: str, cv2: Any, settings: Settings):
     if name == "auto":
-        for candidate in ("opencv", "mediapipe", "yolo"):
+        for candidate in ("yolo", "mediapipe", "opencv"):
             try:
                 return _detector(candidate, cv2, settings)
             except DependencyUnavailable:
@@ -406,9 +420,6 @@ def _detector(name: str, cv2: Any, settings: Settings):
         face_detector = mp.solutions.face_detection.FaceDetection(
             model_selection=1, min_detection_confidence=0.5
         )
-        hand_detector = mp.solutions.hands.Hands(
-            static_image_mode=True, max_num_hands=4, min_detection_confidence=0.45
-        )
 
         def detect(frame: Any):
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -426,21 +437,13 @@ def _detector(name: str, cv2: Any, settings: Settings):
                         float(value.score[0]) * 2,
                     )
                 )
-            hands = hand_detector.process(rgb)
-            for landmarks in hands.multi_hand_landmarks or []:
-                xs = [point.x * width for point in landmarks.landmark]
-                ys = [point.y * height for point in landmarks.landmark]
-                boxes.append(
-                    (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys), 0.45)
-                )
             return boxes
 
         def close():
             face_detector.close()
-            hand_detector.close()
 
         setattr(detect, "close", close)
-        return "mediapipe-face-hands", detect
+        return "mediapipe-face", detect
     if name == "yolo":
         try:
             from ultralytics import YOLO
@@ -464,10 +467,8 @@ def _detector(name: str, cv2: Any, settings: Settings):
             face_mesh = None
 
         def detect(frame: Any):
-            result = model.track(
+            result = model.predict(
                 frame,
-                persist=True,
-                tracker="bytetrack.yaml",
                 verbose=False,
                 classes=[0],
                 device=0 if settings.media_accelerator == "cuda" else "cpu",
@@ -525,5 +526,5 @@ def _detector(name: str, cv2: Any, settings: Settings):
 
         setattr(detect, "activity_regions", activity_regions)
         setattr(detect, "close", close)
-        return "ultralytics-yolo-bytetrack-mediapipe-mouth", detect
+        return "ultralytics-yolo-optical-flow-mediapipe-mouth", detect
     raise ValueError("Unsupported detector: %s" % name)

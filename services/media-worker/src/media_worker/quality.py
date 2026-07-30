@@ -55,27 +55,54 @@ def review_renders(
                 if proxy is None:
                     unavailable_reason = "proxy-size-limit"
                 else:
-                    result = analyze_video(
-                        proxy,
-                        _review_prompt(
-                            clip_id,
-                            render,
-                            technical,
-                            (composition_plans or {}).get(clip_id),
-                        ),
-                        settings,
+                    prompt = _review_prompt(
+                        clip_id,
+                        render,
+                        technical,
+                        (composition_plans or {}).get(clip_id),
                     )
-                    model_review = _reviews(
-                        _json_content(result["content"]), [clip_id]
-                    )[0]
-                    provider_usage.append(result["usage"])
-                    if not model_review.get("reviewed"):
-                        model_review = None
-                        unavailable_reason = "model-review-missing"
-                    if remaining is not None:
-                        remaining = max(
-                            0.0,
-                            remaining - float(result["usage"].get("costUsd") or 0.0),
+                    last_model_error: Optional[BaseException] = None
+                    for model_attempt in range(2):
+                        if remaining is not None and remaining <= 0:
+                            unavailable_reason = "cost-budget-exhausted"
+                            break
+                        try:
+                            result = analyze_video(
+                                proxy,
+                                prompt,
+                                settings,
+                                max_tokens=2400,
+                            )
+                            provider_usage.append(result["usage"])
+                            if remaining is not None:
+                                remaining = max(
+                                    0.0,
+                                    remaining
+                                    - float(result["usage"].get("costUsd") or 0.0),
+                                )
+                            model_review = _reviews(
+                                _json_content(result["content"]), [clip_id]
+                            )[0]
+                            if model_review.get("reviewed"):
+                                break
+                            model_review = None
+                            unavailable_reason = "model-review-missing"
+                        except (
+                            json.JSONDecodeError,
+                            OpenRouterVideoError,
+                            ValueError,
+                        ) as error:
+                            last_model_error = error
+                            model_review = None
+                            unavailable_reason = type(error).__name__
+                            if model_attempt == 0:
+                                continue
+                            raise
+                    if model_review is None and last_model_error is not None:
+                        logger.warning(
+                            "OpenRouter video QA did not produce a valid review for %s: %s",
+                            clip_id,
+                            last_model_error,
                         )
             except (OSError, RuntimeError, ValueError, OpenRouterVideoError) as error:
                 unavailable_reason = type(error).__name__
@@ -161,7 +188,8 @@ def _review_prompt(
         "task": (
             "Review the supplied social-video MP4 as a temporal sequence with audio. "
             "Verify that the visible crop follows the person who is actually speaking, "
-            "that switches happen on time, and that audio and lip motion stay synchronized."
+            "that switches happen on time, that the speaker stays cleanly centered with "
+            "professional headroom, and that audio and lip motion stay synchronized."
         ),
         "clip": {
             "clipId": clip_id,
@@ -201,8 +229,11 @@ def _review_prompt(
         },
         "rules": (
             "Return JSON only. Evaluate the whole video, not isolated frames. "
-            "Do not mark passed when any listed issue is present. When choosing fill, "
-            "set activeTrackId to one of the supplied scene subjects."
+            "Do not mark passed when any listed issue is present. A fit scene with no "
+            "supplied tracks is intentional B-roll: an off-screen voice over product "
+            "footage is not wrong_speaker, and a tiny background person must not drive "
+            "the crop. Never invent or reuse a track from another scene. When choosing "
+            "fill, set activeTrackId to a track supplied for that exact time range."
         ),
     }
 
@@ -219,12 +250,15 @@ def _compact_composition(plan: Optional[Mapping[str, Any]]) -> Any:
     return {
         "version": plan.get("version"),
         "aspectRatio": plan.get("aspectRatio"),
+        "framing": plan.get("framing"),
         "scenes": [
             {
                 "startMs": round((float(scene.get("start", base_seconds)) - base_seconds) * 1000),
                 "endMs": round((float(scene.get("end", base_seconds)) - base_seconds) * 1000),
                 "layout": scene.get("layout"),
                 "activeTrackId": scene.get("activeTrackId"),
+                "framingSafe": scene.get("framingSafe"),
+                "framingFallback": scene.get("framingFallback"),
                 "tracks": [
                     subject.get("trackId")
                     for subject in (
@@ -521,14 +555,21 @@ def _track_keyframes(
 
 def _json_content(content: str) -> Dict[str, Any]:
     value = content.strip()
-    if value.startswith("```"):
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", value, re.S | re.I)
-        if match:
-            value = match.group(1)
-    parsed = json.loads(value)
-    if not isinstance(parsed, dict):
-        raise ValueError("QA response must be an object")
-    return parsed
+    for _attempt in range(3):
+        if value.startswith("```"):
+            match = re.search(r"```(?:json)?\s*(.*?)\s*```", value, re.S | re.I)
+            if match:
+                value = match.group(1)
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list):
+            return {"reviews": parsed}
+        if isinstance(parsed, str):
+            value = parsed.strip()
+            continue
+        break
+    raise ValueError("QA response must be an object, review list, or encoded JSON")
 
 
 def _reviews(value: Mapping[str, Any], clip_ids: Sequence[str]) -> list:

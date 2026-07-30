@@ -1,5 +1,6 @@
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import media_worker.rendering as rendering
 import media_worker.vision as vision
@@ -137,3 +138,33 @@ def test_render_reframes_forces_square_pixels(monkeypatch, tmp_path: Path):
     command = commands[0]
     video_filter = command[command.index("-vf") + 1]
     assert video_filter.endswith("scale=1080:1920:flags=lanczos,setsar=1")
+
+
+def test_yolo_detection_does_not_require_bytetrack_lap(monkeypatch):
+    calls = []
+
+    class FakeModel:
+        def __init__(self, model):
+            assert model == "yolo11n.pt"
+
+        def predict(self, frame, **options):
+            calls.append(options)
+            box = SimpleNamespace(
+                xyxy=[SimpleNamespace(tolist=lambda: [10, 20, 110, 220])],
+                conf=[0.9],
+            )
+            return [SimpleNamespace(boxes=[box])]
+
+    module = ModuleType("ultralytics")
+    module.YOLO = FakeModel
+    monkeypatch.setitem(sys.modules, "ultralytics", module)
+    monkeypatch.setitem(sys.modules, "mediapipe", None)
+
+    _backend, detect = vision._detector(
+        "yolo",
+        SimpleNamespace(),
+        SimpleNamespace(yolo_model="yolo11n.pt", media_accelerator="cpu"),
+    )
+
+    assert detect(object()) == [(10, 20, 100, 200, 0.9)]
+    assert calls == [{"verbose": False, "classes": [0], "device": "cpu"}]

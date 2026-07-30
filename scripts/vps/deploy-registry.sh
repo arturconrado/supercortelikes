@@ -21,6 +21,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
+bash "${ROOT_DIR}/scripts/vps/apply-media-quality-release.sh" "${ENV_FILE}"
+
 if grep -Eq 'DOMINIO\.com|CHANGE_ME_' "${ENV_FILE}"; then
   echo "${ENV_FILE} still contains placeholder values." >&2
   exit 1

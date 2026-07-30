@@ -3,11 +3,22 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Sequence
 
 from .config import Settings
-from .vision import analyze_focus
+from .vision import analyze_focus, crop_dimensions
 
 
 COMPOSITION_VERSION = "composition-v2"
-SUPPORTED_ASPECTS = {"9:16", "1:1", "4:5", "16:9"}
+ASPECT_RATIOS = {"9:16": (9, 16), "1:1": (1, 1), "4:5": (4, 5), "16:9": (16, 9)}
+SUPPORTED_ASPECTS = set(ASPECT_RATIOS)
+FRAMING_PROFILE = {
+    "name": "social-center-v1",
+    "targetX": 0.5,
+    "targetFaceY": 0.38,
+    "safeCenterX": [0.2, 0.8],
+    "safeCenterY": [0.12, 0.62],
+    "safeFaceBounds": [0.04, 0.04, 0.96, 0.78],
+    "minimumPersonHeightRatio": 0.18,
+    "minimumPersonAreaRatio": 0.01,
+}
 
 
 def build_compositions(
@@ -28,8 +39,15 @@ def build_compositions(
     minimum_confidence = max(
         0.0, min(1.0, float(options.get("minimumSpeakerConfidence", 0.65)))
     )
-    detector = str(options.get("detector", "opencv"))
-    budget_ratio = max(0.25, min(4.0, float(options.get("analysisBudgetRatio", 1.0))))
+    detector = str(options.get("detector", "auto"))
+    default_budget_ratio = 1.0 if settings.media_accelerator == "cuda" else 4.0
+    budget_ratio = max(
+        0.25,
+        min(
+            4.0,
+            float(options.get("analysisBudgetRatio", default_budget_ratio)),
+        ),
+    )
     plans: List[Dict[str, Any]] = []
     for clip in clips:
         start, end = float(clip["start"]), float(clip["end"])
@@ -206,6 +224,7 @@ def fallback_plan(
         "clipId": clip["id"],
         "version": COMPOSITION_VERSION,
         "aspectRatio": aspect,
+        "framing": dict(FRAMING_PROFILE),
         "source": {"width": 0, "height": 0},
         "scenes": [
             {
@@ -240,18 +259,32 @@ def composition_plan(
     samples = list(analysis.get("samples") or [])
     if not samples:
         return fallback_plan(clip, aspect)
-    detection_rate = float(analysis.get("detectionRate", 0.0))
+    raw_detection_rate = float(analysis.get("detectionRate", 0.0))
+    usable_detection_rate = sum(
+        1
+        for sample in samples
+        if any(
+            _usable_subject_box(box, width, height)
+            for box in list(sample.get("boxes") or [])
+        )
+    ) / len(samples)
+    detection_rate = min(raw_detection_rate, usable_detection_rate)
     if detection_rate < 0.35:
         plan = fallback_plan(clip, aspect, "detection-rate")
         plan["source"] = {"width": width, "height": height}
         plan["diagnostics"]["detectionRate"] = round(detection_rate, 4)
+        plan["diagnostics"]["rawDetectionRate"] = round(raw_detection_rate, 4)
         plan["diagnostics"]["sampleCount"] = len(samples)
         return plan
 
     labeled = []
     for sample in samples:
         boxes = sorted(
-            list(sample.get("boxes") or []),
+            [
+                box
+                for box in list(sample.get("boxes") or [])
+                if _usable_subject_box(box, width, height)
+            ],
             key=lambda box: (
                 float(box.get("activity", 0.0)),
                 float(box.get("confidence", 0.0))
@@ -268,13 +301,21 @@ def composition_plan(
         else:
             layout = "fill"
         primary = boxes[0] if boxes else None
+        fill_safe = (
+            _fill_is_safe(primary, width, height, aspect)
+            if primary is not None
+            else False
+        )
+        fill_fallback = layout == "fill" and not fill_safe
+        if fill_fallback:
+            layout = "split" if len(boxes) >= 2 else "fit"
         focus_x = (
-            float(primary["x"]) + float(primary["width"]) / 2
+            _subject_focus(primary)[0]
             if primary
             else float(sample.get("x", width / 2))
         )
         focus_y = (
-            float(primary["y"]) + float(primary["height"]) * 0.45
+            _subject_focus(primary)[1]
             if primary
             else float(sample.get("y", height / 2))
         )
@@ -286,6 +327,9 @@ def composition_plan(
                 "focusX": focus_x,
                 "focusY": focus_y,
                 "boxes": boxes[:2],
+                "fillSafe": fill_safe,
+                "framingSafe": layout != "fill" or fill_safe,
+                "framingFallback": fill_fallback,
                 "activeTrackId": (
                     int(primary["trackId"])
                     if primary and primary.get("trackId") is not None
@@ -294,7 +338,12 @@ def composition_plan(
             }
         )
 
+    labeled = bridge_safe_fill_gaps(labeled, maximum_seconds=0.5)
+    held_detection_gaps = sum(
+        1 for value in labeled if value.get("trackingHeld")
+    )
     labeled = stabilize_layouts(labeled, minimum_seconds=0.6)
+    labeled = enforce_safe_layouts(labeled)
     labeled = stabilize_active_tracks(
         labeled, focus_switch_delay_seconds=focus_switch_delay_seconds
     )
@@ -311,18 +360,26 @@ def composition_plan(
         for previous, current in zip(scenes, scenes[1:])
         if previous.get("activeTrackId") != current.get("activeTrackId")
     )
+    framing_fallbacks = sum(
+        1 for value in labeled if value.get("framingFallback")
+    )
     return {
         "clipId": clip["id"],
         "version": COMPOSITION_VERSION,
         "aspectRatio": aspect,
+        "framing": dict(FRAMING_PROFILE),
         "source": {"width": width, "height": height},
         "scenes": scenes,
         "diagnostics": {
             "status": "ready",
             "detectionRate": round(detection_rate, 4),
+            "rawDetectionRate": round(raw_detection_rate, 4),
             "trackingConfidence": round(mean_confidence, 4),
             "layoutSwitches": layout_switches,
             "focusSwitches": focus_switches,
+            "framingProfile": FRAMING_PROFILE["name"],
+            "framingFallbackSamples": framing_fallbacks,
+            "heldDetectionGapSamples": held_detection_gaps,
             "sampleCount": len(labeled),
             "sampleSeconds": round(
                 max(0.0, labeled[1]["time"] - labeled[0]["time"])
@@ -333,6 +390,173 @@ def composition_plan(
             "focusSwitchDelaySeconds": round(focus_switch_delay_seconds, 3),
         },
     }
+
+
+def _fill_is_safe(
+    box: Mapping[str, Any],
+    source_width: int,
+    source_height: int,
+    aspect: str,
+) -> bool:
+    ratio_width, ratio_height = ASPECT_RATIOS.get(aspect, ASPECT_RATIOS["9:16"])
+    crop_width, crop_height = crop_dimensions(
+        source_width, source_height, ratio_width, ratio_height
+    )
+    try:
+        left = float(box["x"])
+        top = float(box["y"])
+        box_width = float(box["width"])
+        box_height = float(box["height"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    center_x, center_y = _subject_focus(box)
+    if str(box.get("subjectKind", "face")) == "person":
+        subject_left = left + box_width * 0.2
+        subject_top = top
+        subject_right = left + box_width * 0.8
+        subject_bottom = top + box_height * 0.35
+    else:
+        subject_left = left
+        subject_top = top
+        subject_right = left + box_width
+        subject_bottom = top + box_height
+    crop_x = max(
+        0.0,
+        min(
+            source_width - crop_width,
+            center_x - crop_width * float(FRAMING_PROFILE["targetX"]),
+        ),
+    )
+    crop_y = max(
+        0.0,
+        min(
+            source_height - crop_height,
+            center_y - crop_height * float(FRAMING_PROFILE["targetFaceY"]),
+        ),
+    )
+    local_center_x = (center_x - crop_x) / crop_width
+    local_center_y = (center_y - crop_y) / crop_height
+    local_left = (subject_left - crop_x) / crop_width
+    local_top = (subject_top - crop_y) / crop_height
+    local_right = (subject_right - crop_x) / crop_width
+    local_bottom = (subject_bottom - crop_y) / crop_height
+    safe_center_x = FRAMING_PROFILE["safeCenterX"]
+    safe_center_y = FRAMING_PROFILE["safeCenterY"]
+    safe_left, safe_top, safe_right, safe_bottom = FRAMING_PROFILE[
+        "safeFaceBounds"
+    ]
+    return (
+        float(safe_center_x[0]) <= local_center_x <= float(safe_center_x[1])
+        and float(safe_center_y[0]) <= local_center_y <= float(safe_center_y[1])
+        and float(safe_left) <= local_left
+        and float(safe_top) <= local_top
+        and local_right <= float(safe_right)
+        and local_bottom <= float(safe_bottom)
+    )
+
+
+def _subject_focus(box: Mapping[str, Any]) -> tuple[float, float]:
+    left = float(box.get("x", 0.0))
+    top = float(box.get("y", 0.0))
+    width = float(box.get("width", 0.0))
+    height = float(box.get("height", 0.0))
+    vertical_ratio = 0.2 if str(box.get("subjectKind", "face")) == "person" else 0.45
+    return left + width / 2, top + height * vertical_ratio
+
+
+def _usable_subject_box(
+    box: Mapping[str, Any], source_width: int, source_height: int
+) -> bool:
+    if str(box.get("subjectKind", "face")) != "person":
+        return True
+    try:
+        width = max(0.0, float(box["width"]))
+        height = max(0.0, float(box["height"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    frame_area = max(1.0, float(source_width) * float(source_height))
+    return (
+        height / max(1.0, float(source_height))
+        >= float(FRAMING_PROFILE["minimumPersonHeightRatio"])
+        and width * height / frame_area
+        >= float(FRAMING_PROFILE["minimumPersonAreaRatio"])
+    )
+
+
+def enforce_safe_layouts(
+    samples: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    values = [dict(sample) for sample in samples]
+    for sample in values:
+        if sample.get("layout") != "fill":
+            sample["framingSafe"] = True
+            continue
+        if bool(sample.get("fillSafe")):
+            sample["framingSafe"] = True
+            continue
+        boxes = list(sample.get("boxes") or [])
+        sample["layout"] = "split" if len(boxes) >= 2 else "fit"
+        sample["framingSafe"] = True
+        sample["framingFallback"] = True
+    return values
+
+
+def bridge_safe_fill_gaps(
+    samples: Sequence[Mapping[str, Any]], *, maximum_seconds: float
+) -> List[Dict[str, Any]]:
+    values = [dict(sample) for sample in samples]
+    index = 0
+    while index < len(values):
+        if values[index].get("boxes") or values[index].get("layout") == "fill":
+            index += 1
+            continue
+        end = index + 1
+        while (
+            end < len(values)
+            and not values[end].get("boxes")
+            and values[end].get("layout") != "fill"
+        ):
+            end += 1
+        previous = values[index - 1] if index > 0 else None
+        following = values[end] if end < len(values) else None
+        same_track = (
+            previous is not None
+            and following is not None
+            and previous.get("activeTrackId") is not None
+            and previous.get("activeTrackId") == following.get("activeTrackId")
+        )
+        continuous = (
+            same_track
+            and previous.get("layout") == "fill"
+            and following.get("layout") == "fill"
+            and bool(previous.get("fillSafe"))
+            and bool(following.get("fillSafe"))
+            and float(following["time"]) - float(previous["time"])
+            <= maximum_seconds + 1e-6
+        )
+        if continuous:
+            start_time = float(previous["time"])
+            duration = max(0.001, float(following["time"]) - start_time)
+            for item in range(index, end):
+                progress = (float(values[item]["time"]) - start_time) / duration
+                values[item]["layout"] = "fill"
+                values[item]["fillSafe"] = True
+                values[item]["framingSafe"] = True
+                values[item]["framingFallback"] = False
+                values[item]["trackingHeld"] = True
+                values[item]["activeTrackId"] = previous["activeTrackId"]
+                values[item]["focusX"] = float(previous["focusX"]) + (
+                    float(following["focusX"]) - float(previous["focusX"])
+                ) * progress
+                values[item]["focusY"] = float(previous["focusY"]) + (
+                    float(following["focusY"]) - float(previous["focusY"])
+                ) * progress
+                values[item]["confidence"] = min(
+                    float(previous["confidence"]),
+                    float(following["confidence"]),
+                )
+        index = end
+    return values
 
 
 def stabilize_active_tracks(
@@ -371,8 +595,7 @@ def stabilize_active_tracks(
         )
         if current_box is not None:
             sample["activeTrackId"] = current
-            sample["focusX"] = float(current_box["x"]) + float(current_box["width"]) / 2
-            sample["focusY"] = float(current_box["y"]) + float(current_box["height"]) * 0.45
+            sample["focusX"], sample["focusY"] = _subject_focus(current_box)
         if len(sample.get("boxes", [])) >= 2:
             sample["layout"] = "split"
     return values
@@ -453,10 +676,11 @@ def _scenes(
         boxes = next((value["boxes"] for value in scene_samples if value.get("boxes")), [])
         subjects = [
             {
-                "x": round((float(box["x"]) + float(box["width"]) / 2) / width, 5),
-                "y": round((float(box["y"]) + float(box["height"]) * 0.45) / height, 5),
+                "x": round(_subject_focus(box)[0] / width, 5),
+                "y": round(_subject_focus(box)[1] / height, 5),
                 "width": round(float(box["width"]) / width, 5),
                 "height": round(float(box["height"]) / height, 5),
+                "subjectKind": str(box.get("subjectKind", "face")),
                 "trackId": (
                     int(box["trackId"]) if box.get("trackId") is not None else None
                 ),
@@ -475,6 +699,12 @@ def _scenes(
                     4,
                 ),
                 "captionSafeZone": "bottom",
+                "framingSafe": all(
+                    bool(value.get("framingSafe", True)) for value in scene_samples
+                ),
+                "framingFallback": any(
+                    bool(value.get("framingFallback")) for value in scene_samples
+                ),
                 "keyframes": [dict(value) for value in keyframes[index:end]],
                 "subjects": subjects,
             }

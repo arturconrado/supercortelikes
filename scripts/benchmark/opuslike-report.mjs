@@ -61,8 +61,8 @@ function validateSuite(plan, samples) {
     for (const field of [
       'pipelineToCompositionSeconds',
       'renderSeconds',
-      'soloSpokenFrames',
-      'soloSafeFrames',
+      'spokenSubjectFrames',
+      'safeSubjectFrames',
       'speakerDecisions',
       'correctSpeakerDecisions',
       'maxOffSceneJumpWidthRatio',
@@ -102,10 +102,10 @@ function validateSuite(plan, samples) {
 }
 
 function evaluate(plan, samples) {
-  const soloFrames = sum(samples, 'soloSpokenFrames');
+  const spokenSubjectFrames = sum(samples, 'spokenSubjectFrames');
   const speakerDecisions = sum(samples, 'speakerDecisions');
   const metrics = {
-    soloSafeRate: ratio(sum(samples, 'soloSafeFrames'), soloFrames),
+    safeSubjectRate: ratio(sum(samples, 'safeSubjectFrames'), spokenSubjectFrames),
     correctSpeakerRate: ratio(sum(samples, 'correctSpeakerDecisions'), speakerDecisions),
     maxJumpRate: Math.max(...samples.map((sample) => sample.maxOffSceneJumpWidthRatio)),
     captionMeanErrorMs: weightedMean(samples, 'captionMeanErrorMs', 'clipDurationSeconds'),
@@ -125,7 +125,7 @@ function evaluate(plan, samples) {
     dlq: sum(samples, 'dlq'),
   };
   const checks = [
-    check('Sujeito em área segura', metrics.soloSafeRate, '>=', 0.95, 'percent'),
+    check('Orador centralizado na área segura', metrics.safeSubjectRate, '>=', 0.95, 'percent'),
     check('Falante correto', metrics.correctSpeakerRate, '>=', plan === 'hybrid' ? 0.92 : 0.85, 'percent'),
     check('Latência p95 da troca de falante', metrics.speakerSwitchP95Ms, '<=', 400, 'milliseconds'),
     check('Maior salto fora de corte de cena', metrics.maxJumpRate, '<=', 0.08, 'percent'),
@@ -217,7 +217,7 @@ function qualityScore(metrics) {
   const captionScore = 1 - Math.min(1, metrics.captionMeanErrorMs / 120);
   const jumpScore = 1 - Math.min(1, metrics.maxJumpRate / 0.08);
   return (
-    metrics.soloSafeRate * 25
+    metrics.safeSubjectRate * 25
     + metrics.correctSpeakerRate * 35
     + metrics.opusParityRate * 25
     + captionScore * 10

@@ -14,7 +14,7 @@ from .process import run_command
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_VIDEO_MODEL = "google/gemini-2.5-flash"
+DEFAULT_VIDEO_MODEL = "google/gemini-3-flash-preview"
 MAX_PROXY_BYTES = 20 * 1024 * 1024
 RETRYABLE_HTTP_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
@@ -138,12 +138,7 @@ def analyze_video(
     }
     started = time.monotonic()
     body = _request_json(payload, settings)
-    try:
-        content = body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as error:
-        raise OpenRouterVideoError("OpenRouter returned no video analysis") from error
-    if not isinstance(content, str):
-        raise OpenRouterVideoError("OpenRouter video analysis content must be text")
+    content = _message_text(body)
     usage = body.get("usage") if isinstance(body.get("usage"), Mapping) else {}
     return {
         "content": content,
@@ -157,6 +152,29 @@ def analyze_video(
             "model": payload["model"],
         },
     }
+
+
+def _message_text(body: Mapping[str, Any]) -> str:
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise OpenRouterVideoError(
+            "OpenRouter returned no video analysis", retryable=True
+        ) from error
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        text = "".join(
+            str(block.get("text") or "")
+            for block in content
+            if isinstance(block, Mapping)
+            and str(block.get("type") or "") in {"text", "output_text"}
+        ).strip()
+        if text:
+            return text
+    raise OpenRouterVideoError(
+        "OpenRouter video analysis content must contain text", retryable=True
+    )
 
 
 def _request_json(payload: Mapping[str, Any], settings: Any) -> Dict[str, Any]:

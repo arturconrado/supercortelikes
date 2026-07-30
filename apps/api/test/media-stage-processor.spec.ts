@@ -167,9 +167,16 @@ describe('MediaStageProcessor persistence', () => {
     expect(prisma.clip.update).toHaveBeenCalled();
     expect(media.execute).toHaveBeenCalledWith(expect.objectContaining({ stage: 'transcription' }), expect.anything(), expect.objectContaining({ diarize: false, batchSize: 1 }), undefined);
     expect(media.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'composition' }),
+      expect.anything(),
+      expect.objectContaining({ detector: 'auto', analysisBudgetRatio: 4 }),
+      undefined,
+    );
+    expect(media.execute).toHaveBeenCalledWith(
       expect.objectContaining({ stage: 'rendering' }),
       expect.anything(),
       expect.objectContaining({
+        detector: 'auto',
         clipIndex: 0,
         preserveSourceQuality: true,
         compositionV1: true,

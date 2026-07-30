@@ -206,13 +206,6 @@ def _composition_filter_graph(
     ratio_width, ratio_height = ratios[aspect]
     max_short_side = max(360, min(1080, int(options.get("maxSourceShortSide", 1080))))
     base = source_quality_base(source_width, source_height, max_short_side)
-    safe_crop_width, safe_crop_height = crop_dimensions(
-        source_width, source_height, ratio_width, ratio_height
-    )
-    base = min(
-        base,
-        safe_crop_width if ratio_width / ratio_height < 1 else safe_crop_height,
-    )
     target_width, target_height = output_dimensions(ratio_width, ratio_height, base)
     clip_start, clip_end = float(clip["start"]), float(clip["end"])
     raw_scenes = plan.get("scenes") if isinstance(plan.get("scenes"), list) else []
@@ -226,6 +219,7 @@ def _composition_filter_graph(
             scenes.append((value, start, end))
     if not scenes:
         scenes = [({"layout": "fit", "keyframes": [], "subjects": []}, clip_start, clip_end)]
+    target_x_ratio, target_face_y_ratio = _framing_target(plan)
 
     transitions = [
         min(0.18, (scenes[index][2] - scenes[index][1]) / 2, (scenes[index + 1][2] - scenes[index + 1][1]) / 2)
@@ -254,6 +248,8 @@ def _composition_filter_graph(
                 source_height,
                 crop_width,
                 crop_height,
+                target_x_ratio,
+                target_face_y_ratio,
             )
             graph.append(
                 "[0:v]trim=start=%.3f:end=%.3f,setpts=PTS-STARTPTS,"
@@ -281,10 +277,22 @@ def _composition_filter_graph(
                 source_width, source_height, target_width, bottom_height
             )
             first_x, first_y = _subject_crop(
-                subjects[0], source_width, source_height, top_crop_width, top_crop_height
+                subjects[0],
+                source_width,
+                source_height,
+                top_crop_width,
+                top_crop_height,
+                target_x_ratio,
+                target_face_y_ratio,
             )
             second_x, second_y = _subject_crop(
-                subjects[1], source_width, source_height, bottom_crop_width, bottom_crop_height
+                subjects[1],
+                source_width,
+                source_height,
+                bottom_crop_width,
+                bottom_crop_height,
+                target_x_ratio,
+                target_face_y_ratio,
             )
             graph.extend(
                 [
@@ -358,6 +366,8 @@ def _crop_keyframes(
     source_height: int,
     crop_width: int,
     crop_height: int,
+    target_x_ratio: float = 0.5,
+    target_face_y_ratio: float = 0.38,
 ) -> tuple[List[tuple[float, float]], List[tuple[float, float]]]:
     xs: List[tuple[float, float]] = []
     ys: List[tuple[float, float]] = []
@@ -365,8 +375,22 @@ def _crop_keyframes(
         if not isinstance(value, Mapping):
             continue
         time = max(0.0, float(value.get("time", scene_start)) - scene_start)
-        x = max(0.0, min(source_width - crop_width, float(value.get("x", source_width / 2)) - crop_width / 2))
-        y = max(0.0, min(source_height - crop_height, float(value.get("y", source_height / 2)) - crop_height * 0.38))
+        x = max(
+            0.0,
+            min(
+                source_width - crop_width,
+                float(value.get("x", source_width / 2))
+                - crop_width * target_x_ratio,
+            ),
+        )
+        y = max(
+            0.0,
+            min(
+                source_height - crop_height,
+                float(value.get("y", source_height / 2))
+                - crop_height * target_face_y_ratio,
+            ),
+        )
         xs.append((time, float(int(x) // 2 * 2)))
         ys.append((time, float(int(y) // 2 * 2)))
     if not xs:
@@ -400,13 +424,40 @@ def _subject_crop(
     source_height: int,
     crop_width: int,
     crop_height: int,
+    target_x_ratio: float = 0.5,
+    target_face_y_ratio: float = 0.38,
 ) -> tuple[int, int]:
     value = subject if isinstance(subject, Mapping) else {}
     center_x = float(value.get("x", 0.5)) * source_width
     center_y = float(value.get("y", 0.45)) * source_height
-    x = max(0, min(source_width - crop_width, int(center_x - crop_width / 2)))
-    y = max(0, min(source_height - crop_height, int(center_y - crop_height * 0.38)))
+    x = max(
+        0,
+        min(
+            source_width - crop_width,
+            int(center_x - crop_width * target_x_ratio),
+        ),
+    )
+    y = max(
+        0,
+        min(
+            source_height - crop_height,
+            int(center_y - crop_height * target_face_y_ratio),
+        ),
+    )
     return x // 2 * 2, y // 2 * 2
+
+
+def _framing_target(plan: Mapping[str, Any]) -> tuple[float, float]:
+    framing = plan.get("framing") if isinstance(plan.get("framing"), Mapping) else {}
+    try:
+        target_x = float(framing.get("targetX", 0.5))
+        target_face_y = float(framing.get("targetFaceY", 0.38))
+    except (TypeError, ValueError):
+        return 0.5, 0.38
+    return (
+        max(0.35, min(0.65, target_x)),
+        max(0.2, min(0.55, target_face_y)),
+    )
 
 
 def _filter_escape(path: Path) -> str:

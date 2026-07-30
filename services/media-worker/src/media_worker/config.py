@@ -182,11 +182,8 @@ class Settings:
             openrouter_video_enabled=_bool_env("OPENROUTER_VIDEO_ENABLED", True),
             openrouter_video_model=os.getenv(
                 "OPENROUTER_VIDEO_MODEL",
-                os.getenv(
-                    "OPENROUTER_EDITOR_MODEL",
-                    "google/gemini-2.5-flash",
-                ),
-            ).strip() or "google/gemini-2.5-flash",
+                "google/gemini-3-flash-preview",
+            ).strip() or "google/gemini-3-flash-preview",
             openrouter_video_max_bytes=max(
                 1024 * 1024,
                 min(

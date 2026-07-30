@@ -38,6 +38,7 @@ describe('environment validation', () => {
       BUILD_SHA: 'abcdef1234',
       OUTBOX_BATCH_SIZE: 50,
       COMPOSITION_V1_ROLLOUT_PERCENT: 100,
+      COMPOSITION_V1_ENABLED: true,
       FFMPEG_PRESET: 'veryfast',
       FFMPEG_CRF: 19,
       FFMPEG_THREADS: 2,

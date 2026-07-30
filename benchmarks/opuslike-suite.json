@@ -1,6 +1,7 @@
 {
   "version": 2,
   "language": "pt-BR",
+  "framingProfile": "social-center-v1",
   "qualityThresholds": {
     "correctSpeakerRate": 0.92,
     "speakerSwitchP95Ms": 400,
