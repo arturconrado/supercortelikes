@@ -120,6 +120,47 @@ describe('ClipRenderRequestService', () => {
     );
   });
 
+  it('keeps the render fingerprint stable when only composition QA diagnostics change', async () => {
+    const ready = { id: 'ready', clipId: clip.id, status: 'READY', sizeBytes: 10n };
+    const composition = {
+      version: 'composition-v2',
+      plan: {
+        clipId: 'clip-001',
+        version: 'composition-v2',
+        aspectRatio: '9:16',
+        accelerator: 'cpu',
+        scenes: [{ start: 1, end: 31, layout: 'fit' }],
+      },
+      diagnostics: { quality: { status: 'UNVERIFIED' } },
+      updatedAt: new Date('2026-07-01T00:03:00.000Z'),
+    };
+    const firstDb = prisma({
+      clip: { findFirst: vi.fn().mockResolvedValue({ ...clip, composition }), update: vi.fn() },
+      export: { findFirst: vi.fn().mockResolvedValue(ready), create: vi.fn() },
+    });
+    const secondDb = prisma({
+      clip: {
+        findFirst: vi.fn().mockResolvedValue({
+          ...clip,
+          composition: {
+            ...composition,
+            diagnostics: { quality: { status: 'PASSED', verified: true } },
+            updatedAt: new Date('2026-07-01T00:04:00.000Z'),
+          },
+        }),
+        update: vi.fn(),
+      },
+      export: { findFirst: vi.fn().mockResolvedValue(ready), create: vi.fn() },
+    });
+
+    await service(firstDb).request(user, { clipId: clip.id, aspectRatio: '9:16' });
+    await service(secondDb).request(user, { clipId: clip.id, aspectRatio: '9:16' });
+
+    expect(secondDb.export.findFirst.mock.calls[0][0].where.renderFingerprint).toBe(
+      firstDb.export.findFirst.mock.calls[0][0].where.renderFingerprint,
+    );
+  });
+
   it('creates a queued export and routes only the requested clip to rendering', async () => {
     const db = prisma();
     const result = await service(db).request(user, { clipId: clip.id, aspectRatio: '1:1', force: true });

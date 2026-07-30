@@ -111,7 +111,6 @@ export class ClipRenderRequestService {
             version: clip.composition.version,
             accelerator: jsonRecord(clip.composition.plan).accelerator ?? 'legacy',
             planHash: renderFingerprint(clip.composition.plan),
-            updatedAt: clip.composition.updatedAt.toISOString(),
             model: this.openrouterVideoModel,
           }
         : null,
