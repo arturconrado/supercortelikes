@@ -1,3 +1,6 @@
+import http.client
+
+from media_worker import llm
 from media_worker.scoring import score_all, score_segment
 
 
@@ -107,3 +110,26 @@ def test_score_all_keeps_lexical_fallback_when_openrouter_fails(monkeypatch):
     settings.llm_api_key = "secret"
     result = score_all(segments, settings)
     assert result["algorithmVersion"] == "viral-lexical-v1"
+
+
+def test_openrouter_transport_disconnect_returns_lexical_fallback(monkeypatch):
+    segments = [
+        {
+            "id": "segment-1",
+            "start": 0,
+            "end": 10,
+            "text": "Um exemplo sintético sem dados de usuário.",
+            "emotion": {"label": "neutral"},
+        }
+    ]
+    lexical = score_all(segments)
+    settings = Settings()
+    settings.llm_provider = "openrouter"
+    settings.llm_api_key = "secret"
+
+    def disconnected(*_args, **_kwargs):
+        raise http.client.RemoteDisconnected("provider closed the connection")
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", disconnected)
+
+    assert llm.maybe_score_with_llm(segments, lexical, settings) is None

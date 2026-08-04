@@ -71,8 +71,13 @@ def maybe_score_with_llm(
             }
         ]
         return normalized
-    except (KeyError, ValueError, TypeError, urllib.error.URLError, TimeoutError) as error:
-        logger.warning("OpenRouter scoring failed; using lexical fallback: %s", error)
+    except Exception as error:
+        # Scoring enrichment is optional. Provider disconnects and transport-specific
+        # exceptions must never fail the deterministic media pipeline.
+        logger.warning(
+            "OpenRouter scoring failed; using lexical fallback (%s)",
+            type(error).__name__,
+        )
         return None
 
 
