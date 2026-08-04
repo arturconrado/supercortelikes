@@ -71,7 +71,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     interval: 'month',
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.FREE,
-    features: ['60 minutos/mês', 'Uploads até 5 GiB', 'Exportação até 1080p', 'Sem marca d’água'],
+    features: ['60 minutos/mês', 'Uploads até 5 GiB', 'Exportação até 1080p, limitada pela fonte', 'Sem marca d’água'],
   },
   {
     id: 'PRO',
@@ -82,7 +82,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     recommended: true,
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.PRO,
-    features: ['600 minutos/mês', 'Uploads até 5 GiB', 'Exportação até 1080p', 'Sem marca d’água'],
+    features: ['600 minutos/mês', 'Uploads até 5 GiB', 'Exportação até 1080p, limitada pela fonte', 'Sem marca d’água'],
   },
   {
     id: 'BUSINESS',
@@ -92,7 +92,7 @@ export const PUBLIC_PLANS: PublicPlan[] = [
     interval: 'month',
     version: PLAN_VERSION,
     limits: PLAN_LIMITS.BUSINESS,
-    features: ['2.000 minutos/mês', 'Fila prioritária', 'Exportação até 1080p', 'Suporte prioritário'],
+    features: ['2.000 minutos/mês', 'Fila prioritária', 'Exportação até 1080p, limitada pela fonte', 'Suporte prioritário'],
   },
 ];
 

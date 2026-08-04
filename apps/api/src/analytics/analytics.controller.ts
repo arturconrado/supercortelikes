@@ -1,4 +1,4 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, Post } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { CurrentUser } from '../auth/auth.decorators';
@@ -7,6 +7,7 @@ import { TtlCache } from '../common/ttl-cache';
 import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
+import { ProductEventDto } from './product-event.dto';
 
 type PipelineStatusGroup = { status: string; _count: { _all: number } };
 type RecentVideoSummary = {
@@ -170,8 +171,66 @@ export class AnalyticsController {
     this.cache.set(cacheKey, payload);
     return payload;
   }
+
+  @Post('events')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async productEvent(@CurrentUser() user: AuthenticatedUser, @Body() input: ProductEventDto): Promise<{ accepted: true; deduplicated: boolean }> {
+    const properties = sanitizeEventProperties(input.properties);
+    const route = sanitizeEventRoute(input.route);
+    try {
+      await this.prisma.productEvent.create({
+        data: {
+          eventId: input.eventId,
+          sessionId: input.sessionId,
+          userId: user.userId,
+          workspaceId: user.workspaceId,
+          name: input.name,
+          route,
+          properties: properties as Prisma.InputJsonObject,
+          occurredAt: new Date(input.occurredAt),
+        },
+      });
+      return { accepted: true, deduplicated: false };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        return { accepted: true, deduplicated: true };
+      }
+      throw error;
+    }
+  }
 }
 
 function serialize<T>(value: T): T {
   return JSON.parse(JSON.stringify(value, (_key, item: unknown) => (typeof item === 'bigint' ? item.toString() : item))) as T;
+}
+
+function sanitizeEventProperties(input?: Record<string, unknown>): Record<string, string | number | boolean | null> {
+  if (!input) return {};
+  const entries = Object.entries(input);
+  if (entries.length > 20) throw new BadRequestException('Product event properties exceed the allowed limit');
+  const output: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of entries) {
+    if (!/^[a-z][a-z0-9_]{0,39}$/.test(key)) throw new BadRequestException('Product event property name is invalid');
+    if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+      output[key] = value;
+      continue;
+    }
+    if (typeof value !== 'string' || value.length > 120 || looksSensitive(value)) {
+      throw new BadRequestException('Product event property value is invalid');
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function looksSensitive(value: string): boolean {
+  return /@|bearer\s|authorization|token=|signature=|x-amz-|eyJ[a-zA-Z0-9_-]{10,}/i.test(value);
+}
+
+function sanitizeEventRoute(route?: string): string | undefined {
+  if (!route) return undefined;
+  if (route.includes('?') || route.includes('#') || looksSensitive(route)) {
+    throw new BadRequestException('Product event route is invalid');
+  }
+  return route;
 }

@@ -2,11 +2,12 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException,
 import { CurrentUser } from '../auth/auth.decorators';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
-import { CreateProjectDto, UpdateProjectDto } from './projects.dto';
+import { CreateProjectDto, ReprocessProjectDto, UpdateProjectDto } from './projects.dto';
+import { ProjectProcessingService } from './project-processing.service';
 
 @Controller('projects')
 export class ProjectsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly processing: ProjectProcessingService) {}
 
   @Get()
   async list(@CurrentUser() user: AuthenticatedUser): Promise<unknown> {
@@ -58,6 +59,15 @@ export class ProjectsController {
     });
     if (result.count !== 1) throw new NotFoundException('Project not found');
     return this.prisma.project.findUnique({ where: { id } });
+  }
+
+  @Post(':id/process')
+  async reprocess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() _input: ReprocessProjectDto,
+  ): Promise<unknown> {
+    return this.processing.reprocess(id, user);
   }
 
   @Delete(':id')

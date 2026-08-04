@@ -1,9 +1,15 @@
-import { IsBoolean, IsHexColor, IsIn, IsNumber, IsOptional, IsString, Length, Matches, Max, MaxLength, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsEmail, IsHexColor, IsIn, IsNumber, IsOptional, IsString, Length, Matches, Max, MaxLength, Min } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsString()
   @Length(2, 80)
   name!: string;
+
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @IsEmail()
+  @MaxLength(254)
+  email!: string;
 }
 
 export class NotificationsDto {

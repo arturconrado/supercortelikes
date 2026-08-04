@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { FormEvent, useMemo, useState } from 'react';
 import { Alert, Button, Input, Label } from '@/components/ui';
 import { TurnstileBox } from '@/components/turnstile';
-import { api, endpoints, storeSession, unwrap } from '@/lib/api';
+import { api, endpoints, storeSession, trackProductEvent, unwrap } from '@/lib/api';
 import type { AuthResponse } from '@/lib/types';
 
 const passwordRules = [
@@ -36,7 +36,8 @@ export default function RegisterPage() {
   const termsVersion = process.env.NEXT_PUBLIC_TERMS_VERSION ?? 'terms-2026-06';
   const privacyVersion = process.env.NEXT_PUBLIC_PRIVACY_VERSION ?? 'privacy-2026-06';
   const configuredTurnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '';
-  const turnstileSiteKey = configuredTurnstileSiteKey === 'disabled' ? '' : configuredTurnstileSiteKey;
+  const turnstileRequired = process.env.NEXT_PUBLIC_TURNSTILE_REQUIRED === 'true';
+  const turnstileSiteKey = turnstileRequired && configuredTurnstileSiteKey !== 'disabled' ? configuredTurnstileSiteKey : '';
   const router = useRouter();
   const [form, setForm] = useState({ displayName: '', email: '', password: '' });
   const [accepted, setAccepted] = useState(false);
@@ -78,6 +79,7 @@ export default function RegisterPage() {
         }),
       }));
       storeSession(session);
+      void trackProductEvent('signup_completed');
       router.replace('/dashboard');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível criar a conta.');

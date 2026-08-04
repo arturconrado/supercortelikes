@@ -4,8 +4,9 @@
 
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
-html { background: #08090d; }
-body { margin: 0; background: #08090d; color: #f4f4f5; }
+html { max-width: 100%; background: #08090d; }
+body { min-width: 0; max-width: 100%; margin: 0; overflow-wrap: anywhere; background: #08090d; color: #f4f4f5; }
+img, video, svg, canvas { max-width: 100%; }
 ::selection { background: rgba(201, 255, 66, .28); color: #fff; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #090a0e; }

@@ -52,8 +52,8 @@ async function bootstrap(): Promise<void> {
   });
   app.enableCors({
     origin: environment.CORS_ORIGINS,
-    credentials: false,
-    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type', 'idempotency-key', 'x-project-id', 'x-requested-with'],
   });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));

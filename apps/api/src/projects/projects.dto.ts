@@ -1,4 +1,4 @@
-import { IsOptional, IsString, Length, MaxLength } from 'class-validator';
+import { Equals, IsBoolean, IsOptional, IsString, Length, MaxLength } from 'class-validator';
 
 export class CreateProjectDto {
   @IsString()
@@ -21,4 +21,10 @@ export class UpdateProjectDto {
   @IsString()
   @MaxLength(1000)
   description?: string;
+}
+
+export class ReprocessProjectDto {
+  @IsBoolean()
+  @Equals(true)
+  confirmReplace!: true;
 }

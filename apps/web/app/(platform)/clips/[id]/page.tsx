@@ -18,7 +18,7 @@ import { useParams } from 'next/navigation';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Badge, Button, Card, Input, Label, PageHeader, Skeleton, StatusBadge, Textarea } from '@/components/ui';
 import { useResource } from '@/hooks/use-resource';
-import { api } from '@/lib/api';
+import { api, trackProductEvent } from '@/lib/api';
 import { captionTrackDataUrl } from '@/lib/captions';
 import type { Clip } from '@/lib/types';
 import { cn, formatDuration } from '@/lib/utils';
@@ -61,6 +61,7 @@ export default function ClipViewerPage() {
   const [exportRequested, setExportRequested] = useState(false);
   const [message, setMessage] = useState('');
   const previewRequested = useRef(false);
+  const exportReadyTracked = useRef(false);
 
   const caption = clip?.captions?.[0];
   const captionCues = useMemo(() => caption?.cues ?? [], [caption?.cues]);
@@ -139,6 +140,10 @@ export default function ClipViewerPage() {
     if (!exportRequested) return;
     if (clip?.downloadUrl) {
       setExportRequested(false);
+      if (!exportReadyTracked.current) {
+        exportReadyTracked.current = true;
+        void trackProductEvent('export_succeeded');
+      }
       setMessage('Exportação pronta. Você já pode baixar o MP4.');
       return;
     }
@@ -148,6 +153,10 @@ export default function ClipViewerPage() {
         setData(updated);
         if (updated.downloadUrl) {
           setExportRequested(false);
+          if (!exportReadyTracked.current) {
+            exportReadyTracked.current = true;
+            void trackProductEvent('export_succeeded');
+          }
           setMessage('Exportação pronta. Você já pode baixar o MP4.');
         }
       } catch {
@@ -243,6 +252,7 @@ export default function ClipViewerPage() {
   async function createExport() {
     setExporting(true);
     setExportRequested(false);
+    exportReadyTracked.current = false;
     setMessage('');
     try {
       await api(`/clips/${id}/export`, {
@@ -252,6 +262,10 @@ export default function ClipViewerPage() {
       const updated = await api<Clip>(`/clips/${id}`);
       setData(updated);
       setExportRequested(!updated.downloadUrl);
+      if (updated.downloadUrl) {
+        exportReadyTracked.current = true;
+        void trackProductEvent('export_succeeded');
+      }
       setMessage(updated.downloadUrl ? 'Exportação pronta. Você já pode baixar o MP4.' : 'Exportação em processamento. Esta tela será atualizada automaticamente.');
       setActiveTab('export');
     } catch (reason) {
@@ -293,7 +307,7 @@ export default function ClipViewerPage() {
           <div className="hidden flex-wrap gap-2 sm:flex">
             {clip.downloadUrl && (
               <Button asChild variant="secondary">
-                <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}>
+                <a href={clip.downloadUrl} download={clipDownloadFilename(clip)} onClick={() => void trackProductEvent('export_downloaded')}>
                   <Download className="size-4"/>
                   Baixar
                 </a>
@@ -359,7 +373,7 @@ export default function ClipViewerPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(360px,.78fr)_1.22fr]">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,.78fr)_minmax(0,1.22fr)]">
         <Card className={cn('overflow-hidden bg-black', activeTab !== 'preview' && 'hidden lg:block')}>
           <div role="region" aria-label="Prévia do corte" className={cn('relative mx-auto max-h-[680px] bg-black', previewAspectClass)}>
             {source ? (
@@ -586,7 +600,7 @@ export default function ClipViewerPage() {
             <div className="mt-5 flex flex-wrap gap-2">
               {clip.downloadUrl && (
                 <Button asChild variant="secondary">
-                  <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}><Download className="size-4"/>Baixar MP4</a>
+                  <a href={clip.downloadUrl} download={clipDownloadFilename(clip)} onClick={() => void trackProductEvent('export_downloaded')}><Download className="size-4"/>Baixar MP4</a>
                 </Button>
               )}
               <Button onClick={() => void createExport()} disabled={exporting || (exportPending && !clip.downloadUrl)}>

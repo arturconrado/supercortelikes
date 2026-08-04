@@ -437,7 +437,7 @@ export class MediaStageProcessor {
       mimeType?: string | null;
     },
   ): Promise<void> {
-    if (job.stage === 'ingestion') return this.persistIngestion(job.videoId, response, video);
+    if (job.stage === 'ingestion') return this.persistIngestion(job.videoId, job.pipelineRunId, response, video);
     if (job.stage === 'transcription') return this.persistTranscription(job.videoId, response);
     if (job.stage === 'segmentation') return this.persistSegments(job.videoId, response);
     if (job.stage === 'scoring') return this.persistScores(job.videoId, response);
@@ -538,6 +538,7 @@ export class MediaStageProcessor {
 
   private async persistIngestion(
     videoId: string,
+    pipelineRunId: string,
     response: MediaStageResponse,
     video: {
       sourceUrl?: string | null;
@@ -574,8 +575,8 @@ export class MediaStageProcessor {
       },
     });
     try {
-      await this.usage.assertCanProcessVideo(videoId);
-      await this.usage.recordProcessingMinutes(videoId);
+      await this.usage.assertCanProcessVideo(videoId, pipelineRunId);
+      await this.usage.recordProcessingMinutes(videoId, pipelineRunId);
     } catch (error) {
       if (error instanceof HttpException && error.getStatus() === 402) {
         throw Object.assign(new UnrecoverableError(error.message), { code: 'PLAN_LIMIT_EXCEEDED' });

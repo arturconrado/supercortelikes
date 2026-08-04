@@ -1,4 +1,4 @@
-import { api } from './api';
+import { api, trackProductEvent } from './api';
 import type { PlanLimits, Video, VideoProcessingOptions } from './types';
 
 const MAX_BYTES = 5 * 1024 ** 3;
@@ -40,6 +40,7 @@ export async function uploadVideo(
   signal?: AbortSignal,
   limits?: Pick<PlanLimits, 'maxUploadBytes'>,
   processingOptions?: VideoProcessingOptions,
+  projectId?: string,
 ): Promise<Video> {
   const validation = validateVideo(file, limits);
   if (validation) throw new Error(validation);
@@ -55,7 +56,7 @@ export async function uploadVideo(
   const session = await api<MultipartSession>('/videos/presigned-upload', {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey },
-    body: JSON.stringify({ filename: file.name, mimeType: mimeByExtension[extension], sizeBytes: file.size, processingOptions }),
+    body: JSON.stringify({ filename: file.name, mimeType: mimeByExtension[extension], sizeBytes: file.size, processingOptions, ...(projectId ? { projectId } : {}) }),
   });
   if (session.completed) {
     sessionStorage.removeItem(stateKey);
@@ -76,6 +77,7 @@ export async function uploadVideo(
   };
   reportProgress();
 
+  let uploadStage: 'multipart' | 'confirm' = 'multipart';
   try {
     const pending = Array.from({ length: state.partCount }, (_, index) => index + 1)
       .filter((partNumber) => !state!.completedParts[String(partNumber)]);
@@ -115,6 +117,7 @@ export async function uploadVideo(
     const parts = Object.entries(state.completedParts)
       .map(([partNumber, etag]) => ({ partNumber: Number(partNumber), etag }))
       .sort((left, right) => left.partNumber - right.partNumber);
+    uploadStage = 'confirm';
     const video = await api<Video>('/videos/confirm-upload', {
       method: 'POST',
       body: JSON.stringify({ videoId: state.videoId, uploadId: state.uploadId, parts }),
@@ -126,6 +129,9 @@ export async function uploadVideo(
     if (isAbort(error)) {
       await api<void>(`/videos/${state.videoId}/upload`, { method: 'DELETE' }).catch(() => undefined);
       sessionStorage.removeItem(stateKey);
+      await trackProductEvent('upload_cancelled', { stage: 'multipart' });
+    } else if (uploadStage === 'multipart') {
+      await trackProductEvent('upload_failed', { stage: 'multipart' });
     }
     throw error;
   }

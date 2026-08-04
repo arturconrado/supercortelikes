@@ -2,7 +2,7 @@
 
 import { CheckCircle2, Clipboard, FileVideo, Info, Link2, LoaderCircle, UploadCloud, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { DragEvent, FormEvent, useRef, useState } from 'react';
+import { DragEvent, FormEvent, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Input, Label, PageHeader, Progress } from '@/components/ui';
 import { api, endpoints } from '@/lib/api';
 import { useResource } from '@/hooks/use-resource';
@@ -64,7 +64,12 @@ export default function UploadPage() {
   const [urlSuccess, setUrlSuccess] = useState('');
   const [urlTouched, setUrlTouched] = useState(false);
   const [processingOptions, setProcessingOptions] = useState<VideoProcessingOptions>(DEFAULT_PROCESSING_OPTIONS);
+  const [projectId, setProjectId] = useState('');
   const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setProjectId(new URLSearchParams(window.location.search).get('projectId') ?? '');
+  }, []);
 
   function addFiles(files: FileList | File[]) {
     const candidates = Array.from(files);
@@ -102,6 +107,7 @@ export default function UploadPage() {
           controller.signal,
           limits,
           processingOptions,
+          projectId || undefined,
         );
         update(index, { status: 'done', progress: 100, result, controller: undefined });
         if (singleFile) router.push(`/library/${result.id}`);
@@ -135,7 +141,7 @@ export default function UploadPage() {
       const video = await api<Video>(endpoints.imports, {
         method: 'POST',
         headers: { 'Idempotency-Key': crypto.randomUUID() },
-        body: JSON.stringify({ url: value, processingOptions }),
+        body: JSON.stringify({ url: value, processingOptions, ...(projectId ? { projectId } : {}) }),
       });
       setUrl('');
       setUrlSuccess('Importação iniciada. Abrindo a tela do vídeo…');
@@ -180,8 +186,8 @@ export default function UploadPage() {
         </button>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
-        <div>
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
+        <div className="min-w-0">
           <ProcessingOptionsPanel value={processingOptions} onChange={setProcessingOptions}/>
 
           {source === 'file' ? (
@@ -329,7 +335,7 @@ function ProcessingOptionsPanel({ value, onChange }: { value: VideoProcessingOpt
 
       <div className="mt-5">
         <Label>Duração dos cortes</Label>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {durationPresets.map((preset) => (
             <button
               key={preset.value}
@@ -344,7 +350,7 @@ function ProcessingOptionsPanel({ value, onChange }: { value: VideoProcessingOpt
         </div>
       </div>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-3">
+      <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-3">
         <div>
           <Label htmlFor="clip-count">Quantidade de cortes</Label>
           <select
@@ -426,7 +432,7 @@ function UploadInfo({ quota, options, files }: { quota?: UsageSnapshot; options:
 }
 
 function exportQualityLabel(value: '720p' | '1080p'): string {
-  return `export ${value}`;
+  return `export ${value} no máximo, sem upscale acima da fonte`;
 }
 
 function validateImportUrl(value: string): string {

@@ -121,6 +121,7 @@ model User {
   passwordResets          PasswordResetToken[]
   emailVerifications      EmailVerificationToken[]
   auditLogs               AuditLog[]
+  productEvents           ProductEvent[]
 
   @@map("users")
 }
@@ -145,6 +146,7 @@ model Workspace {
   socialConnections SocialConnection[]
   usageEvents   UsageEvent[]
   auditLogs     AuditLog[]
+  productEvents ProductEvent[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -691,4 +693,23 @@ model AuditLog {
   @@index([workspaceId, createdAt])
   @@index([userId, createdAt])
   @@map("audit_logs")
+}
+
+model ProductEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  eventId     String    @unique @db.Uuid
+  sessionId   String    @db.Uuid
+  userId      String    @db.Uuid
+  workspaceId String    @db.Uuid
+  name        String    @db.VarChar(80)
+  route       String?   @db.VarChar(240)
+  properties  Json?
+  occurredAt  DateTime
+  receivedAt  DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, name, occurredAt])
+  @@index([userId, occurredAt])
+  @@map("product_events")
 }

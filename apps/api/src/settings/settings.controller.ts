@@ -16,7 +16,7 @@ export class SettingsController {
 
   @Patch('users/me')
   async profile(@CurrentUser() user: AuthenticatedUser, @Body() input: UpdateProfileDto): Promise<unknown> {
-    return this.settings.updateProfile(user, input.name);
+    return this.settings.updateProfile(user, input);
   }
 
   @Get('users/me/notifications')

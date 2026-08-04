@@ -9,6 +9,7 @@ import { VideoImportService } from './video-import.service';
 import { DirectUploadService } from './direct-upload.service';
 import { MediaClientModule } from '../media/media-client.module';
 import { VideoLifecycleService } from './video-lifecycle.service';
+import { OrphanUploadCleanupService } from './orphan-upload-cleanup.service';
 
 @Module({
   imports: [StorageModule, UsageModule, MediaClientModule],
@@ -20,6 +21,7 @@ import { VideoLifecycleService } from './video-lifecycle.service';
     VideoImportService,
     DirectUploadService,
     VideoLifecycleService,
+    OrphanUploadCleanupService,
   ],
   exports: [VideoLifecycleService],
 })

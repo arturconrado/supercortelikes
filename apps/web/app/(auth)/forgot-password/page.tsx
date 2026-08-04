@@ -7,7 +7,9 @@ import { TurnstileBox } from '@/components/turnstile';
 import { api } from '@/lib/api';
 
 export default function ForgotPasswordPage() {
-  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '';
+  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_REQUIRED === 'true'
+    ? process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? ''
+    : '';
   const [email, setEmail] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
   const [busy, setBusy] = useState(false);

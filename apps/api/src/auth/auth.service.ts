@@ -204,13 +204,15 @@ export class AuthService {
   }
 
   private async issueTokens(identity: AuthenticatedUser): Promise<AuthTokens> {
+    const sessionId = randomUUID();
     const accessToken = await this.jwt.signAsync(
-      { sub: identity.userId, wid: identity.workspaceId, email: identity.email, type: 'access' },
+      { sub: identity.userId, wid: identity.workspaceId, email: identity.email, type: 'access', sid: sessionId },
       { expiresIn: this.accessTtl as never },
     );
     const refreshToken = randomBytes(48).toString('base64url');
     await this.prisma.refreshSession.create({
       data: {
+        id: sessionId,
         userId: identity.userId,
         tokenHash: this.hashToken(refreshToken),
         expiresAt: new Date(Date.now() + this.refreshDays * 24 * 60 * 60 * 1000),

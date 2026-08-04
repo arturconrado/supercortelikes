@@ -2,27 +2,28 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { api, clearSession, endpoints, hasSession, storedUser, unwrap } from '@/lib/api';
+import { api, clearSession, endpoints, storedUser, storeUser, trackProductEvent, unwrap } from '@/lib/api';
 import type { User } from '@/lib/types';
 
-type AuthContextValue = { user?: User; loading: boolean; logout: () => void; refresh: () => Promise<void> };
-const AuthContext = createContext<AuthContextValue>({ loading: true, logout() {}, async refresh() {} });
-const PUBLIC_ROUTES = new Set(['/login', '/register', '/forgot-password', '/terms', '/privacy', '/refunds']);
+type AuthContextValue = { user?: User; loading: boolean; logout: () => Promise<void>; refresh: () => Promise<void> };
+const AuthContext = createContext<AuthContextValue>({ loading: true, async logout() {}, async refresh() {} });
+const PUBLIC_ROUTES = new Set(['/', '/login', '/register', '/forgot-password', '/verify-email', '/reset-password', '/terms', '/privacy', '/refunds']);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User>();
   const [loading, setLoading] = useState(true);
   const router = useRouter(); const pathname = usePathname();
   const refresh = useCallback(async () => {
-    if (!hasSession()) { setUser(undefined); setLoading(false); return; }
     const cached = storedUser();
     if (cached) setUser(cached);
     setLoading(true);
     try {
       const identity = unwrap(await api<(User & { displayName?: string }) | { data: User & { displayName?: string } }>(endpoints.me));
-      setUser({ ...identity, name: identity.name ?? identity.displayName ?? cached?.name ?? identity.email });
+      const nextUser = { ...identity, name: identity.name ?? identity.displayName ?? cached?.name ?? identity.email };
+      storeUser(nextUser);
+      setUser(nextUser);
     }
-    catch { if (!hasSession()) setUser(undefined); }
+    catch { setUser(undefined); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => {
@@ -36,7 +37,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('clipbr:session', listener);
   }, [refresh]);
   useEffect(() => { if (!loading && !user && !PUBLIC_ROUTES.has(pathname)) router.replace(`/login?next=${encodeURIComponent(pathname)}`); }, [loading, user, pathname, router]);
-  const logout = () => { clearSession(); setUser(undefined); router.replace('/login'); };
+  const logout = async () => {
+    await trackProductEvent('logout_completed');
+    try { await api('/auth/logout', { method: 'POST', body: '{}' }); } catch { /* The local session must still end. */ }
+    clearSession(); setUser(undefined); router.replace('/login');
+  };
   return <AuthContext.Provider value={{ user, loading, logout, refresh }}>{children}</AuthContext.Provider>;
 }
 

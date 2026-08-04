@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { AuthProvider } from '@/components/auth-provider';
+import { AnalyticsConsentBanner } from '@/components/analytics-consent';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin'], display: 'swap' });
@@ -11,5 +12,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="pt-BR"><body className={inter.className}><AuthProvider>{children}</AuthProvider></body></html>;
+  return <html lang="pt-BR"><body className={inter.className}><AuthProvider>{children}<AnalyticsConsentBanner /></AuthProvider></body></html>;
 }

@@ -38,6 +38,16 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('profile');
   const { user, refresh } = useAuth();
 
+  useEffect(() => {
+    const syncTab = () => {
+      const candidate = window.location.hash.slice(1) as Tab;
+      if (tabs.some((item) => item.id === candidate)) setTab(candidate);
+    };
+    syncTab();
+    window.addEventListener('hashchange', syncTab);
+    return () => window.removeEventListener('hashchange', syncTab);
+  }, []);
+
   return (
     <>
       <PageHeader
@@ -45,12 +55,12 @@ export default function SettingsPage() {
         title="Configurações"
         description="Personalize sua conta, sua marca e as notificações."
       />
-      <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
         <nav className="h-fit rounded-2xl border border-white/[.07] bg-panel p-2">
           {tabs.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
-              onClick={() => setTab(id)}
+              onClick={() => { setTab(id); window.history.replaceState(null, '', `/settings#${id}`); }}
               className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition ${tab === id ? 'bg-lime/[.09] text-lime' : 'text-zinc-500 hover:bg-white/[.04] hover:text-white'}`}
             >
               <Icon className="size-4"/>{label}
@@ -96,10 +106,11 @@ function ProfileForm({ initialName, initialEmail, afterSave }: { initialName: st
     setBusy(true);
     setMessage('');
     try {
+      const emailChanged = form.email.trim().toLowerCase() !== initialEmail.trim().toLowerCase();
       await api(endpoints.profile, { method: 'PATCH', body: JSON.stringify(form) });
       await afterSave();
       setFailed(false);
-      setMessage('Perfil atualizado.');
+      setMessage(emailChanged ? 'Perfil atualizado. O novo e-mail precisará ser verificado quando a verificação estiver ativa.' : 'Perfil atualizado.');
     } catch (reason) {
       setFailed(true);
       setMessage(reason instanceof Error ? reason.message : 'Não foi possível atualizar o perfil.');

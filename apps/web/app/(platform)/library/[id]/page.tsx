@@ -204,7 +204,7 @@ export default function VideoPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.4fr_.6fr]">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,.6fr)]">
         <Card className="overflow-hidden">
           <div className="aspect-video bg-black">
             {video.playbackUrl ? (

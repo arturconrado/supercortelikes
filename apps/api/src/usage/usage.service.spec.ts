@@ -23,6 +23,7 @@ function prisma(overrides: Record<string, unknown> = {}) {
     usageEvent: {
       aggregate: aggregateSequence(),
       upsert: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null),
     },
     user: { findUnique: vi.fn().mockResolvedValue({ emailVerifiedAt: new Date() }) },
     video: { findUnique: vi.fn().mockResolvedValue({ id: 'video', workspaceId: actor.workspaceId, ownerId: actor.userId, durationMs: 60_000n }) },
@@ -63,9 +64,30 @@ describe('UsageService', () => {
   it('records processing minutes idempotently', async () => {
     const db = prisma();
     const service = new UsageService(db, config());
-    await service.recordProcessingMinutes('video');
+    await service.recordProcessingMinutes('video', 'run');
     expect(db.usageEvent.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      where: { idempotencyKey: 'processing.minutes:video' },
+      where: { idempotencyKey: 'processing.minutes:video:run' },
     }));
+  });
+
+  it('checks aggregate reprocessing quota and recognizes a pipeline reservation', async () => {
+    const db = prisma({
+      video: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'video-a', durationMs: 60_000n },
+          { id: 'video-b', durationMs: 120_000n },
+        ]),
+        findUnique: vi.fn().mockResolvedValue({ id: 'video-a', workspaceId: actor.workspaceId, ownerId: actor.userId, durationMs: 60_000n }),
+      },
+      usageEvent: {
+        aggregate: aggregateSequence(100, 0),
+        upsert: vi.fn(),
+        findUnique: vi.fn().mockResolvedValue({ id: 'reserved' }),
+      },
+    });
+    const service = new UsageService(db, config());
+
+    await expect(service.assertCanProcessVideos(['video-a', 'video-b'], actor)).resolves.toMatchObject({ plan: 'PRO' });
+    await expect(service.assertCanProcessVideo('video-a', 'run-a')).resolves.toMatchObject({ plan: 'PRO' });
   });
 });

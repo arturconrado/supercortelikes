@@ -64,18 +64,37 @@ describe('authentication recovery surface', () => {
     const controller = new AuthController({
       register: vi.fn().mockResolvedValue(registered), login: vi.fn().mockResolvedValue(logged),
       refresh: vi.fn().mockResolvedValue(registered.tokens), logout: vi.fn(), me: vi.fn().mockResolvedValue({ id: user.userId }),
-    } as any);
-    expect((await controller.register({
+    } as any, config({ NODE_ENV: 'production', JWT_REFRESH_DAYS: 30 }));
+    const request = { ip: '127.0.0.1', headers: { 'x-requested-with': 'picashorts-web' } } as any;
+    const reply = { header: vi.fn() } as any;
+    const webRegistration = await controller.register({
       email: user.email,
       displayName: 'Release User',
       password: 'ReleaseGate123!',
       acceptedTermsVersion: 'terms-2026-06',
       acceptedPrivacyVersion: 'privacy-2026-06',
-    })).accessToken).toBe('access-token');
-    expect((await controller.login({ email: user.email, password: 'ReleaseGate123!' })).user).toBeDefined();
-    expect((await controller.refresh('refresh-token' as any)).tokens).toBeDefined();
-    await controller.logout('refresh-token' as any);
+    }, request, reply);
+    expect(webRegistration.accessToken).toBe('access-token');
+    expect(webRegistration).not.toHaveProperty('refreshToken');
+    expect((await controller.login({ email: user.email, password: 'ReleaseGate123!' }, request, reply)).user).toBeDefined();
+    expect((await controller.refresh({ refreshToken: 'refresh-token' }, request, reply)).tokens).toBeDefined();
+    await controller.logout({ refreshToken: 'refresh-token' }, request, reply);
+    expect(reply.header).toHaveBeenCalledWith('Set-Cookie', expect.stringMatching(/^__Host-picashorts\.refresh=.*Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+; Secure$/));
+    expect(reply.header).toHaveBeenCalledWith('Set-Cookie', expect.stringMatching(/^__Host-picashorts\.refresh=; Path=\/; HttpOnly; SameSite=Lax; Max-Age=0; Secure$/));
     expect(await controller.me(user)).toBeDefined();
+  });
+
+  it('rotates refresh cookies without exposing them to the web client', async () => {
+    const auth = { refresh: vi.fn().mockResolvedValue({ accessToken: 'next-access', refreshToken: 'next-refresh', expiresInSeconds: 900 }) };
+    const controller = new AuthController(auth as any, config({ NODE_ENV: 'production', JWT_REFRESH_DAYS: 30 }));
+    const request = { headers: { cookie: '__Host-picashorts.refresh=old-refresh', 'x-requested-with': 'picashorts-web' } } as any;
+    const reply = { header: vi.fn() } as any;
+
+    const response = await controller.refresh(undefined, request, reply);
+
+    expect(auth.refresh).toHaveBeenCalledWith('old-refresh');
+    expect(response.tokens).toEqual({ accessToken: 'next-access', expiresInSeconds: 900 });
+    expect(reply.header).toHaveBeenCalledWith('Set-Cookie', expect.stringContaining('__Host-picashorts.refresh=next-refresh'));
   });
 
   it('rejects invalid login, refresh, and bearer tokens', async () => {
@@ -90,7 +109,11 @@ describe('authentication recovery surface', () => {
       getClass: () => undefined,
       switchToHttp: () => ({ getRequest: () => request }),
     };
-    const guard = new AuthGuard({ verifyAsync: vi.fn() } as any, { getAllAndOverride: vi.fn().mockReturnValue(false) } as any);
+    const guard = new AuthGuard(
+      { verifyAsync: vi.fn() } as any,
+      { getAllAndOverride: vi.fn().mockReturnValue(false) } as any,
+      { refreshSession: { findUnique: vi.fn() } } as any,
+    );
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException);
     request.headers.authorization = 'Bearer bad';
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException);
@@ -100,10 +123,22 @@ describe('authentication recovery surface', () => {
     const request: any = { headers: { authorization: 'Bearer valid' } };
     const context: any = { getHandler: vi.fn(), getClass: vi.fn(), switchToHttp: () => ({ getRequest: () => request }) };
     const reflector = { getAllAndOverride: vi.fn().mockReturnValueOnce(true).mockReturnValue(false) };
-    const guard = new AuthGuard({ verifyAsync: vi.fn().mockResolvedValue({ type: 'access', sub: user.userId, wid: user.workspaceId, email: user.email }) } as any, reflector as any);
+    const sessions = { refreshSession: { findUnique: vi.fn().mockResolvedValue({ userId: user.userId, revokedAt: null, expiresAt: new Date(Date.now() + 60_000) }) } };
+    const guard = new AuthGuard({ verifyAsync: vi.fn().mockResolvedValue({ type: 'access', sub: user.userId, wid: user.workspaceId, email: user.email, sid: 'session' }) } as any, reflector as any, sessions as any);
     expect(await guard.canActivate(context)).toBe(true);
     expect(await guard.canActivate(context)).toBe(true);
     expect(request.user).toEqual(user);
+  });
+
+  it('rejects an access token as soon as its session is revoked', async () => {
+    const request: any = { headers: { authorization: 'Bearer valid' } };
+    const context: any = { getHandler: vi.fn(), getClass: vi.fn(), switchToHttp: () => ({ getRequest: () => request }) };
+    const guard = new AuthGuard(
+      { verifyAsync: vi.fn().mockResolvedValue({ type: 'access', sub: user.userId, wid: user.workspaceId, email: user.email, sid: 'revoked-session' }) } as any,
+      { getAllAndOverride: vi.fn().mockReturnValue(false) } as any,
+      { refreshSession: { findUnique: vi.fn().mockResolvedValue({ userId: user.userId, revokedAt: new Date(), expiresAt: new Date(Date.now() + 60_000) }) } } as any,
+    );
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException);
   });
 });
 

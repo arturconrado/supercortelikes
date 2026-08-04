@@ -153,8 +153,8 @@ describe('MediaStageProcessor persistence', () => {
     await processor.process(renderJob('rendering'));
     await processor.process(renderJob('exports'));
     expect(prisma.video.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ width: 640, videoCodec: 'h264' }) }));
-    expect(usage.assertCanProcessVideo).toHaveBeenCalledWith('video');
-    expect(usage.recordProcessingMinutes).toHaveBeenCalledWith('video');
+    expect(usage.assertCanProcessVideo).toHaveBeenCalledWith('video', 'run');
+    expect(usage.recordProcessingMinutes).toHaveBeenCalledWith('video', 'run');
     expect(prisma.transcript.upsert).toHaveBeenCalled();
     expect(prisma.segment.createMany).toHaveBeenCalled();
     expect(prisma.viralScore.upsert).toHaveBeenCalled();

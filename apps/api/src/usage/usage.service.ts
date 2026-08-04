@@ -1,4 +1,4 @@
-import { HttpException, Injectable, PayloadTooLargeException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, HttpException, Injectable, PayloadTooLargeException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type Plan, type Subscription } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
@@ -107,7 +107,7 @@ export class UsageService {
     return snapshot;
   }
 
-  async assertCanProcessVideo(videoId: string): Promise<UsageSnapshot> {
+  async assertCanProcessVideo(videoId: string, pipelineRunId?: string): Promise<UsageSnapshot> {
     const video = await this.prisma.video.findUnique({
       where: { id: videoId },
       select: { id: true, workspaceId: true, ownerId: true, durationMs: true },
@@ -120,14 +120,40 @@ export class UsageService {
     if (durationSeconds > snapshot.limits.maxVideoDurationSeconds) {
       throw paymentRequired('O vídeo excede a duração máxima do plano atual.');
     }
-    const requestedMinutes = durationSeconds / 60;
+    const alreadyReserved = pipelineRunId
+      ? await this.prisma.usageEvent.findUnique({ where: { idempotencyKey: processingMinutesIdempotencyKey(videoId, pipelineRunId) }, select: { id: true } })
+      : null;
+    const requestedMinutes = alreadyReserved ? 0 : durationSeconds / 60;
     if (snapshot.usage.minutes + requestedMinutes > snapshot.usage.limit) {
       throw paymentRequired('Este processamento excede o limite mensal do plano atual.');
     }
     return snapshot;
   }
 
-  async recordProcessingMinutes(videoId: string): Promise<void> {
+  async assertCanProcessVideos(videoIds: string[], actor: AuthenticatedUser): Promise<UsageSnapshot> {
+    if (!videoIds.length) throw new BadRequestException('Nenhum vídeo foi selecionado para processamento.');
+    await this.assertEmailVerified(actor.userId);
+    const videos = await this.prisma.video.findMany({
+      where: { id: { in: videoIds }, workspaceId: actor.workspaceId },
+      select: { id: true, durationMs: true },
+    });
+    if (videos.length !== new Set(videoIds).size || videos.some((video) => !video.durationMs)) {
+      throw new BadRequestException('Todos os vídeos precisam ter duração conhecida antes do reprocessamento.');
+    }
+    const snapshot = await this.snapshot(actor.workspaceId);
+    if (snapshot.status === 'BLOCKED') throw paymentRequired('Assinatura expirada ou inadimplente.');
+    const durations = videos.map((video) => Number(video.durationMs) / 1000);
+    if (durations.some((seconds) => seconds > snapshot.limits.maxVideoDurationSeconds)) {
+      throw paymentRequired('Um dos vídeos excede a duração máxima do plano atual.');
+    }
+    const requestedMinutes = durations.reduce((total, seconds) => total + seconds / 60, 0);
+    if (snapshot.usage.minutes + requestedMinutes > snapshot.usage.limit) {
+      throw paymentRequired('Este reprocessamento excede o limite mensal do plano atual.');
+    }
+    return snapshot;
+  }
+
+  async recordProcessingMinutes(videoId: string, pipelineRunId: string): Promise<void> {
     const video = await this.prisma.video.findUnique({
       where: { id: videoId },
       select: { id: true, workspaceId: true, durationMs: true },
@@ -135,15 +161,15 @@ export class UsageService {
     if (!video?.workspaceId || !video.durationMs) return;
     const quantity = new Prisma.Decimal(Number(video.durationMs) / 60_000);
     await this.prisma.usageEvent.upsert({
-      where: { idempotencyKey: `processing.minutes:${videoId}` },
+      where: { idempotencyKey: processingMinutesIdempotencyKey(videoId, pipelineRunId) },
       create: {
-        idempotencyKey: `processing.minutes:${videoId}`,
+        idempotencyKey: processingMinutesIdempotencyKey(videoId, pipelineRunId),
         workspaceId: video.workspaceId,
         videoId,
         type: 'processing.minutes',
         quantity,
         unit: 'minute',
-        metadata: { source: 'pipeline.ingestion' },
+        metadata: { source: 'pipeline.ingestion', pipelineRunId },
       },
       update: { quantity },
     });
@@ -174,6 +200,10 @@ export class UsageService {
     }
     return { plan: 'FREE', status: subscription.plan === 'FREE' ? 'FREE' : 'BLOCKED' };
   }
+}
+
+export function processingMinutesIdempotencyKey(videoId: string, pipelineRunId: string): string {
+  return `processing.minutes:${videoId}:${pipelineRunId}`;
 }
 
 function startOfMonth(value: Date): Date {

@@ -41,7 +41,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.5fr_1fr]">
+      <div className="mt-6 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <Card className="p-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>

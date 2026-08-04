@@ -160,6 +160,7 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=${{ vars.VPS_PUBLIC_API_URL || 'http://localhost:3001' }}
             NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ vars.VPS_NEXT_PUBLIC_TURNSTILE_SITE_KEY || '' }}
+            NEXT_PUBLIC_TURNSTILE_REQUIRED=${{ vars.VPS_TURNSTILE_REQUIRED || 'false' }}
             NEXT_PUBLIC_TERMS_VERSION=${{ vars.NEXT_PUBLIC_TERMS_VERSION || 'terms-2026-06' }}
             NEXT_PUBLIC_PRIVACY_VERSION=${{ vars.NEXT_PUBLIC_PRIVACY_VERSION || 'privacy-2026-06' }}
           tags: |

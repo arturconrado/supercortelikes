@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import * as argon2 from 'argon2';
@@ -6,7 +6,7 @@ import { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../database/prisma.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
-import type { BrandKitDto, BrandLogoDto, ChangePasswordDto, NotificationsDto } from './settings.dto';
+import type { BrandKitDto, BrandLogoDto, ChangePasswordDto, NotificationsDto, UpdateProfileDto } from './settings.dto';
 
 @Injectable()
 export class SettingsService {
@@ -15,13 +15,42 @@ export class SettingsService {
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 
-  async updateProfile(user: AuthenticatedUser, name: string): Promise<unknown> {
-    const updated = await this.prisma.user.update({
-      where: { id: user.userId },
-      data: { displayName: name.trim() },
-      select: { id: true, email: true, displayName: true },
-    });
-    return { id: updated.id, email: updated.email, name: updated.displayName };
+  async updateProfile(user: AuthenticatedUser, input: UpdateProfileDto): Promise<unknown> {
+    const current = await this.prisma.user.findUnique({ where: { id: user.userId }, select: { email: true } });
+    if (!current) throw new UnauthorizedException('Account no longer exists');
+    const emailChanged = current.email !== input.email;
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const account = await tx.user.update({
+          where: { id: user.userId },
+          data: {
+            displayName: input.name.trim(),
+            email: input.email,
+            ...(emailChanged ? { emailVerifiedAt: null } : {}),
+          },
+          select: { id: true, email: true, displayName: true, emailVerifiedAt: true },
+        });
+        if (emailChanged) {
+          await tx.emailVerificationToken.deleteMany({ where: { userId: user.userId, usedAt: null } });
+        }
+        await tx.auditLog.create({
+          data: {
+            userId: user.userId,
+            workspaceId: user.workspaceId,
+            action: emailChanged ? 'account.profile_email_changed' : 'account.profile_updated',
+            resource: 'user',
+            resourceId: user.userId,
+          },
+        });
+        return account;
+      });
+      return { id: updated.id, email: updated.email, name: updated.displayName, emailVerifiedAt: updated.emailVerifiedAt };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('An account with this email already exists');
+      }
+      throw error;
+    }
   }
 
   async notifications(user: AuthenticatedUser): Promise<NotificationsDto> {

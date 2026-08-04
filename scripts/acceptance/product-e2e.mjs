@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { access, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaClient } from '@prisma/client';
+import { ListMultipartUploadsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 
 const apiUrl = (process.env.PRODUCT_E2E_API_URL ?? process.env.ACCEPTANCE_API_URL ?? 'http://localhost:3001').replace(/\/$/, '');
 const webUrl = (process.env.PRODUCT_E2E_WEB_URL ?? process.env.ACCEPTANCE_WEB_URL ?? '').replace(/\/$/, '');
@@ -23,11 +25,26 @@ const suffix = randomUUID().slice(0, 8);
 const password = process.env.PRODUCT_E2E_PASSWORD ?? 'ProductGate123!';
 const generatedEmail = `product-e2e-${suffix}@clipbr.test`;
 const existingEmail = process.env.PRODUCT_E2E_EMAIL;
-const cleanup = boolEnv('PRODUCT_E2E_CLEANUP', false);
+const cleanup = boolEnv('PRODUCT_E2E_CLEANUP', true);
 const enableBillingWrite = boolEnv('PRODUCT_E2E_ENABLE_BILLING_WRITE', false);
 const generateFixture = boolEnv('PRODUCT_E2E_GENERATE_FIXTURE', true);
 const skipFfprobe = boolEnv('PRODUCT_E2E_SKIP_FFPROBE', false);
 const stabilitySeconds = Number(process.env.PRODUCT_E2E_STABILITY_SECONDS ?? 0);
+const requireStorageCleanup = boolEnv('PRODUCT_E2E_REQUIRE_STORAGE_CLEANUP', false);
+const mediaDataDir = process.env.PRODUCT_E2E_MEDIA_DATA_DIR;
+const storageEndpoint = process.env.PRODUCT_E2E_S3_ENDPOINT;
+const storageBucket = process.env.PRODUCT_E2E_S3_BUCKET;
+const storageClient = storageEndpoint && storageBucket && process.env.PRODUCT_E2E_S3_ACCESS_KEY && process.env.PRODUCT_E2E_S3_SECRET_KEY
+  ? new S3Client({
+      endpoint: storageEndpoint,
+      region: process.env.PRODUCT_E2E_S3_REGION ?? 'auto',
+      forcePathStyle: boolEnv('PRODUCT_E2E_S3_FORCE_PATH_STYLE', true),
+      credentials: {
+        accessKeyId: process.env.PRODUCT_E2E_S3_ACCESS_KEY,
+        secretAccessKey: process.env.PRODUCT_E2E_S3_SECRET_KEY,
+      },
+    })
+  : undefined;
 
 function boolEnv(name, fallback) {
   const value = process.env[name];
@@ -164,6 +181,7 @@ async function authenticate() {
       body: jsonBody({ email: existingEmail, password }),
     });
     assert(login.accessToken && login.refreshToken, 'Existing account login did not return tokens');
+    cleanupContext.accessToken = login.accessToken;
     const me = await api('/auth/me', { headers: authHeaders(login.accessToken) });
     return { email: existingEmail, login, me, createdAccount: false };
   }
@@ -181,6 +199,9 @@ async function authenticate() {
     }),
   }, 201);
   assert(register.accessToken && register.refreshToken, 'Register did not return tokens');
+  cleanupContext.accessToken = register.accessToken;
+  cleanupContext.createdAccount = true;
+  cleanupContext.userId = register.user?.id;
 
   await api('/auth/email/verification', {
     method: 'POST',
@@ -280,7 +301,7 @@ async function quotaAndAbortChecks(accessToken, projectId, usage) {
   const abortSession = await api('/videos/presigned-upload', {
     method: 'POST',
     headers: { ...jsonHeaders(accessToken), 'idempotency-key': `product-e2e-abort-${randomUUID()}` },
-    body: jsonBody({ filename: 'abort.mp4', mimeType: 'video/mp4', sizeBytes: 1024, projectId }),
+    body: jsonBody({ filename: `abort-${suffix}.mp4`, mimeType: 'video/mp4', sizeBytes: 1024, projectId }),
   }, 201);
   await api(`/videos/${abortSession.videoId}/upload`, { method: 'DELETE', headers: authHeaders(accessToken) }, 204);
   const aborted = await api(`/videos/${abortSession.videoId}`, { headers: authHeaders(accessToken) });
@@ -340,7 +361,7 @@ function generateFixtureWithMediaWorker(ffmpegArgs) {
 async function directUpload(bytes, projectId, accessToken) {
   const idempotencyKey = `product-e2e-upload-${randomUUID()}`;
   const requestBody = {
-    filename: 'product-e2e.mp4',
+    filename: `product-e2e-${suffix}.mp4`,
     mimeType: 'video/mp4',
     sizeBytes: bytes.length,
     projectId,
@@ -540,18 +561,170 @@ async function stabilityCheckIfRequested() {
   return { seconds: stabilitySeconds, containers };
 }
 
+const cleanupContext = {
+  startedAt: new Date(),
+  accessToken: undefined,
+  createdAccount: false,
+  userId: undefined,
+  workspaceId: undefined,
+  projectId: undefined,
+  videoIds: new Set(),
+  pipelineRunIds: new Set(),
+  storagePrefixes: new Set(),
+  auditLogIds: new Set(),
+  completed: false,
+};
+
+async function discoverCommittedResources() {
+  if (!cleanupContext.workspaceId && cleanupContext.userId) {
+    const workspace = await prisma.workspace.findFirst({ where: { ownerId: cleanupContext.userId }, select: { id: true } });
+    cleanupContext.workspaceId = workspace?.id;
+  }
+  if (!cleanupContext.workspaceId) return;
+  const projects = await prisma.project.findMany({
+    where: { workspaceId: cleanupContext.workspaceId, name: `Product E2E ${suffix}`, createdAt: { gte: cleanupContext.startedAt } },
+    select: { id: true },
+  });
+  for (const project of projects) cleanupContext.projectId ??= project.id;
+  const videos = await prisma.video.findMany({
+    where: {
+      workspaceId: cleanupContext.workspaceId,
+      createdAt: { gte: cleanupContext.startedAt },
+      originalFilename: { contains: suffix },
+    },
+    select: { id: true, pipelineRuns: { select: { id: true } } },
+  });
+  for (const video of videos) {
+    cleanupContext.videoIds.add(video.id);
+    for (const run of video.pipelineRuns) cleanupContext.pipelineRunIds.add(run.id);
+  }
+  for (const videoId of cleanupContext.videoIds) {
+    for (const prefix of [`videos/${videoId}/`, `imports/${videoId}/`, `thumbnails/videos/${videoId}/`, `exports/${videoId}/`]) {
+      cleanupContext.storagePrefixes.add(prefix);
+    }
+  }
+}
+
+async function assertStorageAndMediaCleanup() {
+  if (requireStorageCleanup && (!storageClient || !storageBucket)) {
+    throw new Error('Storage cleanup verification is required but S3 verification credentials are unavailable');
+  }
+  const storageResidue = [];
+  if (storageClient && storageBucket) {
+    for (const prefix of cleanupContext.storagePrefixes) {
+      const [objects, multipart] = await Promise.all([
+        storageClient.send(new ListObjectsV2Command({ Bucket: storageBucket, Prefix: prefix, MaxKeys: 1 })),
+        storageClient.send(new ListMultipartUploadsCommand({ Bucket: storageBucket, Prefix: prefix, MaxUploads: 1 })),
+      ]);
+      if ((objects.KeyCount ?? 0) > 0 || (multipart.Uploads?.length ?? 0) > 0) storageResidue.push(prefix);
+    }
+  }
+  const mediaResidue = [];
+  if (mediaDataDir) {
+    for (const pipelineRunId of cleanupContext.pipelineRunIds) {
+      try {
+        await access(join(mediaDataDir, 'pipelines', pipelineRunId));
+        mediaResidue.push(pipelineRunId);
+      } catch (error) {
+        if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') throw error;
+      }
+    }
+  } else if (requireStorageCleanup) {
+    throw new Error('Media cleanup verification is required but PRODUCT_E2E_MEDIA_DATA_DIR is unavailable');
+  }
+  assert(storageResidue.length === 0, `Product E2E cleanup left storage or multipart residue: ${JSON.stringify(storageResidue)}`);
+  assert(mediaResidue.length === 0, `Product E2E cleanup left media workspace residue: ${JSON.stringify(mediaResidue)}`);
+  return { storagePrefixes: cleanupContext.storagePrefixes.size, mediaWorkspaces: cleanupContext.pipelineRunIds.size };
+}
+
+async function cleanupProductE2e() {
+  if (!cleanup || cleanupContext.completed || !cleanupContext.accessToken) return { skipped: !cleanup || !cleanupContext.accessToken };
+  await discoverCommittedResources();
+  const headers = authHeaders(cleanupContext.accessToken);
+  if (cleanupContext.createdAccount) {
+    const auditLogs = await prisma.auditLog.findMany({
+      where: {
+        OR: [
+          ...(cleanupContext.userId ? [{ userId: cleanupContext.userId }] : []),
+          ...(cleanupContext.workspaceId ? [{ workspaceId: cleanupContext.workspaceId }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+    for (const auditLog of auditLogs) cleanupContext.auditLogIds.add(auditLog.id);
+    await api('/account', {
+      method: 'DELETE',
+      headers: jsonHeaders(cleanupContext.accessToken),
+      body: jsonBody({ password }),
+    }, 204);
+    await request('/auth/me', { headers }, 401);
+    if (cleanupContext.auditLogIds.size > 0) {
+      await prisma.auditLog.deleteMany({ where: { id: { in: [...cleanupContext.auditLogIds] } } });
+    }
+  } else {
+    for (const videoId of cleanupContext.videoIds) {
+      await request(`/videos/${videoId}`, { method: 'DELETE', headers }, [204, 404]);
+    }
+    if (cleanupContext.projectId) {
+      await request(`/projects/${cleanupContext.projectId}`, { method: 'DELETE', headers }, [204, 404]);
+    }
+    const auditLogs = await prisma.auditLog.findMany({
+      where: {
+        createdAt: { gte: cleanupContext.startedAt },
+        OR: [
+          ...(cleanupContext.userId ? [{ userId: cleanupContext.userId }] : []),
+          ...(cleanupContext.workspaceId ? [{ workspaceId: cleanupContext.workspaceId }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+    for (const auditLog of auditLogs) cleanupContext.auditLogIds.add(auditLog.id);
+    if (cleanupContext.auditLogIds.size > 0) {
+      await prisma.auditLog.deleteMany({ where: { id: { in: [...cleanupContext.auditLogIds] } } });
+    }
+  }
+
+  const [users, workspaces, projects, videos, attempts, outbox, pipelineRuns, productEvents, auditLogs] = await Promise.all([
+    cleanupContext.createdAccount && cleanupContext.userId ? prisma.user.count({ where: { id: cleanupContext.userId } }) : 0,
+    cleanupContext.createdAccount && cleanupContext.workspaceId ? prisma.workspace.count({ where: { id: cleanupContext.workspaceId } }) : 0,
+    cleanupContext.projectId ? prisma.project.count({ where: { id: cleanupContext.projectId } }) : 0,
+    prisma.video.count({ where: { id: { in: [...cleanupContext.videoIds] } } }),
+    prisma.uploadAttempt.count({ where: { videoId: { in: [...cleanupContext.videoIds] } } }),
+    prisma.outboxEvent.count({ where: { aggregateId: { in: [...cleanupContext.videoIds] } } }),
+    prisma.pipelineRun.count({ where: { videoId: { in: [...cleanupContext.videoIds] } } }),
+    cleanupContext.createdAccount && cleanupContext.userId ? prisma.productEvent.count({ where: { userId: cleanupContext.userId } }) : 0,
+    cleanupContext.auditLogIds.size > 0 ? prisma.auditLog.count({ where: { id: { in: [...cleanupContext.auditLogIds] } } }) : 0,
+  ]);
+  const residue = { users, workspaces, projects, videos, attempts, outbox, pipelineRuns, productEvents, auditLogs };
+  assert(Object.values(residue).every((value) => value === 0), `Product E2E cleanup left database residue: ${JSON.stringify(residue)}`);
+  const artifacts = await assertStorageAndMediaCleanup();
+  const pipeline = await pipelineGlobalChecks();
+  const busyQueues = Object.entries(pipeline.queues ?? {}).filter(([, queue]) => ['waiting', 'active', 'delayed', 'failed'].some((key) => Number(queue[key] ?? 0) > 0));
+  assert(busyQueues.length === 0, `Product E2E cleanup left queue residue: ${JSON.stringify(busyQueues)}`);
+  cleanupContext.completed = true;
+  return { deletedAccount: cleanupContext.createdAccount, residue, artifacts };
+}
+
+let primaryError;
 try {
   const web = await optionalWebChecks();
   const initialHealth = await healthChecks();
   const plans = await publicPlanChecks();
   const identity = await authenticate();
   const accessToken = identity.login.accessToken;
+  cleanupContext.accessToken = accessToken;
+  cleanupContext.createdAccount = identity.createdAccount;
+  cleanupContext.userId = identity.me.id;
+  cleanupContext.workspaceId = identity.me.workspace?.id;
   const commercial = await billingAndUsageChecks(accessToken);
   const project = await createProject(accessToken);
+  cleanupContext.projectId = project.id;
   const quota = await quotaAndAbortChecks(accessToken, project.id, commercial.usage);
+  cleanupContext.videoIds.add(quota.abortedVideoId);
   await ensureFixture();
   const bytes = await readFile(fixture);
   const upload = await directUpload(bytes, project.id, accessToken);
+  cleanupContext.videoIds.add(upload.video.id);
   const pipeline = await waitForPipeline(upload.video.id);
   const retriedStages = pipeline.stages.filter((stage) => stage.attempts !== 1);
   if (retriedStages.length > 0) {
@@ -562,9 +735,7 @@ try {
   const finalUsage = await api('/usage/current', { headers: authHeaders(accessToken) });
   const stability = await stabilityCheckIfRequested();
 
-  if (cleanup) {
-    await api(`/videos/${upload.video.id}`, { method: 'DELETE', headers: authHeaders(accessToken) }, 204);
-  }
+  const cleanupResult = await cleanupProductE2e();
 
   process.stdout.write(`${JSON.stringify({
     status: 'PASS',
@@ -588,7 +759,22 @@ try {
     health: { initial: initialHealth, finalPipeline },
     stability,
     cleanup,
+    cleanupResult,
   }, null, 2)}\n`);
+} catch (error) {
+  primaryError = error;
+  throw error;
 } finally {
-  await prisma.$disconnect();
+  try {
+    if (cleanup && !cleanupContext.completed) await cleanupProductE2e();
+  } catch (cleanupError) {
+    const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    if (primaryError) process.stderr.write(`Cleanup also failed: ${message}\n`);
+    else {
+      process.stderr.write(`Cleanup failed: ${message}\n`);
+      process.exitCode = 1;
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
 }

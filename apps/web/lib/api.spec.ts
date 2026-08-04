@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, clearSession, storedUser, storeSession, unwrap, unwrapList } from './api';
 
 describe('API client', () => {
-  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  beforeEach(() => { clearSession(); localStorage.clear(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
   it('normalizes collections from supported envelopes', () => {
     expect(unwrapList({ items: [{ id: 1 }] })).toEqual([{ id: 1 }]);
@@ -10,9 +10,10 @@ describe('API client', () => {
     expect(unwrap({ data: { id: 3 } })).toEqual({ id: 3 });
   });
 
-  it('persists and clears authenticated sessions', () => {
+  it('keeps authenticated sessions in memory and removes legacy browser storage', () => {
     storeSession({ accessToken: 'token', refreshToken: 'refresh', user: { id: '1', name: 'Ana', email: 'ana@example.com' } });
-    expect(localStorage.getItem('clipbr.access-token')).toBe('token');
+    expect(localStorage.getItem('clipbr.access-token')).toBeNull();
+    expect(localStorage.getItem('clipbr.refresh-token')).toBeNull();
     expect(storedUser()).toEqual({ id: '1', name: 'Ana', email: 'ana@example.com' });
     clearSession();
     expect(localStorage.getItem('clipbr.access-token')).toBeNull();
@@ -28,7 +29,8 @@ describe('API client', () => {
     await expect(api('/videos/video-1')).resolves.toEqual({ id: 'video-1' });
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(new Headers(fetchMock.mock.calls[2]![1]?.headers).get('Authorization')).toBe('Bearer renewed');
-    expect(localStorage.getItem('clipbr.refresh-token')).toBe('refresh-2');
+    expect(localStorage.getItem('clipbr.refresh-token')).toBeNull();
+    expect(fetchMock.mock.calls[1]![1]).toEqual(expect.objectContaining({ credentials: 'include', body: '{}' }));
   });
 
   it('does not erase a valid session when login itself returns unauthorized', async () => {
@@ -36,7 +38,7 @@ describe('API client', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ message: 'invalid' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
 
     await expect(api('/auth/login', { method: 'POST' })).rejects.toEqual(expect.objectContaining({ status: 401 }));
-    expect(localStorage.getItem('clipbr.access-token')).toBe('token');
+    expect(storedUser()).toEqual(expect.objectContaining({ email: 'ana@example.com' }));
   });
 
   it('clears the session when a protected request remains unauthorized after refresh', async () => {
@@ -49,10 +51,11 @@ describe('API client', () => {
     await expect(api('/videos/video-1')).rejects.toEqual(expect.objectContaining({ status: 401 }));
     expect(localStorage.getItem('clipbr.access-token')).toBeNull();
     expect(localStorage.getItem('clipbr.refresh-token')).toBeNull();
+    expect(storedUser()).toBeUndefined();
   });
 
   it('adds the bearer token and turns error responses into ApiError', async () => {
-    localStorage.setItem('clipbr.access-token', 'secret');
+    storeSession({ accessToken: 'secret', user: { id: '1', name: 'Ana', email: 'ana@example.com' } });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ message: 'Não autorizado' }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
     await expect(api('/private')).rejects.toEqual(expect.objectContaining({ status: 403, message: 'Não autorizado' }));
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer secret');

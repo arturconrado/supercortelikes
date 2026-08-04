@@ -3,6 +3,7 @@ import Link from 'next/link';
 import type { Clip } from '@/lib/types';
 import { formatDuration } from '@/lib/utils';
 import { Button, StatusBadge } from './ui';
+import { trackProductEvent } from '@/lib/api';
 
 type ClipCardProps = {
   clip: Clip;
@@ -49,7 +50,7 @@ export function ClipCard({ clip, onPreview }: ClipCardProps) {
       <p className="mt-2 text-xs text-zinc-600">{clip.aspectRatio ?? '9:16'} · Viral score {score}</p>
       {onPreview && (
         <div className={`mt-4 grid gap-2 ${clip.downloadUrl ? 'grid-cols-3' : 'grid-cols-2'}`}>
-          <Button type="button" size="sm" variant="secondary" onClick={() => onPreview(clip)}>
+          <Button type="button" size="sm" variant="secondary" onClick={() => { void trackProductEvent('preview_opened'); onPreview(clip); }}>
             <Play className="size-3.5"/>
             Preview
           </Button>
@@ -61,7 +62,7 @@ export function ClipCard({ clip, onPreview }: ClipCardProps) {
           </Button>
           {clip.downloadUrl && (
             <Button asChild size="sm" variant="ghost">
-              <a href={clip.downloadUrl} download={clipDownloadFilename(clip)}>
+              <a href={clip.downloadUrl} download={clipDownloadFilename(clip)} onClick={() => void trackProductEvent('export_downloaded')}>
                 <Download className="size-3.5"/>
                 Baixar
               </a>

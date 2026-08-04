@@ -14,6 +14,7 @@ vi.mock('@/lib/api', () => ({
   api: (...args: unknown[]) => apiMock(...args),
   endpoints: { register: '/auth/register' },
   storeSession: (...args: unknown[]) => storeSessionMock(...args),
+  trackProductEvent: vi.fn().mockResolvedValue(undefined),
   unwrap: (payload: unknown) => payload && typeof payload === 'object' && 'data' in payload
     ? (payload as { data: unknown }).data
     : payload,

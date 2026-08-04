@@ -110,6 +110,7 @@ if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
   docker run --rm \
     --network host \
     --user 0:0 \
+    --volumes-from "${media_container}:ro" \
     --mount "type=bind,src=${ROOT_DIR}/scripts/acceptance/product-e2e.mjs,dst=/workspace/acceptance.mjs,readonly" \
     --mount "type=bind,src=${product_fixture},dst=/tmp/clipbr-product-e2e.mp4,readonly" \
     --env "DATABASE_URL=${database_url}" \
@@ -121,6 +122,14 @@ if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
     --env "PRODUCT_E2E_CLEANUP=true" \
     --env "PRODUCT_E2E_GENERATE_FIXTURE=false" \
     --env "PRODUCT_E2E_VIDEO_PATH=/tmp/clipbr-product-e2e.mp4" \
+    --env "PRODUCT_E2E_REQUIRE_STORAGE_CLEANUP=true" \
+    --env "PRODUCT_E2E_MEDIA_DATA_DIR=/data" \
+    --env "PRODUCT_E2E_S3_ENDPOINT=${S3_PUBLIC_ENDPOINT}" \
+    --env "PRODUCT_E2E_S3_REGION=${S3_REGION:-us-east-1}" \
+    --env "PRODUCT_E2E_S3_BUCKET=${S3_BUCKET}" \
+    --env "PRODUCT_E2E_S3_ACCESS_KEY=${S3_ACCESS_KEY_ID}" \
+    --env "PRODUCT_E2E_S3_SECRET_KEY=${S3_SECRET_ACCESS_KEY}" \
+    --env "PRODUCT_E2E_S3_FORCE_PATH_STYLE=true" \
     --env "PRODUCT_E2E_TERMS_VERSION=${TERMS_VERSION:-terms-2026-06}" \
     --env "PRODUCT_E2E_PRIVACY_VERSION=${PRIVACY_VERSION:-privacy-2026-06}" \
     "${api_image}" \
