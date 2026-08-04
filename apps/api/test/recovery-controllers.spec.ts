@@ -152,7 +152,7 @@ describe('project and content controllers', () => {
         findUnique: vi.fn().mockResolvedValue(project), deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
     };
-    const controller = new ProjectsController(prisma);
+    const controller = new ProjectsController(prisma, { reprocess: vi.fn() } as any);
     expect(await controller.list(user)).toEqual([{ ...project, videosCount: 2 }]);
     expect(await controller.create(user, { name: ' Project ' })).toBe(project);
     expect(await controller.get(user, project.id)).toMatchObject({ id: project.id });
