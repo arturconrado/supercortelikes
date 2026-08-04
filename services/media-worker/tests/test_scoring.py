@@ -1,4 +1,6 @@
 import http.client
+import json
+from threading import Lock
 
 from media_worker import llm
 from media_worker.scoring import score_all, score_segment
@@ -133,3 +135,77 @@ def test_openrouter_transport_disconnect_returns_lexical_fallback(monkeypatch):
     monkeypatch.setattr(llm.urllib.request, "urlopen", disconnected)
 
     assert llm.maybe_score_with_llm(segments, lexical, settings) is None
+
+
+def test_openrouter_scores_large_inputs_in_bounded_batches(monkeypatch):
+    segments = [
+        {
+            "id": f"segment-{index}",
+            "start": index * 10,
+            "end": index * 10 + 10,
+            "text": f"Exemplo sintético {index} sem dados de usuário.",
+            "emotion": {"label": "neutral"},
+        }
+        for index in range(17)
+    ]
+    lexical = score_all(segments)
+    settings = Settings()
+    settings.llm_provider = "openrouter"
+    settings.llm_api_key = "secret"
+    calls = []
+    calls_lock = Lock()
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.body).encode("utf-8")
+
+    def respond(request, **_kwargs):
+        payload = json.loads(request.data)
+        user_payload = json.loads(payload["messages"][1]["content"])
+        batch = user_payload["segments"]
+        with calls_lock:
+            calls.append([item["id"] for item in batch])
+        scores = [
+            {
+                "segmentId": item["id"],
+                "score": 80,
+                "categories": {},
+                "signals": {},
+                "editorial": {},
+            }
+            for item in batch
+        ]
+        return Response(
+            {
+                "id": f"request-{batch[0]['id']}",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps(scores)},
+                    }
+                ],
+                "usage": {"total_tokens": 100, "cost": 0.001},
+            }
+        )
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", respond)
+
+    result = llm.maybe_score_with_llm(segments, lexical, settings)
+
+    assert result is not None
+    assert result["algorithmVersion"] == "viral-openrouter-v1"
+    assert len(result["scores"]) == 17
+    assert len(result["providerUsage"]) == 3
+    assert sorted(len(batch) for batch in calls) == [1, 8, 8]
+    assert [item["segmentId"] for item in result["scores"]] == [
+        item["id"] for item in segments
+    ]

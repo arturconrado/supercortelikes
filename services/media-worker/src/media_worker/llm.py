@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 
@@ -22,6 +23,9 @@ REQUIRED_CATEGORIES = (
     "financial",
 )
 
+SCORING_BATCH_SIZE = 8
+SCORING_MAX_CONCURRENCY = 2
+
 
 def maybe_score_with_llm(
     segments: Sequence[Mapping[str, Any]],
@@ -34,6 +38,68 @@ def maybe_score_with_llm(
     if not api_key:
         return None
 
+    if not segments:
+        return None
+
+    lexical_scores = list(lexical_result["scores"])
+    batches = [
+        (
+            segments[start : start + SCORING_BATCH_SIZE],
+            {"scores": lexical_scores[start : start + SCORING_BATCH_SIZE]},
+        )
+        for start in range(0, len(segments), SCORING_BATCH_SIZE)
+    ]
+    started = time.monotonic()
+    try:
+        with ThreadPoolExecutor(
+            max_workers=min(SCORING_MAX_CONCURRENCY, len(batches))
+        ) as executor:
+            futures = [
+                executor.submit(_score_batch, batch_segments, batch_lexical, settings)
+                for batch_segments, batch_lexical in batches
+            ]
+            batch_results = [future.result() for future in futures]
+
+        scores = [
+            score
+            for batch_result in batch_results
+            for score in batch_result["scores"]
+        ]
+        provider_usage = [
+            usage
+            for batch_result in batch_results
+            for usage in batch_result.get("providerUsage", [])
+        ]
+        return {
+            "algorithmVersion": "viral-openrouter-v1",
+            "llmProvider": "openrouter",
+            "llmModel": getattr(settings, "openrouter_editor_model", "")
+            or "deepseek/deepseek-v4-flash-0731",
+            "scores": scores,
+            "averageScore": round(
+                sum(item["score"] for item in scores) / len(scores), 2
+            )
+            if scores
+            else 0.0,
+            "providerUsage": provider_usage,
+            "latencyMs": round((time.monotonic() - started) * 1000),
+        }
+    except Exception as error:
+        # Scoring enrichment is optional. Provider disconnects and transport-specific
+        # exceptions must never fail the deterministic media pipeline.
+        logger.warning(
+            "OpenRouter scoring failed; using lexical fallback (%s)",
+            type(error).__name__,
+        )
+        return None
+
+
+def _score_batch(
+    segments: Sequence[Mapping[str, Any]],
+    lexical_result: Mapping[str, Any],
+    settings: Any,
+) -> Dict[str, Any]:
+    api_key = getattr(settings, "llm_api_key", "")
     payload = _openrouter_payload(segments, lexical_result, settings)
     request = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -47,38 +113,38 @@ def maybe_score_with_llm(
         method="POST",
     )
     started = time.monotonic()
-    try:
-        with urllib.request.urlopen(
-            request, timeout=int(getattr(settings, "llm_timeout_seconds", 45))
-        ) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        if not isinstance(body, Mapping):
-            raise ValueError("OpenRouter response must be an object")
-        content = body["choices"][0]["message"]["content"]
-        value = _json_from_content(content)
-        normalized = _normalize_scores(segments, lexical_result, value, payload["model"])
-        usage = body.get("usage") if isinstance(body.get("usage"), Mapping) else {}
-        cost_usd = _cost(usage)
-        normalized["providerUsage"] = [
-            {
-                "provider": "openrouter",
-                "requestId": str(body.get("id") or _response_id(body)),
-                "quantity": int(usage.get("total_tokens") or 0),
-                "unit": "token",
-                "costUsd": round(cost_usd, 6),
-                "latencyMs": round((time.monotonic() - started) * 1000),
-                "model": payload["model"],
-            }
-        ]
-        return normalized
-    except Exception as error:
-        # Scoring enrichment is optional. Provider disconnects and transport-specific
-        # exceptions must never fail the deterministic media pipeline.
-        logger.warning(
-            "OpenRouter scoring failed; using lexical fallback (%s)",
-            type(error).__name__,
-        )
-        return None
+    with urllib.request.urlopen(
+        request, timeout=int(getattr(settings, "llm_timeout_seconds", 45))
+    ) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    if not isinstance(body, Mapping):
+        raise ValueError("OpenRouter response must be an object")
+    choice = body["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise ValueError("OpenRouter scoring response exceeded its output budget")
+    content = choice["message"]["content"]
+    value = _json_from_content(content)
+    if isinstance(value, list):
+        value = {"scores": value}
+    if not isinstance(value, Mapping):
+        raise ValueError("OpenRouter scoring content must be an object or score array")
+    if len(value.get("scores", [])) != len(segments):
+        raise ValueError("OpenRouter scoring response has an unexpected score count")
+    normalized = _normalize_scores(segments, lexical_result, value, payload["model"])
+    usage = body.get("usage") if isinstance(body.get("usage"), Mapping) else {}
+    cost_usd = _cost(usage)
+    normalized["providerUsage"] = [
+        {
+            "provider": "openrouter",
+            "requestId": str(body.get("id") or _response_id(body)),
+            "quantity": int(usage.get("total_tokens") or 0),
+            "unit": "token",
+            "costUsd": round(cost_usd, 6),
+            "latencyMs": round((time.monotonic() - started) * 1000),
+            "model": payload["model"],
+        }
+    ]
+    return normalized
 
 
 def _openrouter_payload(
@@ -108,8 +174,52 @@ def _openrouter_payload(
         },
         "temperature": 0.2,
         "max_tokens": 2400,
+        "reasoning": {"effort": "none", "exclude": True},
         "usage": {"include": True},
-        "response_format": {"type": "json_object"},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip_scores",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "scores": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "segmentId": {"type": ["string", "number"]},
+                                    "score": {"type": "number", "minimum": 0, "maximum": 100},
+                                    "editorial": {
+                                        "type": "object",
+                                        "properties": {
+                                            "suggestedStart": {"type": "number"},
+                                            "suggestedEnd": {"type": "number"},
+                                            "hook": {"type": "string"},
+                                            "title": {"type": "string"},
+                                            "keyword": {"type": "string"},
+                                        },
+                                        "required": [
+                                            "suggestedStart",
+                                            "suggestedEnd",
+                                            "hook",
+                                            "title",
+                                            "keyword",
+                                        ],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "required": ["segmentId", "score", "editorial"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    },
+                    "required": ["scores"],
+                    "additionalProperties": False,
+                },
+            },
+        },
         "messages": [
             {
                 "role": "system",
@@ -131,8 +241,6 @@ def _openrouter_payload(
                                 {
                                     "segmentId": "same input id",
                                     "score": 0,
-                                    "categories": {category: 0 for category in REQUIRED_CATEGORIES},
-                                    "signals": {"hook": 0, "retention": 0, "clarity": 0},
                                     "editorial": {
                                         "suggestedStart": "absolute timestamp in seconds",
                                         "suggestedEnd": "absolute timestamp in seconds",
@@ -143,6 +251,10 @@ def _openrouter_payload(
                                 }
                             ]
                         },
+                        "constraints": (
+                            "Return exactly one item per input segment in the same order. "
+                            "Do not return categories or signals; those are calculated locally."
+                        ),
                         "segments": compact_segments,
                     },
                     ensure_ascii=False,
@@ -152,7 +264,7 @@ def _openrouter_payload(
     }
 
 
-def _json_from_content(content: str) -> Dict[str, Any]:
+def _json_from_content(content: str) -> Any:
     stripped = content.strip()
     if stripped.startswith("```"):
         match = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, re.S | re.I)
