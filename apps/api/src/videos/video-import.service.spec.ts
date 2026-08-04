@@ -108,6 +108,11 @@ describe('VideoImportService', () => {
     const { service } = harness();
     await expect(service.import('not-a-url', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.import('https://localhost/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.import('https://127.0.0.1/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.import('https://[::1]/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.import('https://[::ffff:127.0.0.1]/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.import('https://[fc00::1]/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.import('https://[fe80::1]/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.import('http://example.com/video.mp4', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.import('https://www.youtube.com/watch?v=bad', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.import('https://www.loom.com/share/', 'import-key-1234', user)).rejects.toBeInstanceOf(BadRequestException);

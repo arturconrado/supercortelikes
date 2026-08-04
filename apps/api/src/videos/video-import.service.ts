@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
@@ -13,6 +13,20 @@ import { normalizeVideoProcessingOptions, type VideoProcessingOptionsInput } fro
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 const YTDLP_PROVIDER_HOSTS = new Set(['loom.com', 'www.loom.com', 'drive.google.com']);
 const DIRECT_VIDEO_SUFFIXES = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v']);
+const PRIVATE_IPS = new BlockList();
+PRIVATE_IPS.addSubnet('0.0.0.0', 8, 'ipv4');
+PRIVATE_IPS.addSubnet('10.0.0.0', 8, 'ipv4');
+PRIVATE_IPS.addSubnet('100.64.0.0', 10, 'ipv4');
+PRIVATE_IPS.addSubnet('127.0.0.0', 8, 'ipv4');
+PRIVATE_IPS.addSubnet('169.254.0.0', 16, 'ipv4');
+PRIVATE_IPS.addSubnet('172.16.0.0', 12, 'ipv4');
+PRIVATE_IPS.addSubnet('192.168.0.0', 16, 'ipv4');
+PRIVATE_IPS.addSubnet('198.18.0.0', 15, 'ipv4');
+PRIVATE_IPS.addAddress('::', 'ipv6');
+PRIVATE_IPS.addAddress('::1', 'ipv6');
+PRIVATE_IPS.addSubnet('::ffff:0:0', 96, 'ipv6');
+PRIVATE_IPS.addSubnet('fc00::', 7, 'ipv6');
+PRIVATE_IPS.addSubnet('fe80::', 10, 'ipv6');
 type ImportSource = { originalFilename: string; title: string; mimeType: string; container: string };
 
 @Injectable()
@@ -39,11 +53,11 @@ export class VideoImportService {
     const previous = await this.prisma.uploadAttempt.findUnique({ where: { idempotencyKey }, include: { video: true } });
     if (previous) return VideoResponseDto.from(previous.video as VideoRecord, true);
     const url = parsePublicImportUrl(urlValue);
-    const source = await resolveImportSource(url);
     if (projectId) {
       const project = await this.prisma.project.findFirst({ where: { id: projectId, workspaceId: user.workspaceId } });
       if (!project) throw new NotFoundException('Project not found');
     }
+    const source = await resolveImportSource(url);
     const videoId = randomUUID();
     const attemptId = randomUUID();
     const eventId = randomUUID();
@@ -217,14 +231,9 @@ function isPrivateHostname(hostname: string): boolean {
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
     return true;
   }
-  const version = isIP(hostname);
-  if (version === 4) {
-    const [a = 0, b = 0] = hostname.split('.').map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-  }
-  if (version === 6) {
-    const normalized = hostname.toLowerCase();
-    return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:');
-  }
+  const address = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  const version = isIP(address);
+  if (version === 4) return PRIVATE_IPS.check(address, 'ipv4');
+  if (version === 6) return PRIVATE_IPS.check(address, 'ipv6');
   return false;
 }
