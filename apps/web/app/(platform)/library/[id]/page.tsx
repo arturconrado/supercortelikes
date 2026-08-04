@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowLeft, CheckCircle2, Clock3, Film, LoaderCircle, Pencil, Scissors, X } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ClipCard } from '@/components/clip-card';

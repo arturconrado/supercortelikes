@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowRight, Clock, Download, Film, Play, Scissors, Sparkles, Timer, Upload } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { ActivityChart } from '@/components/activity-chart';
 import { ProjectCard } from '@/components/project-card';
 import { Alert, Button, Card, EmptyState, MetricCard, PageHeader, Skeleton, StatusBadge } from '@/components/ui';

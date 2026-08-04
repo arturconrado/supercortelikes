@@ -1,7 +1,7 @@
 'use client';
 
 import { Check, LoaderCircle } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useMemo, useState } from 'react';
 import { Alert, Button, Input, Label } from '@/components/ui';

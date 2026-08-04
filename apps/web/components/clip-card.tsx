@@ -1,5 +1,5 @@
 import { Clock3, Download, ExternalLink, Play, Zap } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import type { Clip } from '@/lib/types';
 import { formatDuration } from '@/lib/utils';
 import { Button, StatusBadge } from './ui';

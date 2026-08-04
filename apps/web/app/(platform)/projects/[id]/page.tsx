@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowLeft, Film, MoreHorizontal, RefreshCw, Scissors, Trash2, Upload } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ClipCard } from '@/components/clip-card';

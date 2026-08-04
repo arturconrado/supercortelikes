@@ -13,7 +13,7 @@ import {
   Subtitles,
   Zap,
 } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { useParams } from 'next/navigation';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Badge, Button, Card, Input, Label, PageHeader, Skeleton, StatusBadge, Textarea } from '@/components/ui';

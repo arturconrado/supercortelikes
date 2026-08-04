@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { FormEvent, useState } from 'react';
 import { Alert, Button, Input, Label } from '@/components/ui';
 import { TurnstileBox } from '@/components/turnstile';

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { analyticsConsent, setAnalyticsConsent } from '@/lib/api';
 import { Button } from '@/components/ui';
 

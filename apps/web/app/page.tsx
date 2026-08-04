@@ -1,5 +1,5 @@
 import { ArrowRight, CheckCircle2, Film, Link2, Play, Scissors, ShieldCheck, Sparkles, Zap } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { Button } from '@/components/ui';
 
 const benefits = [

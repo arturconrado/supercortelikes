@@ -1,5 +1,5 @@
 import { Clapperboard, MoreHorizontal, Play } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import type { Project } from '@/lib/types';
 import { formatDate } from '@/lib/utils';
 import { StatusBadge } from './ui';

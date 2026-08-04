@@ -1,7 +1,7 @@
 'use client';
 
 import { Clock, Film, Grid2X2, List, Play, Search, Upload } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { useMemo, useState } from 'react';
 import { Alert, Button, Card, EmptyState, Input, PageHeader, Skeleton, StatusBadge } from '@/components/ui';
 import { useCollection } from '@/hooks/use-resource';

@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckCircle2, LoaderCircle, XCircle } from 'lucide-react';
-import Link from 'next/link';
+import Link from '@/components/safe-link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
