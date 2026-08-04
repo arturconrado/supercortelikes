@@ -26,7 +26,7 @@ export class MediaStageProcessor {
   private readonly compositionV1RolloutPercent: number;
   private readonly mediaAccelerator: 'cpu' | 'cuda';
   private readonly aiExecutionMode: 'local' | 'hybrid';
-  private readonly sttProvider: 'whisperx' | 'deepgram';
+  private readonly sttProvider: 'whisperx' | 'deepgram' | 'openrouter';
   private readonly gpuProvider: 'none' | 'runpod';
   private readonly aiCostLimitUsdPerSourceHour: number;
   private readonly finalMaxShortSide: number;

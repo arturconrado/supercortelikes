@@ -14,7 +14,7 @@ from .process import run_command
 
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_VIDEO_MODEL = "google/gemini-3-flash-preview"
+DEFAULT_VIDEO_MODEL = "google/gemini-3.1-flash-lite"
 MAX_PROXY_BYTES = 20 * 1024 * 1024
 RETRYABLE_HTTP_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 

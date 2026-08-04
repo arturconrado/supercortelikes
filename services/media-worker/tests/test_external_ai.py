@@ -13,7 +13,7 @@ sys.modules.setdefault(
     types.SimpleNamespace(serverless=types.SimpleNamespace(start=lambda *_args, **_kwargs: None)),
 )
 
-from media_worker import deepgram, runpod  # noqa: E402
+from media_worker import deepgram, openrouter_stt, runpod  # noqa: E402
 from media_worker import openrouter_video, quality, runpod_handler  # noqa: E402
 from media_worker.errors import WorkerError  # noqa: E402
 from media_worker.models import ArtifactDescriptor, ArtifactLocation, PipelineRequest  # noqa: E402
@@ -50,6 +50,19 @@ def external_settings(**overrides):
         "deepgram_api_key": "secret",
         "deepgram_timeout_seconds": 30,
         "deepgram_cost_usd_per_hour": 0.36,
+        "llm_api_key": "secret",
+        "llm_provider_sort": "price",
+        "openrouter_stt_model": "openai/whisper-large-v3-turbo",
+        "openrouter_stt_fallback_model": "openai/whisper-large-v3",
+        "openrouter_stt_language": "pt",
+        "openrouter_stt_timeout_seconds": 30,
+        "openrouter_stt_chunk_seconds": 300,
+        "openrouter_stt_concurrency": 2,
+        "openrouter_stt_retries": 2,
+        "openrouter_stt_cost_usd_per_hour": 0.04,
+        "ffmpeg_binary": "ffmpeg",
+        "ffprobe_binary": "ffprobe",
+        "request_timeout_seconds": 120,
         "gpu_provider": "runpod",
         "runpod_timeout_seconds": 60,
         "runpod_poll_seconds": 0.0,
@@ -99,6 +112,208 @@ def test_deepgram_normalizes_word_timestamps_and_speakers(monkeypatch):
     assert value["segments"][0]["speaker"] == "SPEAKER_00"
     assert value["segments"][0]["words"][0]["start"] == 0.0
     assert value["providerUsage"][0]["requestId"] == "dg-request"
+
+
+def test_openrouter_stt_normalizes_timestamps_usage_and_privacy_options(tmp_path, monkeypatch):
+    audio = tmp_path / "chunk.ogg"
+    audio.write_bytes(b"valid-audio")
+    captured = {}
+
+    def response(payload, _settings):
+        captured.update(payload)
+        return (
+            {
+                "model": "openai/whisper-large-v3-turbo",
+                "language": "pt",
+                "duration": 2.0,
+                "text": "Olá mundo",
+                "segments": [{"start": 0, "end": 2, "text": "Olá mundo"}],
+                "words": [
+                    {"word": "Olá", "start": 0, "end": 0.7},
+                    {"word": "mundo", "start": 0.8, "end": 1.6},
+                ],
+                "usage": {"seconds": 2.0, "cost": 0.000022},
+            },
+            "or-generation",
+        )
+
+    monkeypatch.setattr(openrouter_stt, "_request_json", response)
+    value = openrouter_stt._transcribe_chunk(
+        audio,
+        300.0,
+        2.0,
+        ["openai/whisper-large-v3-turbo"],
+        "pt",
+        external_settings(),
+    )
+
+    assert captured["input_audio"]["format"] == "ogg"
+    assert captured["provider"] == {
+        "sort": "price",
+        "allow_fallbacks": True,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+    assert captured["response_format"] == "verbose_json"
+    assert value["segments"][0]["start"] == 300.0
+    assert value["segments"][0]["words"][1]["end"] == 301.6
+    assert value["providerUsage"][0]["requestId"] == "or-generation"
+    assert value["providerUsage"][0]["costUsd"] == 0.000022
+    assert openrouter_stt._response_language("Portuguese", "pt") == "pt"
+
+
+def test_openrouter_stt_chunks_and_merges_in_source_order(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"valid-video")
+
+    def extract(_source, destination, _settings, _seconds):
+        chunks = [destination / "chunk-0000.ogg", destination / "chunk-0001.ogg"]
+        for chunk in chunks:
+            chunk.write_bytes(b"audio")
+        return chunks
+
+    monkeypatch.setattr(openrouter_stt, "_extract_chunks", extract)
+    monkeypatch.setattr(
+        openrouter_stt,
+        "_chunk_offsets",
+        lambda chunks, _settings: [(chunks[0], 0.0, 5.0), (chunks[1], 5.0, 4.0)],
+    )
+
+    def transcribe(path, offset, duration, _models, _language, _settings):
+        return {
+            "model": "openai/whisper-large-v3-turbo",
+            "language": "pt",
+            "segments": [{
+                "id": 0,
+                "start": offset,
+                "end": offset + duration,
+                "text": path.stem,
+                "speaker": None,
+                "words": [],
+            }],
+            "providerUsage": [{
+                "provider": "openrouter",
+                "requestId": path.stem,
+                "quantity": duration,
+                "unit": "second",
+                "costUsd": 0.001,
+                "latencyMs": 10,
+                "model": "openai/whisper-large-v3-turbo",
+            }],
+        }
+
+    monkeypatch.setattr(openrouter_stt, "_transcribe_chunk", transcribe)
+    value = openrouter_stt.transcribe_file(source, external_settings(), {})
+
+    assert value["engine"] == "openrouter"
+    assert value["chunks"] == 2
+    assert [segment["id"] for segment in value["segments"]] == [0, 1]
+    assert [segment["start"] for segment in value["segments"]] == [0.0, 5.0]
+    assert value["durationSeconds"] == 9.0
+    assert len(value["providerUsage"]) == 2
+
+
+def test_openrouter_stt_model_fallback_and_error_mapping(tmp_path, monkeypatch):
+    audio = tmp_path / "chunk.ogg"
+    audio.write_bytes(b"audio")
+    attempts = []
+
+    def unavailable_then_success(payload, _settings):
+        attempts.append(payload["model"])
+        if len(attempts) == 1:
+            raise WorkerError(
+                "OPENROUTER_STT_MODEL_UNAVAILABLE", "unavailable", status_code=503
+            )
+        return ({"text": "fala", "duration": 1, "usage": {"seconds": 1}}, "id")
+
+    monkeypatch.setattr(openrouter_stt, "_request_json", unavailable_then_success)
+    value = openrouter_stt._transcribe_chunk(
+        audio,
+        0,
+        1,
+        ["primary", "fallback"],
+        "pt",
+        external_settings(),
+    )
+    assert attempts == ["primary", "fallback"]
+    assert value["model"] == "fallback"
+
+    monkeypatch.undo()
+    monkeypatch.setattr(openrouter_stt.time, "sleep", lambda *_: None)
+
+    def http_error(code, body=b"provider error", headers=None):
+        return urllib.error.HTTPError(
+            "https://openrouter.ai", code, "error", headers or {}, io.BytesIO(body)
+        )
+
+    monkeypatch.setattr(
+        openrouter_stt.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(http_error(429)),
+    )
+    with pytest.raises(WorkerError) as rate_limited:
+        openrouter_stt._request_json({"model": "test"}, external_settings())
+    assert rate_limited.value.code == "OPENROUTER_STT_RATE_LIMITED"
+
+    monkeypatch.setattr(
+        openrouter_stt.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(http_error(404)),
+    )
+    with pytest.raises(WorkerError) as model_unavailable:
+        openrouter_stt._request_json({"model": "test"}, external_settings())
+    assert model_unavailable.value.code == "OPENROUTER_STT_MODEL_UNAVAILABLE"
+
+
+def test_pipeline_routes_hybrid_transcription_to_openrouter(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    settings = external_settings(
+        ai_execution_mode="hybrid",
+        stt_provider="openrouter",
+    )
+    pipeline = Pipeline(settings)
+    monkeypatch.setattr(pipeline, "_ensure_source", lambda *_: source)
+    monkeypatch.setattr(
+        "media_worker.pipeline.transcribe_with_openrouter",
+        lambda path, given_settings, options: {
+            "engine": "openrouter",
+            "model": "openai/whisper-large-v3-turbo",
+            "language": "pt",
+            "confidence": 0,
+            "durationSeconds": 2,
+            "speakerCount": 0,
+            "segments": [{
+                "id": 0,
+                "start": 0,
+                "end": 2,
+                "text": "fala",
+                "speaker": None,
+                "words": [],
+            }],
+            "providerUsage": [{
+                "provider": "openrouter",
+                "requestId": "generation",
+                "quantity": 2,
+                "unit": "second",
+                "costUsd": 0.0001,
+            }],
+        },
+    )
+    request = PipelineRequest.model_validate({
+        "pipelineRunId": "pipeline-openrouter",
+        "stageExecutionId": "stage-openrouter",
+        "videoId": "video-openrouter",
+    })
+
+    response = pipeline._transcription(
+        request, Workspace(tmp_path, "pipeline-openrouter")
+    )
+
+    assert response.metrics["engine"] == "openrouter"
+    assert response.metrics["segments"] == 1
+    assert response.metrics["providerUsage"][0]["requestId"] == "generation"
 
 
 def test_runpod_resumes_persisted_job_without_resubmitting(tmp_path, monkeypatch):

@@ -44,7 +44,10 @@ RUN pip install -r requirements.txt \
 FROM system AS ai-dependencies
 RUN pip install -r requirements-ai.txt \
     && find /usr/local/lib/python3.11/site-packages -name 'libctranslate2*.so*' -print -exec patchelf --clear-execstack {} \; \
-    && python -c "import yt_dlp, whisperx, cv2, mediapipe, ultralytics; print('ai-imports-ok')"
+    && mkdir -p /opt/models \
+    && cd /opt/models \
+    && python -c "import yt_dlp, whisperx, cv2, mediapipe, ultralytics; from ultralytics import YOLO; YOLO('yolo11n.pt'); print('ai-imports-and-yolo-model-ok')" \
+    && test -s /opt/models/yolo11n.pt
 
 FROM lite-dependencies AS lite
 COPY pyproject.toml ./
@@ -60,6 +63,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 CMD ["uvicorn", "media_worker.app:app", "--host", "0.0.0.0", "--port", "8090"]
 
 FROM ai-dependencies AS ai
+ENV YOLO_MODEL=/opt/models/yolo11n.pt
 COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-deps . \

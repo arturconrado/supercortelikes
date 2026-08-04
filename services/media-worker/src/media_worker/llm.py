@@ -95,7 +95,7 @@ def _openrouter_payload(
         for index, segment in enumerate(segments[:40])
     ]
     return {
-        "model": getattr(settings, "openrouter_editor_model", "") or "google/gemini-2.5-flash",
+        "model": getattr(settings, "openrouter_editor_model", "") or "deepseek/deepseek-v4-flash-0731",
         "provider": {
             "sort": getattr(settings, "llm_provider_sort", "latency"),
             "require_parameters": True,

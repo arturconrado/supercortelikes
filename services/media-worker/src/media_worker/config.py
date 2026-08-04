@@ -68,6 +68,14 @@ class Settings:
     deepgram_language: str
     deepgram_timeout_seconds: int
     deepgram_cost_usd_per_hour: float
+    openrouter_stt_model: str
+    openrouter_stt_fallback_model: str
+    openrouter_stt_language: str
+    openrouter_stt_timeout_seconds: int
+    openrouter_stt_chunk_seconds: int
+    openrouter_stt_concurrency: int
+    openrouter_stt_retries: int
+    openrouter_stt_cost_usd_per_hour: float
     openrouter_editor_model: str
     openrouter_qa_enabled: bool
     openrouter_video_enabled: bool
@@ -103,7 +111,7 @@ class Settings:
             whisper_device=os.getenv("WHISPERX_DEVICE", "cpu"),
             whisper_compute_type=os.getenv("WHISPERX_COMPUTE_TYPE", "int8"),
             hf_token=os.getenv("HF_TOKEN", ""),
-            yolo_model=os.getenv("YOLO_MODEL", "yolo11n.pt"),
+            yolo_model=os.getenv("YOLO_MODEL", "/opt/models/yolo11n.pt"),
             internal_token=os.getenv(
                 "MEDIA_WORKER_INTERNAL_TOKEN",
                 os.getenv("MEDIA_WORKER_TOKEN", ""),
@@ -135,9 +143,9 @@ class Settings:
             enable_yolo=_bool_env("ENABLE_YOLO", ai_required or enable_ai),
             llm_provider=os.getenv("LLM_PROVIDER", "none").strip().lower(),
             llm_api_key=os.getenv("LLM_API_KEY", ""),
-            llm_model=os.getenv("LLM_MODEL", "google/gemini-2.5-flash-lite"),
+            llm_model=os.getenv("LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
             llm_timeout_seconds=max(5, int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))),
-            llm_provider_sort=os.getenv("LLM_PROVIDER_SORT", "latency").strip().lower(),
+            llm_provider_sort=os.getenv("LLM_PROVIDER_SORT", "price").strip().lower(),
             ytdlp_cookies_file=os.getenv("YTDLP_COOKIES_FILE", "").strip(),
             ytdlp_proxy=os.getenv("YTDLP_PROXY", "").strip(),
             ytdlp_user_agent=os.getenv("YTDLP_USER_AGENT", "").strip(),
@@ -174,16 +182,43 @@ class Settings:
             deepgram_language=os.getenv("DEEPGRAM_LANGUAGE", "pt-BR").strip() or "pt-BR",
             deepgram_timeout_seconds=max(30, min(7200, int(os.getenv("DEEPGRAM_TIMEOUT_SECONDS", "1800")))),
             deepgram_cost_usd_per_hour=max(0.0, float(os.getenv("DEEPGRAM_COST_USD_PER_HOUR", "0.35"))),
+            openrouter_stt_model=os.getenv(
+                "OPENROUTER_STT_MODEL", "openai/whisper-large-v3-turbo"
+            ).strip()
+            or "openai/whisper-large-v3-turbo",
+            openrouter_stt_fallback_model=os.getenv(
+                "OPENROUTER_STT_FALLBACK_MODEL", "openai/whisper-large-v3"
+            ).strip(),
+            openrouter_stt_language=os.getenv(
+                "OPENROUTER_STT_LANGUAGE", "pt"
+            ).strip(),
+            openrouter_stt_timeout_seconds=max(
+                30,
+                min(600, int(os.getenv("OPENROUTER_STT_TIMEOUT_SECONDS", "120"))),
+            ),
+            openrouter_stt_chunk_seconds=max(
+                60,
+                min(900, int(os.getenv("OPENROUTER_STT_CHUNK_SECONDS", "300"))),
+            ),
+            openrouter_stt_concurrency=max(
+                1, min(4, int(os.getenv("OPENROUTER_STT_CONCURRENCY", "2")))
+            ),
+            openrouter_stt_retries=max(
+                1, min(3, int(os.getenv("OPENROUTER_STT_RETRIES", "2")))
+            ),
+            openrouter_stt_cost_usd_per_hour=max(
+                0.0, float(os.getenv("OPENROUTER_STT_COST_USD_PER_HOUR", "0.04"))
+            ),
             openrouter_editor_model=os.getenv(
                 "OPENROUTER_EDITOR_MODEL",
-                os.getenv("LLM_MODEL", "google/gemini-2.5-flash"),
-            ).strip() or "google/gemini-2.5-flash",
+                os.getenv("LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
+            ).strip() or "deepseek/deepseek-v4-flash-0731",
             openrouter_qa_enabled=_bool_env("OPENROUTER_QA_ENABLED", True),
             openrouter_video_enabled=_bool_env("OPENROUTER_VIDEO_ENABLED", True),
             openrouter_video_model=os.getenv(
                 "OPENROUTER_VIDEO_MODEL",
-                "google/gemini-3-flash-preview",
-            ).strip() or "google/gemini-3-flash-preview",
+                "google/gemini-3.1-flash-lite",
+            ).strip() or "google/gemini-3.1-flash-lite",
             openrouter_video_max_bytes=max(
                 1024 * 1024,
                 min(
@@ -227,8 +262,8 @@ class Settings:
             raise RuntimeError("LLM_PROVIDER_SORT must be price, throughput or latency")
         if self.ai_execution_mode not in {"local", "hybrid"}:
             raise RuntimeError("AI_EXECUTION_MODE must be local or hybrid")
-        if self.stt_provider not in {"whisperx", "deepgram"}:
-            raise RuntimeError("STT_PROVIDER must be whisperx or deepgram")
+        if self.stt_provider not in {"whisperx", "deepgram", "openrouter"}:
+            raise RuntimeError("STT_PROVIDER must be whisperx, deepgram or openrouter")
         if self.gpu_provider not in {"none", "runpod"}:
             raise RuntimeError("GPU_PROVIDER must be none or runpod")
         if self.auto_render_mode not in {"off", "all"}:
@@ -236,6 +271,12 @@ class Settings:
         if self.ai_execution_mode == "hybrid":
             if self.stt_provider == "deepgram" and not self.deepgram_api_key:
                 raise RuntimeError("DEEPGRAM_API_KEY is required for hybrid Deepgram transcription")
+            if self.stt_provider == "openrouter" and (
+                self.llm_provider != "openrouter" or not self.llm_api_key
+            ):
+                raise RuntimeError(
+                    "LLM_PROVIDER=openrouter and LLM_API_KEY are required for hybrid OpenRouter transcription"
+                )
             if self.gpu_provider == "runpod" and (not self.runpod_api_key or not self.runpod_endpoint_id):
                 raise RuntimeError("RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required for Runpod")
         if self.app_env not in {"release", "production"}:

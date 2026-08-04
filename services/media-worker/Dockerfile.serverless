@@ -15,7 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ENABLE_OPENCV=true \
     ENABLE_MEDIAPIPE=true \
     ENABLE_YOLO=true \
-    YOLO_MODEL=yolo11s.pt \
+    YOLO_MODEL=/opt/models/yolo11s.pt \
     HF_HOME=/runpod-volume/models/huggingface \
     TORCH_HOME=/runpod-volume/models/torch \
     TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
@@ -31,7 +31,10 @@ WORKDIR /app
 COPY requirements.txt requirements-gpu.txt requirements-serverless.txt ./
 RUN python3 -m pip install --upgrade pip \
     && python3 -m pip install -r requirements-serverless.txt \
-    && python3 -c "import runpod, torch, cv2, mediapipe, ultralytics; assert torch.version.cuda"
+    && mkdir -p /opt/models \
+    && cd /opt/models \
+    && python3 -c "import runpod, torch, cv2, mediapipe, ultralytics; from ultralytics import YOLO; assert torch.version.cuda; YOLO('yolo11s.pt')" \
+    && test -s /opt/models/yolo11s.pt
 
 COPY pyproject.toml ./
 COPY src ./src

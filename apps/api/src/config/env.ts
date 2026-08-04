@@ -67,16 +67,24 @@ const environmentSchema = z.object({
   COMPOSITION_V1_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),
   MEDIA_ACCELERATOR: z.enum(['cpu', 'cuda']).default('cpu'),
   AI_EXECUTION_MODE: z.enum(['local', 'hybrid']).default('local'),
-  STT_PROVIDER: z.enum(['whisperx', 'deepgram']).default('whisperx'),
+  STT_PROVIDER: z.enum(['whisperx', 'deepgram', 'openrouter']).default('whisperx'),
   DEEPGRAM_API_KEY: optionalSecret,
   DEEPGRAM_MODEL: z.string().min(1).default('nova-3'),
   DEEPGRAM_LANGUAGE: z.string().min(2).max(16).default('pt-BR'),
   DEEPGRAM_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(7200).default(1800),
   DEEPGRAM_COST_USD_PER_HOUR: z.coerce.number().min(0).max(100).default(0.35),
-  OPENROUTER_EDITOR_MODEL: z.string().min(1).default('google/gemini-2.5-flash'),
+  OPENROUTER_STT_MODEL: z.string().min(1).default('openai/whisper-large-v3-turbo'),
+  OPENROUTER_STT_FALLBACK_MODEL: z.string().default('openai/whisper-large-v3'),
+  OPENROUTER_STT_LANGUAGE: z.string().min(2).max(16).default('pt'),
+  OPENROUTER_STT_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+  OPENROUTER_STT_CHUNK_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+  OPENROUTER_STT_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
+  OPENROUTER_STT_RETRIES: z.coerce.number().int().min(1).max(3).default(2),
+  OPENROUTER_STT_COST_USD_PER_HOUR: z.coerce.number().min(0).max(100).default(0.04),
+  OPENROUTER_EDITOR_MODEL: z.string().min(1).default('deepseek/deepseek-v4-flash-0731'),
   OPENROUTER_QA_ENABLED: booleanString,
   OPENROUTER_VIDEO_ENABLED: booleanString,
-  OPENROUTER_VIDEO_MODEL: z.string().min(1).default('google/gemini-3-flash-preview'),
+  OPENROUTER_VIDEO_MODEL: z.string().min(1).default('google/gemini-3.1-flash-lite'),
   OPENROUTER_VIDEO_MAX_BYTES: z.coerce.number().int().min(1024 * 1024).max(50 * 1024 * 1024).default(20 * 1024 * 1024),
   OPENROUTER_VIDEO_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(300).default(90),
   OPENROUTER_VIDEO_RETRIES: z.coerce.number().int().min(1).max(5).default(3),
@@ -111,7 +119,7 @@ const environmentSchema = z.object({
   LLM_PROVIDER: z.enum(['none', 'openai', 'openrouter']).default('none'),
   LLM_API_KEY: optionalSecret,
   LLM_MODEL: optionalSecret,
-  LLM_PROVIDER_SORT: z.enum(['price', 'throughput', 'latency']).default('latency'),
+  LLM_PROVIDER_SORT: z.enum(['price', 'throughput', 'latency']).default('price'),
   MEDIA_MAX_CONCURRENT_JOBS: z.coerce.number().int().min(1).max(8).default(1),
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
   OTEL_SERVICE_NAME: z.string().default('picashorts-api'),
@@ -151,6 +159,9 @@ const environmentSchema = z.object({
     if (value.AI_EXECUTION_MODE === 'hybrid') {
       if (value.STT_PROVIDER === 'deepgram' && !value.DEEPGRAM_API_KEY) {
         context.addIssue({ code: 'custom', path: ['DEEPGRAM_API_KEY'], message: 'DEEPGRAM_API_KEY is required for hybrid Deepgram transcription' });
+      }
+      if (value.STT_PROVIDER === 'openrouter' && (value.LLM_PROVIDER !== 'openrouter' || !value.LLM_API_KEY)) {
+        context.addIssue({ code: 'custom', path: ['LLM_API_KEY'], message: 'LLM_PROVIDER=openrouter and LLM_API_KEY are required for hybrid OpenRouter transcription' });
       }
       if (value.GPU_PROVIDER === 'runpod' && (!value.RUNPOD_API_KEY || !value.RUNPOD_ENDPOINT_ID)) {
         context.addIssue({ code: 'custom', path: ['RUNPOD_API_KEY'], message: 'RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID are required for Runpod' });

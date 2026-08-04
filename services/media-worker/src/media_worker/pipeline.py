@@ -18,6 +18,7 @@ from .media import (
     probe_media,
 )
 from .models import ArtifactDescriptor, ArtifactLocation, PipelineRequest, ReframeRequest, StageResponse
+from .openrouter_stt import transcribe_file as transcribe_with_openrouter
 from .rendering import render_clips
 from .quality import corrected_compositions, merge_rerender_quality, review_renders
 from .runpod import execute_remote_job
@@ -166,6 +167,23 @@ class Pipeline:
         value = None
         if (
             self.settings.ai_execution_mode == "hybrid"
+            and self.settings.stt_provider == "openrouter"
+        ):
+            if _external_budget_available(
+                request.options, self.settings.openrouter_stt_cost_usd_per_hour
+            ):
+                try:
+                    source = self._ensure_source(request, workspace)
+                    value = transcribe_with_openrouter(
+                        source, self.settings, request.options
+                    )
+                except WorkerError as error:
+                    provider_error = error.code
+            else:
+                provider_error = "OPENROUTER_STT_BUDGET_EXCEEDED"
+        if (
+            value is None
+            and self.settings.ai_execution_mode == "hybrid"
             and self.settings.stt_provider == "deepgram"
             and request.source_uri
             and _external_budget_available(request.options, self.settings.deepgram_cost_usd_per_hour)
@@ -181,7 +199,7 @@ class Pipeline:
             value = transcribe(source, self.settings, request.options)
             if provider_error:
                 value["fallback"] = {
-                    "provider": "deepgram",
+                    "provider": self.settings.stt_provider,
                     "reason": provider_error,
                     "engine": "whisperx",
                 }

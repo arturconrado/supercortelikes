@@ -68,6 +68,23 @@ def test_runtime_tuning_environment(monkeypatch):
     assert settings.ytdlp_fragment_concurrency == 4
 
 
+def test_openrouter_stt_environment_and_hybrid_validation(monkeypatch):
+    monkeypatch.setenv("AI_EXECUTION_MODE", "hybrid")
+    monkeypatch.setenv("STT_PROVIDER", "openrouter")
+    monkeypatch.setenv("LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("LLM_API_KEY", "secret")
+    monkeypatch.setenv("OPENROUTER_STT_MODEL", "openai/whisper-large-v3-turbo")
+    monkeypatch.setenv("OPENROUTER_STT_CONCURRENCY", "3")
+
+    settings = Settings.from_env()
+
+    assert settings.stt_provider == "openrouter"
+    assert settings.openrouter_stt_model == "openai/whisper-large-v3-turbo"
+    assert settings.openrouter_stt_concurrency == 3
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER=openrouter"):
+        replace(settings, llm_provider="none", llm_api_key="").validate()
+
+
 def test_process_runner_success_json_and_failures(monkeypatch):
     assert require_binary("python3")
     assert run_command(["python3", "-c", "print('ok')"]).strip() == b"ok"

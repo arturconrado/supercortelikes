@@ -10,7 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TORCH_HOME=/data/models/torch \
     TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 \
     XDG_CACHE_HOME=/data/models/cache \
-    YOLO_CONFIG_DIR=/data/models
+    YOLO_CONFIG_DIR=/data/models \
+    YOLO_MODEL=/opt/models/yolo11n.pt
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg fontconfig fonts-liberation2 fonts-montserrat fonts-urw-base35 libglib2.0-0 libgl1 patchelf python3 python3-pip \
@@ -21,7 +22,10 @@ WORKDIR /app
 COPY requirements.txt requirements-gpu.txt ./
 RUN python3 -m pip install --upgrade pip \
     && python3 -m pip install -r requirements-gpu.txt \
-    && python3 -c "import torch, whisperx, cv2, mediapipe, ultralytics; assert torch.version.cuda; print(torch.version.cuda)"
+    && mkdir -p /opt/models \
+    && cd /opt/models \
+    && python3 -c "import torch, whisperx, cv2, mediapipe, ultralytics; from ultralytics import YOLO; assert torch.version.cuda; YOLO('yolo11n.pt'); print(torch.version.cuda)" \
+    && test -s /opt/models/yolo11n.pt
 
 COPY pyproject.toml ./
 COPY src ./src

@@ -72,6 +72,27 @@ describe('environment validation', () => {
     expect(config).toMatchObject({ AI_EXECUTION_MODE: 'hybrid', STT_PROVIDER: 'deepgram', GPU_PROVIDER: 'runpod' });
   });
 
+  it('accepts hybrid OpenRouter transcription only with the shared LLM key', () => {
+    const production = {
+      ...base,
+      NODE_ENV: 'production', APP_ENV: 'production', DIRECT_DATABASE_URL: base.DATABASE_URL,
+      REFRESH_TOKEN_SECRET: 'abcdefghijklmnopqrstuvwxyz123456', ENABLE_AI: 'true', ENABLE_WHISPERX: 'true',
+      UPLOAD_MODE: 'direct', AI_EXECUTION_MODE: 'hybrid', STT_PROVIDER: 'openrouter',
+    };
+    expect(() => validateEnvironment(production)).toThrow(/LLM_PROVIDER=openrouter/);
+    const config = validateEnvironment({
+      ...production,
+      LLM_PROVIDER: 'openrouter', LLM_API_KEY: 'openrouter-secret',
+    });
+    expect(config).toMatchObject({
+      AI_EXECUTION_MODE: 'hybrid',
+      STT_PROVIDER: 'openrouter',
+      OPENROUTER_STT_MODEL: 'openai/whisper-large-v3-turbo',
+      OPENROUTER_STT_CONCURRENCY: 2,
+      LLM_PROVIDER_SORT: 'price',
+    });
+  });
+
   it('rejects Turnstile bypass tokens in production by default', () => {
     expect(() => validateEnvironment({
       ...base,
