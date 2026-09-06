@@ -20,6 +20,7 @@ def analyze_focus(
     start_seconds: float = 0.0,
     end_seconds: Optional[float] = None,
     time_budget_seconds: Optional[float] = None,
+    skip_lip_region_refinement: bool = False,
 ) -> Dict[str, Any]:
     try:
         import cv2
@@ -75,11 +76,8 @@ def analyze_focus(
                 boxes = tracked_boxes
                 # A single detected face is unambiguous. Lip-region motion is only
                 # needed to disambiguate interviews and remote grids.
-                activity_regions = getattr(detect, "activity_regions", None)
-                regions = (
-                    activity_regions(frame, boxes)
-                    if len(boxes) > 1 and callable(activity_regions)
-                    else boxes
+                regions = _resolve_activity_regions(
+                    detect, frame, boxes, skip_lip_region_refinement
                 )
                 activity = (
                     _motion_activity(previous_gray, gray, regions)
@@ -317,6 +315,28 @@ def _weighted_center(
     return x, y
 
 
+def _resolve_activity_regions(
+    detect: Any,
+    frame: Any,
+    boxes: Sequence[Tuple[float, float, float, float, float]],
+    skip_lip_region_refinement: bool,
+) -> Sequence[Tuple[float, float, float, float, float]]:
+    """Resolve which regions `_motion_activity` should measure motion over:
+    the detector's refined lip/mouth regions when available and not skipped,
+    else the plain detected boxes -- still a non-degenerate motion signal,
+    just coarser. Skipping avoids a second detector pass per sampled frame
+    whenever an external AI speaker signal is authoritative for the clip
+    (see `speaker_ai.enabled`)."""
+    activity_regions = getattr(detect, "activity_regions", None)
+    if (
+        len(boxes) > 1
+        and not skip_lip_region_refinement
+        and callable(activity_regions)
+    ):
+        return activity_regions(frame, boxes)
+    return boxes
+
+
 def _motion_activity(
     previous_gray: Any,
     current_gray: Any,
@@ -439,9 +459,54 @@ def _detector(name: str, cv2: Any, settings: Settings):
                 )
             return boxes
 
+        def activity_regions(
+            frame: Any,
+            faces: Sequence[Tuple[float, float, float, float, float]],
+        ):
+            # Re-run FaceDetection on the current frame (activity_regions is invoked
+            # at the tighter tracking cadence) reusing the already-loaded model and
+            # its `relative_keypoints[3]` (MOUTH_CENTER) -- no second model needed,
+            # unlike YOLO's separate FaceMesh pass below.
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            height, width = frame.shape[:2]
+            result = face_detector.process(rgb)
+            mouth_regions = []
+            for value in result.detections or []:
+                keypoints = value.location_data.relative_keypoints
+                if len(keypoints) <= 3:
+                    continue
+                box = value.location_data.relative_bounding_box
+                mouth = keypoints[3]
+                pad_x = max(4.0, box.width * width * 0.22)
+                pad_y = max(4.0, box.height * height * 0.16)
+                center_x, center_y = mouth.x * width, mouth.y * height
+                mouth_regions.append(
+                    (
+                        max(0.0, center_x - pad_x),
+                        max(0.0, center_y - pad_y),
+                        min(float(width), center_x + pad_x) - max(0.0, center_x - pad_x),
+                        min(float(height), center_y + pad_y) - max(0.0, center_y - pad_y),
+                        1.0,
+                    )
+                )
+            regions = []
+            for fx, fy, fw, fh, confidence in faces:
+                matches = [
+                    mouth
+                    for mouth in mouth_regions
+                    if fx <= mouth[0] + mouth[2] / 2 <= fx + fw
+                    and fy <= mouth[1] + mouth[3] / 2 <= fy + fh
+                ]
+                # No keypoint matched (profile turn/occlusion this frame): fall back
+                # to the full face box -- unlike YOLO's `ph * 0.45` fallback, which
+                # assumes a full-body person box rather than an already-tight face box.
+                regions.append(matches[0] if matches else (fx, fy, fw, fh, confidence))
+            return regions
+
         def close():
             face_detector.close()
 
+        setattr(detect, "activity_regions", activity_regions)
         setattr(detect, "close", close)
         return "mediapipe-face", detect
     if name == "yolo":

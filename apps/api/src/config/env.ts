@@ -65,6 +65,8 @@ const environmentSchema = z.object({
   MEDIA_DIARIZATION_ENABLED: booleanString,
   COMPOSITION_V1_ENABLED: enabledBooleanString,
   COMPOSITION_V1_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),
+  COMPOSITION_MINIMUM_SPEAKER_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.65),
+  COMPOSITION_FOCUS_SWITCH_DELAY_SECONDS: z.coerce.number().min(0).max(0.4).default(0.25),
   MEDIA_ACCELERATOR: z.enum(['cpu', 'cuda']).default('cpu'),
   AI_EXECUTION_MODE: z.enum(['local', 'hybrid']).default('local'),
   STT_PROVIDER: z.enum(['whisperx', 'deepgram', 'openrouter']).default('whisperx'),

@@ -24,6 +24,8 @@ export class MediaStageProcessor {
   private readonly renderMaxSourceShortSide: number;
   private readonly compositionV1Enabled: boolean;
   private readonly compositionV1RolloutPercent: number;
+  private readonly minimumSpeakerConfidence: number;
+  private readonly focusSwitchDelaySeconds: number;
   private readonly mediaAccelerator: 'cpu' | 'cuda';
   private readonly aiExecutionMode: 'local' | 'hybrid';
   private readonly sttProvider: 'whisperx' | 'deepgram' | 'openrouter';
@@ -47,6 +49,8 @@ export class MediaStageProcessor {
     this.renderMaxSourceShortSide = config.get('RENDER_MAX_SOURCE_SHORT_SIDE', { infer: true });
     this.compositionV1Enabled = config.get('COMPOSITION_V1_ENABLED', { infer: true });
     this.compositionV1RolloutPercent = config.get('COMPOSITION_V1_ROLLOUT_PERCENT', { infer: true }) ?? 100;
+    this.minimumSpeakerConfidence = config.get('COMPOSITION_MINIMUM_SPEAKER_CONFIDENCE', { infer: true });
+    this.focusSwitchDelaySeconds = config.get('COMPOSITION_FOCUS_SWITCH_DELAY_SECONDS', { infer: true });
     this.mediaAccelerator = config.get('MEDIA_ACCELERATOR', { infer: true });
     this.aiExecutionMode = config.get('AI_EXECUTION_MODE', { infer: true });
     this.sttProvider = config.get('STT_PROVIDER', { infer: true });
@@ -141,8 +145,8 @@ export class MediaStageProcessor {
         detector: 'auto',
         sampleSeconds: 1 / Math.max(1, analysisFps),
         analysisFps,
-        minimumSpeakerConfidence: 0.65,
-        focusSwitchDelaySeconds: 0.25,
+        minimumSpeakerConfidence: this.minimumSpeakerConfidence,
+        focusSwitchDelaySeconds: this.focusSwitchDelaySeconds,
         analysisBudgetRatio:
           this.mediaAccelerator === 'cuda' || this.gpuProvider === 'runpod' ? 1 : 4,
         remote: this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod',

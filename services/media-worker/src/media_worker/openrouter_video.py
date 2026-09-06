@@ -39,10 +39,23 @@ def create_proxy(
     settings: Any,
     *,
     clip_id: str,
+    start_seconds: Optional[float] = None,
+    end_seconds: Optional[float] = None,
 ) -> Optional[Path]:
-    """Create an audio-bearing proxy small enough for OpenRouter video input."""
+    """Create an audio-bearing proxy small enough for OpenRouter video input.
+
+    When `start_seconds`/`end_seconds` are provided, trims the source to that
+    range first -- used to proxy a time slice of the raw source clip (e.g. for
+    proactive speaker analysis) rather than the whole file. Existing call sites
+    that omit them keep proxying the file as-is.
+    """
     destination_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(value if value.isalnum() or value in {"-", "_"} else "-" for value in clip_id)
+    trim_args: list[str] = []
+    if start_seconds is not None:
+        trim_args.extend(["-ss", str(max(0.0, float(start_seconds)))])
+    if end_seconds is not None:
+        trim_args.extend(["-to", str(max(0.0, float(end_seconds)))])
     attempts = (
         (480, 12, 30, 80),
         (360, 8, 34, 56),
@@ -53,6 +66,7 @@ def create_proxy(
             [
                 str(getattr(settings, "ffmpeg_binary", "ffmpeg")),
                 "-y",
+                *trim_args,
                 "-i",
                 str(source),
                 "-map",
