@@ -78,6 +78,7 @@ class Settings:
     openrouter_stt_cost_usd_per_hour: float
     openrouter_editor_model: str
     openrouter_qa_enabled: bool
+    openrouter_active_speaker_enabled: bool
     openrouter_video_enabled: bool
     openrouter_video_model: str
     openrouter_video_max_bytes: int
@@ -214,6 +215,9 @@ class Settings:
                 os.getenv("LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
             ).strip() or "deepseek/deepseek-v4-flash-0731",
             openrouter_qa_enabled=_bool_env("OPENROUTER_QA_ENABLED", True),
+            openrouter_active_speaker_enabled=_bool_env(
+                "OPENROUTER_ACTIVE_SPEAKER_ENABLED", True
+            ),
             openrouter_video_enabled=_bool_env("OPENROUTER_VIDEO_ENABLED", True),
             openrouter_video_model=os.getenv(
                 "OPENROUTER_VIDEO_MODEL",

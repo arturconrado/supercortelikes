@@ -458,12 +458,14 @@ def corrected_compositions(
                 scene_value["layout"] = correction["layout"]
                 if correction.get("activeTrackId") is not None:
                     scene_value["activeTrackId"] = correction["activeTrackId"]
-            elif issues.intersection({"wrong_speaker", "late_switch"}):
+            else:
+                # Any issue type falls back to split when 2+ subjects are safely
+                # visible -- not just wrong_speaker/late_switch. A subject_unsafe
+                # scene with two visible people is just as well served by showing
+                # both as a wrong_speaker one is.
                 scene_value["layout"] = (
                     "split" if len(scene.get("subjects") or []) >= 2 else "fit"
                 )
-            else:
-                scene_value["layout"] = "fit"
             if scene_value["layout"] == "fill" and correction:
                 keyframes = _track_keyframes(
                     scene,

@@ -121,6 +121,8 @@ describe('MediaStageProcessor persistence', () => {
           RENDER_MAX_SOURCE_SHORT_SIDE: 2160,
           COMPOSITION_V1_ENABLED: true,
           COMPOSITION_V1_ROLLOUT_PERCENT: 100,
+          COMPOSITION_MINIMUM_SPEAKER_CONFIDENCE: 0.7,
+          COMPOSITION_FOCUS_SWITCH_DELAY_SECONDS: 0.3,
           MEDIA_ACCELERATOR: 'cpu',
           AI_EXECUTION_MODE: 'local',
           STT_PROVIDER: 'whisperx',
@@ -169,7 +171,12 @@ describe('MediaStageProcessor persistence', () => {
     expect(media.execute).toHaveBeenCalledWith(
       expect.objectContaining({ stage: 'composition' }),
       expect.anything(),
-      expect.objectContaining({ detector: 'auto', analysisBudgetRatio: 4 }),
+      expect.objectContaining({
+        detector: 'auto',
+        analysisBudgetRatio: 4,
+        minimumSpeakerConfidence: 0.7,
+        focusSwitchDelaySeconds: 0.3,
+      }),
       undefined,
     );
     expect(media.execute).toHaveBeenCalledWith(

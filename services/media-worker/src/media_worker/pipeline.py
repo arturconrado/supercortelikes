@@ -24,6 +24,7 @@ from .quality import corrected_compositions, merge_rerender_quality, review_rend
 from .runpod import execute_remote_job
 from .scoring import score_all
 from .segmentation import semantic_segments
+from . import speaker_ai
 from .storage import upload_file
 from .transcription import transcribe
 from .vision import analyze_focus, render_reframes, smart_crop_geometry
@@ -695,16 +696,29 @@ class Pipeline:
         self, request: PipelineRequest, workspace: Workspace
     ) -> StageResponse:
         clips = workspace.read_json("clips/clips.json")["clips"]
-        composition_options = {
-            **request.options,
-            "voiceActivity": _voice_activity(workspace),
-            **_source_video_dimensions(workspace),
-        }
         deferred = (
             self.settings.ai_execution_mode == "hybrid"
             and self.settings.gpu_provider == "runpod"
             and bool(request.options.get("remote"))
         )
+        ai_speaker_activity: Dict[str, List[Dict[str, Any]]] = {}
+        provider_usage: List[Dict[str, Any]] = []
+        source = None
+        if not deferred:
+            source = self._ensure_source(request, workspace)
+            ai_speaker_activity, provider_usage = _ai_speaker_activity(
+                source,
+                clips,
+                self.settings,
+                workspace,
+                request.options.get("costRemainingUsd"),
+            )
+        composition_options = {
+            **request.options,
+            "voiceActivity": _voice_activity(workspace),
+            "aiSpeakerActivity": ai_speaker_activity,
+            **_source_video_dimensions(workspace),
+        }
         if deferred:
             aspect = str(request.options.get("aspectRatio", "9:16"))
             plans = [fallback_plan(clip, aspect, "deferred-runpod") for clip in clips]
@@ -716,7 +730,6 @@ class Pipeline:
                 plan["accelerator"] = "deferred"
                 plan["diagnostics"]["accelerator"] = "deferred"
         else:
-            source = self._ensure_source(request, workspace)
             plans = build_compositions(source, clips, self.settings, composition_options)
         manifest = workspace.write_json(
             "composition/manifest.json", {"compositions": plans}
@@ -736,7 +749,7 @@ class Pipeline:
                 "ready": ready,
                 "fallbacks": fallbacks,
                 "version": plans[0]["version"] if plans else "composition-v2",
-                "providerUsage": [],
+                "providerUsage": provider_usage,
                 "remote": False,
                 "deferred": deferred,
             },
@@ -1054,6 +1067,39 @@ def _voice_activity(workspace: Workspace) -> List[Dict[str, Any]]:
                 }
             )
     return intervals
+
+
+def _ai_speaker_activity(
+    source: Path,
+    clips: List[Dict[str, Any]],
+    settings: Settings,
+    workspace: Workspace,
+    cost_remaining_usd: Any,
+) -> "tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]]]":
+    """Proactively ask the OpenRouter video model who is speaking/whether there
+    is cross-talk in each clip, using the raw source -- feeds `composition.py`
+    as a primary signal before rendering. Degrades to an empty result (falls
+    back entirely to the visual signal) when disabled, unavailable, or once
+    the remaining AI cost budget for this video is exhausted."""
+    activity: Dict[str, List[Dict[str, Any]]] = {}
+    usage: List[Dict[str, Any]] = []
+    if not speaker_ai.enabled(settings):
+        return activity, usage
+    remaining = _optional_float(cost_remaining_usd)
+    output_dir = workspace.path("composition/speaker-proxies")
+    for clip in clips:
+        if remaining is not None and remaining <= 0:
+            break
+        intervals, clip_usage = speaker_ai.analyze_clip_speakers(
+            source, clip, settings, output_dir, cost_remaining_usd=remaining
+        )
+        if clip_usage is not None:
+            usage.append(clip_usage)
+            if remaining is not None:
+                remaining = max(0.0, remaining - float(clip_usage.get("costUsd") or 0.0))
+        if intervals is not None:
+            activity[str(clip["id"])] = intervals
+    return activity, usage
 
 
 def _source_video_dimensions(workspace: Workspace) -> Dict[str, int]:

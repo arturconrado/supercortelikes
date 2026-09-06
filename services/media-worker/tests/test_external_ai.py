@@ -405,6 +405,53 @@ def test_visual_qa_conservative_rerender_preserves_other_clips():
     assert value["clip-002"] == plans["clip-002"]
 
 
+def test_visual_qa_conservative_rerender_falls_back_to_split_when_two_subjects_are_visible():
+    plans = {
+        "clip-001": {
+            "scenes": [
+                {
+                    "layout": "fill",
+                    "keyframes": [{"at": 0}],
+                    "subjects": [{"trackId": 1}, {"trackId": 2}],
+                }
+            ],
+            "diagnostics": {"status": "ready"},
+        },
+    }
+
+    value = conservative_compositions(plans, ["clip-001"])
+
+    # Two safely visible subjects are just as well served by showing both as a
+    # single-subject scene would be by "fit" -- a subject_unsafe correction
+    # should not blur a clip with a perfectly good second person on screen.
+    assert value["clip-001"]["scenes"][0]["layout"] == "split"
+
+
+def test_corrected_compositions_treats_all_issue_types_symmetrically():
+    plans = {
+        "clip-001": {
+            "scenes": [
+                {
+                    "layout": "fill",
+                    "keyframes": [{"at": 0}],
+                    "subjects": [{"trackId": 1}, {"trackId": 2}],
+                }
+            ],
+            "diagnostics": {"status": "ready"},
+        },
+    }
+
+    corrected = corrected_compositions(
+        plans,
+        [{"clipId": "clip-001", "issues": ["face_cut"], "corrections": []}],
+    )
+
+    # `face_cut` is neither `wrong_speaker` nor `late_switch`, but the fallback
+    # must not special-case those two issue types -- any issue with 2+ visible
+    # subjects falls back to split, not fit.
+    assert corrected["clip-001"]["scenes"][0]["layout"] == "split"
+
+
 def test_video_qa_correction_can_retarget_a_known_visual_track():
     plans = {
         "clip-001": {
@@ -930,6 +977,56 @@ def test_openrouter_video_proxy_keeps_audio_and_resets_pts(tmp_path, monkeypatch
     assert captured["command"][captured["command"].index("-map") + 1] == "0:v:0"
     assert "0:a:0?" in captured["command"]
     assert "aresample=async=1:first_pts=0" in captured["command"]
+
+
+def test_openrouter_video_proxy_applies_trim_arguments_when_start_and_end_provided(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    captured = {}
+
+    def run(command, timeout):
+        captured.update(command=command, timeout=timeout)
+        (tmp_path / "proxies").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "proxies" / "clip-1-480p-12fps.mp4").write_bytes(b"proxy")
+
+    monkeypatch.setattr(openrouter_video, "run_command", run)
+    openrouter_video.create_proxy(
+        source,
+        tmp_path / "proxies",
+        qa_settings(),
+        clip_id="clip-1",
+        start_seconds=12.5,
+        end_seconds=18.0,
+    )
+
+    command = captured["command"]
+    input_index = command.index("-i")
+    # -ss/-to must precede -i (fast seek) and use the requested boundaries.
+    assert command[command.index("-ss") + 1] == "12.5"
+    assert command[command.index("-to") + 1] == "18.0"
+    assert command.index("-ss") < input_index
+    assert command.index("-to") < input_index
+
+
+def test_openrouter_video_proxy_omits_trim_arguments_by_default(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    captured = {}
+
+    def run(command, timeout):
+        captured.update(command=command, timeout=timeout)
+        (tmp_path / "proxies").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "proxies" / "clip-1-480p-12fps.mp4").write_bytes(b"proxy")
+
+    monkeypatch.setattr(openrouter_video, "run_command", run)
+    openrouter_video.create_proxy(
+        source, tmp_path / "proxies", qa_settings(), clip_id="clip-1"
+    )
+
+    assert "-ss" not in captured["command"]
+    assert "-to" not in captured["command"]
 
 
 def test_openrouter_video_retries_rate_limits(monkeypatch):

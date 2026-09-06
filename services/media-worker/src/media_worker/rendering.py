@@ -268,44 +268,85 @@ def _composition_filter_graph(
             )
         elif layout == "split" and len(scene.get("subjects") or []) >= 2:
             subjects = list(scene.get("subjects") or [])[:2]
-            top_height = max(2, target_height // 2 // 2 * 2)
-            bottom_height = max(2, target_height - top_height)
-            top_crop_width, top_crop_height = crop_dimensions(
-                source_width, source_height, target_width, top_height
-            )
-            bottom_crop_width, bottom_crop_height = crop_dimensions(
-                source_width, source_height, target_width, bottom_height
-            )
-            first_x, first_y = _subject_crop(
-                subjects[0],
-                source_width,
-                source_height,
-                top_crop_width,
-                top_crop_height,
-                target_x_ratio,
-                target_face_y_ratio,
-            )
-            second_x, second_y = _subject_crop(
-                subjects[1],
-                source_width,
-                source_height,
-                bottom_crop_width,
-                bottom_crop_height,
-                target_x_ratio,
-                target_face_y_ratio,
-            )
-            graph.extend(
-                [
-                    "[0:v]trim=start=%.3f:end=%.3f,setpts=PTS-STARTPTS,split=2[s%da][s%db]"
-                    % (local_start, local_end, index, index),
-                    "[s%da]crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos[top%d]"
-                    % (index, top_crop_width, top_crop_height, first_x, first_y, target_width, top_height, index),
-                    "[s%db]crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos[bottom%d]"
-                    % (index, bottom_crop_width, bottom_crop_height, second_x, second_y, target_width, bottom_height, index),
-                    "[top%d][bottom%d]vstack=inputs=2,setsar=1,fps=30,settb=AVTB,format=yuv420p[%s]"
-                    % (index, index, label),
-                ]
-            )
+            orientation = str(scene.get("orientation") or "vstack")
+            if orientation == "hstack":
+                left_width = max(2, target_width // 2 // 2 * 2)
+                right_width = max(2, target_width - left_width)
+                left_crop_width, left_crop_height = crop_dimensions(
+                    source_width, source_height, left_width, target_height
+                )
+                right_crop_width, right_crop_height = crop_dimensions(
+                    source_width, source_height, right_width, target_height
+                )
+                first_x, first_y = _subject_crop(
+                    subjects[0],
+                    source_width,
+                    source_height,
+                    left_crop_width,
+                    left_crop_height,
+                    target_x_ratio,
+                    target_face_y_ratio,
+                )
+                second_x, second_y = _subject_crop(
+                    subjects[1],
+                    source_width,
+                    source_height,
+                    right_crop_width,
+                    right_crop_height,
+                    target_x_ratio,
+                    target_face_y_ratio,
+                )
+                graph.extend(
+                    [
+                        "[0:v]trim=start=%.3f:end=%.3f,setpts=PTS-STARTPTS,split=2[s%da][s%db]"
+                        % (local_start, local_end, index, index),
+                        "[s%da]crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos[left%d]"
+                        % (index, left_crop_width, left_crop_height, first_x, first_y, left_width, target_height, index),
+                        "[s%db]crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos[right%d]"
+                        % (index, right_crop_width, right_crop_height, second_x, second_y, right_width, target_height, index),
+                        "[left%d][right%d]hstack=inputs=2,setsar=1,fps=30,settb=AVTB,format=yuv420p[%s]"
+                        % (index, index, label),
+                    ]
+                )
+            else:
+                top_height = max(2, target_height // 2 // 2 * 2)
+                bottom_height = max(2, target_height - top_height)
+                top_crop_width, top_crop_height = crop_dimensions(
+                    source_width, source_height, target_width, top_height
+                )
+                bottom_crop_width, bottom_crop_height = crop_dimensions(
+                    source_width, source_height, target_width, bottom_height
+                )
+                first_x, first_y = _subject_crop(
+                    subjects[0],
+                    source_width,
+                    source_height,
+                    top_crop_width,
+                    top_crop_height,
+                    target_x_ratio,
+                    target_face_y_ratio,
+                )
+                second_x, second_y = _subject_crop(
+                    subjects[1],
+                    source_width,
+                    source_height,
+                    bottom_crop_width,
+                    bottom_crop_height,
+                    target_x_ratio,
+                    target_face_y_ratio,
+                )
+                graph.extend(
+                    [
+                        "[0:v]trim=start=%.3f:end=%.3f,setpts=PTS-STARTPTS,split=2[s%da][s%db]"
+                        % (local_start, local_end, index, index),
+                        "[s%da]crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos[top%d]"
+                        % (index, top_crop_width, top_crop_height, first_x, first_y, target_width, top_height, index),
+                        "[s%db]crop=%d:%d:%d:%d,scale=%d:%d:flags=lanczos[bottom%d]"
+                        % (index, bottom_crop_width, bottom_crop_height, second_x, second_y, target_width, bottom_height, index),
+                        "[top%d][bottom%d]vstack=inputs=2,setsar=1,fps=30,settb=AVTB,format=yuv420p[%s]"
+                        % (index, index, label),
+                    ]
+                )
         else:
             graph.extend(
                 [

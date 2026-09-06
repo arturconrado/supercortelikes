@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Sequence
 
 from .config import Settings
+from . import speaker_ai
 from .vision import analyze_focus, crop_dimensions
 
 
@@ -49,6 +50,13 @@ def build_compositions(
         ),
     )
     plans: List[Dict[str, Any]] = []
+    # Decided once per composition run, not per clip: whenever the AI speaker
+    # signal is authoritative, the extra lip-region detector pass in
+    # `analyze_focus` is redundant CPU work -- `_motion_activity` still runs on
+    # the plain boxes as a non-degenerate fallback for any clip/window the AI
+    # call ends up not covering (see `speaker_ai`/item 9).
+    skip_lip_region_refinement = speaker_ai.enabled(settings)
+    ai_speaker_activity = options.get("aiSpeakerActivity") or {}
     for clip in clips:
         start, end = float(clip["start"]), float(clip["end"])
         if not enabled:
@@ -63,8 +71,12 @@ def build_compositions(
                 start_seconds=start,
                 end_seconds=end,
                 time_budget_seconds=max(2.0, (end - start) * budget_ratio),
+                skip_lip_region_refinement=skip_lip_region_refinement,
             )
             _combine_voice_activity(analysis, options.get("voiceActivity"))
+            _combine_ai_speaker_activity(
+                analysis, ai_speaker_activity.get(str(clip["id"]))
+            )
             plans.append(
                 composition_plan(
                     clip,
@@ -216,6 +228,92 @@ def _box_iou(left: Mapping[str, Any], right: Mapping[str, Any]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def _combine_ai_speaker_activity(analysis: Dict[str, Any], intervals: Any) -> None:
+    """Fold the proactive AI speaker signal (`speaker_ai`) into `analysis`
+    samples, mirroring how `_combine_voice_activity`/`_associate_speakers_with_tracks`
+    fold in diarization -- except positions are matched to the nearest visual
+    box instead of an already-known speaker/track id. No-op when there is no
+    AI coverage for this clip (disabled, unavailable, or budget exhausted)."""
+    if not isinstance(intervals, list) or not intervals:
+        return
+    normalized = []
+    for interval in intervals:
+        if not isinstance(interval, Mapping):
+            continue
+        speakers = [
+            speaker
+            for speaker in interval.get("speakers") or []
+            if isinstance(speaker, Mapping)
+            and isinstance(speaker.get("xRatio"), (int, float))
+            and isinstance(speaker.get("yRatio"), (int, float))
+        ]
+        if not speakers:
+            continue
+        try:
+            normalized.append(
+                (
+                    float(interval["start"]),
+                    float(interval["end"]),
+                    speakers,
+                    bool(interval.get("crossTalk")),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not normalized:
+        return
+    width = float(analysis.get("width") or 0.0)
+    height = float(analysis.get("height") or 0.0)
+    covered_any = False
+    for sample in analysis.get("samples", []):
+        time = float(sample.get("time", 0.0))
+        match = next(
+            (
+                (speakers, cross_talk)
+                for start, end, speakers, cross_talk in normalized
+                if start - 0.1 <= time <= end + 0.1
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        speakers, cross_talk = match
+        sample["aiCovered"] = True
+        covered_any = True
+        boxes = [box for box in sample.get("boxes", []) if isinstance(box, dict)]
+        if cross_talk and len(speakers) >= 2 and len(boxes) >= 2:
+            sample["aiCrossTalk"] = True
+            continue
+        if not boxes or width <= 0 or height <= 0:
+            continue
+        # Single reported speaker (or crossTalk without enough boxes/speakers
+        # to honor a split): match the reported position to the nearest
+        # detected box and boost/suppress activity, mirroring the diarization
+        # boost in `_associate_speakers_with_tracks`.
+        target_x = float(speakers[0]["xRatio"]) * width
+        target_y = float(speakers[0]["yRatio"]) * height
+        best_box = min(
+            boxes, key=lambda box: _distance_to_point(box, target_x, target_y)
+        )
+        matched_activity = 0.0
+        for box in boxes:
+            activity = float(box.get("activity", 0.0))
+            if box is best_box:
+                activity = max(0.85, activity)
+                matched_activity = max(matched_activity, activity)
+            else:
+                activity *= 0.25
+            box["activity"] = round(activity, 4)
+        sample["activeSpeakerConfidence"] = round(matched_activity, 4)
+    if covered_any:
+        analysis["activeSpeakerMethod"] = "ai-video-plus-visual-track"
+
+
+def _distance_to_point(box: Mapping[str, Any], target_x: float, target_y: float) -> float:
+    center_x, center_y = _subject_focus(box)
+    return (center_x - target_x) ** 2 + (center_y - target_y) ** 2
+
+
 def fallback_plan(
     clip: Mapping[str, Any], aspect: str, reason: str = "low-confidence"
 ) -> Dict[str, Any]:
@@ -260,16 +358,27 @@ def composition_plan(
     if not samples:
         return fallback_plan(clip, aspect)
     raw_detection_rate = float(analysis.get("detectionRate", 0.0))
-    usable_detection_rate = sum(
-        1
-        for sample in samples
-        if any(
+    usable_flags = [
+        any(
             _usable_subject_box(box, width, height)
             for box in list(sample.get("boxes") or [])
         )
-    ) / len(samples)
+        for sample in samples
+    ]
+    usable_detection_rate = sum(usable_flags) / len(samples)
     detection_rate = min(raw_detection_rate, usable_detection_rate)
-    if detection_rate < 0.35:
+    window_rates = _windowed_usable_rates(
+        [float(sample.get("time", 0.0)) for sample in samples],
+        usable_flags,
+        DETECTION_WINDOW_SECONDS,
+    )
+    if (
+        detection_rate < MINIMUM_DETECTION_RATE
+        and max(window_rates, default=0.0) < MINIMUM_DETECTION_RATE
+    ):
+        # Neither the whole clip nor its single best ~2s stretch has reliable
+        # detections -- a transient dip alone should not reach this branch,
+        # see the per-sample `windowUnreliable` handling below for that case.
         plan = fallback_plan(clip, aspect, "detection-rate")
         plan["source"] = {"width": width, "height": height}
         plan["diagnostics"]["detectionRate"] = round(detection_rate, 4)
@@ -278,7 +387,7 @@ def composition_plan(
         return plan
 
     labeled = []
-    for sample in samples:
+    for index, sample in enumerate(samples):
         boxes = sorted(
             [
                 box
@@ -294,7 +403,13 @@ def composition_plan(
             reverse=True,
         )
         activity = float(sample.get("activeSpeakerConfidence", 0.0))
-        if not boxes:
+        window_unreliable = window_rates[index] < MINIMUM_DETECTION_RATE
+        if sample.get("aiCrossTalk") and len(boxes) >= 2:
+            # AI-reported cross-talk wins outright: honor the exact window the
+            # model returned rather than requiring the sustain window
+            # `detect_cross_talk` needs for its noisier, cheaper visual signal.
+            layout = "split"
+        elif not boxes or window_unreliable:
             layout = "fit"
         elif len(boxes) >= 2 and activity < minimum_confidence:
             layout = "split"
@@ -330,6 +445,8 @@ def composition_plan(
                 "fillSafe": fill_safe,
                 "framingSafe": layout != "fill" or fill_safe,
                 "framingFallback": fill_fallback,
+                "windowUnreliable": window_unreliable,
+                "aiCovered": bool(sample.get("aiCovered")),
                 "activeTrackId": (
                     int(primary["trackId"])
                     if primary and primary.get("trackId") is not None
@@ -338,6 +455,7 @@ def composition_plan(
             }
         )
 
+    labeled = detect_cross_talk(labeled)
     labeled = bridge_safe_fill_gaps(labeled, maximum_seconds=0.5)
     held_detection_gaps = sum(
         1 for value in labeled if value.get("trackingHeld")
@@ -380,6 +498,20 @@ def composition_plan(
             "framingProfile": FRAMING_PROFILE["name"],
             "framingFallbackSamples": framing_fallbacks,
             "heldDetectionGapSamples": held_detection_gaps,
+            "detectionWindowSeconds": DETECTION_WINDOW_SECONDS,
+            "lowDetectionWindowSamples": sum(
+                1 for value in labeled if value.get("windowUnreliable")
+            ),
+            "crossTalkSamples": sum(
+                1 for value in labeled if value.get("crossTalk")
+            ),
+            "aiSpeakerCoverage": round(
+                sum(1 for value in labeled if value.get("aiCovered")) / len(labeled),
+                4,
+            ),
+            "aiCrossTalkSamples": sum(
+                1 for sample in samples if sample.get("aiCrossTalk")
+            ),
             "sampleCount": len(labeled),
             "sampleSeconds": round(
                 max(0.0, labeled[1]["time"] - labeled[0]["time"])
@@ -480,6 +612,85 @@ def _usable_subject_box(
         >= float(FRAMING_PROFILE["minimumPersonHeightRatio"])
         and width * height / frame_area
         >= float(FRAMING_PROFILE["minimumPersonAreaRatio"])
+    )
+
+
+DETECTION_WINDOW_SECONDS = 2.0
+MINIMUM_DETECTION_RATE = 0.35
+
+
+def _windowed_usable_rates(
+    times: Sequence[float], usable: Sequence[bool], window_seconds: float
+) -> List[float]:
+    """Per-sample usable-detection rate over a centered time window, so a transient
+    dip only demotes the samples inside that dip, not the whole clip."""
+    radius = window_seconds / 2
+    rates: List[float] = []
+    start = end = 0
+    n = len(times)
+    for index in range(n):
+        while start < n and times[index] - times[start] > radius:
+            start += 1
+        while end < n - 1 and times[end + 1] - times[index] <= radius:
+            end += 1
+        window = usable[start : end + 1]
+        rates.append(sum(window) / len(window) if window else 0.0)
+    return rates
+
+
+CROSS_TALK_ACTIVITY_FLOOR = 0.45
+CROSS_TALK_ACTIVITY_DELTA = 0.2
+CROSS_TALK_SUSTAIN_SECONDS = 0.5
+
+
+def detect_cross_talk(
+    samples: Sequence[Mapping[str, Any]],
+    *,
+    activity_floor: float = CROSS_TALK_ACTIVITY_FLOOR,
+    activity_delta: float = CROSS_TALK_ACTIVITY_DELTA,
+    sustain_seconds: float = CROSS_TALK_SUSTAIN_SECONDS,
+) -> List[Dict[str, Any]]:
+    """Force `split` when the two ranked boxes show sustained comparable motion,
+    even if the top box alone clears `minimum_confidence`. Pure-visual fallback
+    (frame-differencing / lip-region motion from vision.py) -- only fills gaps
+    the AI speaker signal (composition.py's `aiCrossTalk`) did not cover."""
+    values = [dict(sample) for sample in samples]
+    flags = [
+        _is_cross_talk_sample(sample, activity_floor, activity_delta)
+        for sample in values
+    ]
+    index = 0
+    while index < len(values):
+        end = index + 1
+        while end < len(values) and flags[end] == flags[index]:
+            end += 1
+        if flags[index]:
+            duration = float(values[end - 1]["time"]) - float(values[index]["time"])
+            if duration + 1e-6 >= sustain_seconds:
+                for item in range(index, end):
+                    values[item]["layout"] = "split"
+                    values[item]["crossTalk"] = True
+        index = end
+    return values
+
+
+def _is_cross_talk_sample(
+    sample: Mapping[str, Any], activity_floor: float, activity_delta: float
+) -> bool:
+    if sample.get("aiCovered"):
+        # The AI speaker signal already had an opinion for this sample; the
+        # visual heuristic only reasons about gaps it left uncovered.
+        return False
+    boxes = list(sample.get("boxes") or [])
+    if len(boxes) < 2:
+        return False
+    top_two = sorted(
+        (float(box.get("activity", 0.0)) for box in boxes), reverse=True
+    )[:2]
+    return (
+        top_two[0] >= activity_floor
+        and top_two[1] >= activity_floor
+        and (top_two[0] - top_two[1]) <= activity_delta
     )
 
 
@@ -651,6 +862,10 @@ def smooth_keyframes(
     return values
 
 
+SPLIT_HSTACK_BIAS = 1.15  # bias toward the proven vstack default unless horizontal
+# separation between the two subjects clearly dominates vertical separation.
+
+
 def _scenes(
     samples: Sequence[Mapping[str, Any]],
     keyframes: Sequence[Mapping[str, Any]],
@@ -666,14 +881,30 @@ def _scenes(
         while (
             end < len(samples)
             and samples[end]["layout"] == samples[index]["layout"]
-            and samples[end].get("activeTrackId")
-            == samples[index].get("activeTrackId")
+            and (
+                # Both people are shown in a split scene regardless of who is
+                # momentarily dominant, so requiring activeTrackId equality here
+                # only fragments an otherwise-continuous split into many tiny
+                # scenes (each with its own xfade transition -- visible flicker).
+                samples[index]["layout"] == "split"
+                or samples[end].get("activeTrackId")
+                == samples[index].get("activeTrackId")
+            )
         ):
             end += 1
         scene_start = clip_start if index == 0 else float(samples[index]["time"])
         scene_end = clip_end if end == len(samples) else float(samples[end]["time"])
         scene_samples = samples[index:end]
         boxes = next((value["boxes"] for value in scene_samples if value.get("boxes")), [])
+        # Order by trackId (not momentary activity) so the same physical person
+        # keeps rendering in the same split position for as long as their
+        # trackId persists, instead of hopping when the activity ranking wobbles.
+        ordered_boxes = sorted(
+            boxes[:2],
+            key=lambda box: (
+                box["trackId"] if box.get("trackId") is not None else 10**9
+            ),
+        )
         subjects = [
             {
                 "x": round(_subject_focus(box)[0] / width, 5),
@@ -685,13 +916,19 @@ def _scenes(
                     int(box["trackId"]) if box.get("trackId") is not None else None
                 ),
             }
-            for box in boxes[:2]
+            for box in ordered_boxes
         ]
+        orientation = "vstack"
+        if str(samples[index]["layout"]) == "split" and len(subjects) >= 2:
+            dx = abs(subjects[0]["x"] - subjects[1]["x"])
+            dy = abs(subjects[0]["y"] - subjects[1]["y"])
+            orientation = "hstack" if dx > dy * SPLIT_HSTACK_BIAS else "vstack"
         scenes.append(
             {
                 "start": round(max(clip_start, scene_start), 3),
                 "end": round(min(clip_end, max(scene_start + 0.04, scene_end)), 3),
                 "layout": str(samples[index]["layout"]),
+                "orientation": orientation,
                 "activeTrackId": samples[index].get("activeTrackId"),
                 "confidence": round(
                     sum(float(value["confidence"]) for value in scene_samples)
