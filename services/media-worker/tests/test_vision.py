@@ -168,3 +168,112 @@ def test_yolo_detection_does_not_require_bytetrack_lap(monkeypatch):
 
     assert detect(object()) == [(10, 20, 100, 200, 0.9)]
     assert calls == [{"verbose": False, "classes": [0], "device": "cpu"}]
+
+
+def _fake_mediapipe_module(detections):
+    class FakeFaceDetection:
+        def __init__(self, **_kwargs):
+            pass
+
+        def process(self, _rgb):
+            return SimpleNamespace(detections=detections)
+
+        def close(self):
+            pass
+
+    module = ModuleType("mediapipe")
+    module.solutions = SimpleNamespace(
+        face_detection=SimpleNamespace(FaceDetection=FakeFaceDetection)
+    )
+    return module
+
+
+def test_mediapipe_detection_extracts_mouth_region_activity_from_keypoints(monkeypatch):
+    keypoints = [
+        SimpleNamespace(x=0.3, y=0.3),  # right eye
+        SimpleNamespace(x=0.4, y=0.3),  # left eye
+        SimpleNamespace(x=0.35, y=0.35),  # nose tip
+        SimpleNamespace(x=0.35, y=0.45),  # mouth center (index 3)
+        SimpleNamespace(x=0.25, y=0.32),  # right ear tragion
+        SimpleNamespace(x=0.45, y=0.32),  # left ear tragion
+    ]
+    detection = SimpleNamespace(
+        location_data=SimpleNamespace(
+            relative_bounding_box=SimpleNamespace(
+                xmin=0.2, ymin=0.2, width=0.3, height=0.4
+            ),
+            relative_keypoints=keypoints,
+        ),
+        score=[0.9],
+    )
+    monkeypatch.setitem(sys.modules, "mediapipe", _fake_mediapipe_module([detection]))
+    cv2_stub = SimpleNamespace(cvtColor=lambda frame, _code: frame, COLOR_BGR2RGB=1)
+
+    _backend, detect = vision._detector("mediapipe", cv2_stub, SimpleNamespace())
+    frame = SimpleNamespace(shape=(1000, 1000, 3))
+    boxes = detect(frame)
+    assert boxes == [(200.0, 200.0, 300.0, 400.0, 1.8)]
+
+    activity_regions = getattr(detect, "activity_regions", None)
+    assert callable(activity_regions)
+    regions = activity_regions(frame, boxes)
+    assert len(regions) == 1
+    region = regions[0]
+    # Region should be a small crop centered on the mouth keypoint, not the
+    # full face box.
+    assert region != boxes[0]
+    region_center_x = region[0] + region[2] / 2
+    region_center_y = region[1] + region[3] / 2
+    assert abs(region_center_x - 350) < 1
+    assert abs(region_center_y - 450) < 1
+
+
+def test_mediapipe_activity_regions_falls_back_to_full_face_box_without_enough_keypoints(
+    monkeypatch,
+):
+    detection = SimpleNamespace(
+        location_data=SimpleNamespace(
+            relative_bounding_box=SimpleNamespace(
+                xmin=0.2, ymin=0.2, width=0.3, height=0.4
+            ),
+            relative_keypoints=[SimpleNamespace(x=0.3, y=0.3)],  # only 1, <= 3
+        ),
+        score=[0.9],
+    )
+    monkeypatch.setitem(sys.modules, "mediapipe", _fake_mediapipe_module([detection]))
+    cv2_stub = SimpleNamespace(cvtColor=lambda frame, _code: frame, COLOR_BGR2RGB=1)
+
+    _backend, detect = vision._detector("mediapipe", cv2_stub, SimpleNamespace())
+    frame = SimpleNamespace(shape=(1000, 1000, 3))
+    boxes = detect(frame)
+
+    activity_regions = getattr(detect, "activity_regions")
+    # Unlike YOLO's `ph * 0.45` fallback (a full-body person box), a mediapipe
+    # face box is already tight, so an unmatched face falls back to the full
+    # box rather than a further crop.
+    assert activity_regions(frame, boxes) == boxes
+
+
+def test_resolve_activity_regions_skips_the_extra_detector_pass_when_requested():
+    calls = []
+
+    def fake_activity_regions(_frame, boxes):
+        calls.append(boxes)
+        return ["refined-region"]
+
+    detect = lambda _frame: []  # noqa: E731 - detect() itself is unused here
+    detect.activity_regions = fake_activity_regions
+    boxes = [(0, 0, 10, 10, 0.9), (20, 20, 10, 10, 0.8)]
+
+    skipped = vision._resolve_activity_regions(detect, object(), boxes, True)
+    assert skipped == boxes
+    assert calls == []
+
+    refined = vision._resolve_activity_regions(detect, object(), boxes, False)
+    assert refined == ["refined-region"]
+    assert calls == [boxes]
+
+    # A single box is unambiguous regardless of the flag -- never refined.
+    single = [(0, 0, 10, 10, 0.9)]
+    assert vision._resolve_activity_regions(detect, object(), single, False) == single
+    assert calls == [boxes]
