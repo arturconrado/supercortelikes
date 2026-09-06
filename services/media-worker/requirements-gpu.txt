@@ -7,7 +7,7 @@ torch==2.6.0+cu124
 torchaudio==2.6.0+cu124
 torchvision==0.21.0+cu124
 transformers==5.14.1
-nltk==3.10.0
+nltk==3.10.3
 pyannote-audio==3.3.2
 pyannote-core==5.0.0
 pyannote-database==5.1.3

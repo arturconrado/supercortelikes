@@ -13,3 +13,23 @@
 #
 # Remove this waiver when MediaPipe offers a compatible fixed dependency graph.
 CVE-2026-0994
+
+# Temporary media-worker AI waiver — reviewed 2026-09-06.
+#
+# Context:
+# - lightning (pytorch-lightning) 2.6.5 is RCE-able via
+#   LightningModule.load_from_checkpoint on a malicious checkpoint file
+#   (arbitrary module import from checkpoint _instantiator hyperparameters).
+# - No fixed release exists yet: 2.6.5 is the latest PyPI release; the fix
+#   is an unreleased upstream commit (no tagged version available to pin).
+# - pyannote-audio==3.3.2 (used for whisperx diarization) requires
+#   lightning>=2.0.1 and pulls this version transitively.
+#
+# Compensating controls:
+# - The media-worker never calls load_from_checkpoint on user-supplied
+#   input. Diarization loads only pyannote's pretrained pipeline from a
+#   fixed, developer-configured HuggingFace model ID (gated by HF_TOKEN);
+#   end users only ever supply video/audio media, never .ckpt files.
+#
+# Remove this waiver once a lightning/pytorch-lightning release ships the fix.
+CVE-2026-58659
