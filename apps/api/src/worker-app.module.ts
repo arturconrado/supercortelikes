@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { validateEnvironment } from './config/env';
 import { DatabaseModule } from './database/database.module';
 import { MediaModule } from './media/media.module';
+import { OfferProductionWorkerModule } from './offer-production/offer-production-worker.module';
 import { QueuesModule } from './queues/queues.module';
 import { WorkerHeartbeatService } from './queues/worker-heartbeat.service';
 
@@ -17,6 +18,7 @@ import { WorkerHeartbeatService } from './queues/worker-heartbeat.service';
     DatabaseModule,
     QueuesModule,
     MediaModule,
+    OfferProductionWorkerModule,
   ],
   providers: [WorkerHeartbeatService],
 })

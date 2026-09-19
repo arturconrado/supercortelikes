@@ -134,9 +134,7 @@ def _combine_voice_activity(analysis: Dict[str, Any], intervals: Any) -> None:
         ]
         voice_active = bool(active_intervals)
         sample["voiceActive"] = voice_active
-        sample["speaker"] = next(
-            (speaker for _start, _end, speaker in active_intervals if speaker), None
-        )
+        sample["speaker"] = _speaker_at_time(time, normalized)
         if not voice_active:
             sample["activeSpeakerConfidence"] = float(sample.get("activeSpeakerConfidence", 0.0)) * 0.2
             for box in sample.get("boxes", []):
@@ -149,6 +147,32 @@ def _combine_voice_activity(analysis: Dict[str, Any], intervals: Any) -> None:
         )
     else:
         analysis["activeSpeakerMethod"] = "voice-activity-plus-face-region-motion"
+
+
+def _speaker_at_time(
+    time: float, intervals: Sequence[tuple[float, float, str, float]]
+) -> str | None:
+    candidates = [
+        (start, end, speaker, padding)
+        for start, end, speaker, padding in intervals
+        if speaker and start - padding <= time <= end + padding
+    ]
+    if not candidates:
+        return None
+    contained = [
+        (start, end, speaker, padding)
+        for start, end, speaker, padding in candidates
+        if start <= time <= end
+    ]
+    values = contained or candidates
+
+    def priority(value: tuple[float, float, str, float]) -> tuple[float, float]:
+        start, end, _speaker, padding = value
+        midpoint = start + (end - start) / 2
+        outside = 0.0 if start <= time <= end else min(abs(time - start), abs(time - end))
+        return outside, abs(time - midpoint) + padding
+
+    return min(values, key=priority)[2]
 
 
 def _associate_speakers_with_tracks(samples: Sequence[Dict[str, Any]]) -> Dict[str, int]:
@@ -188,11 +212,21 @@ def _associate_speakers_with_tracks(samples: Sequence[Dict[str, Any]]) -> Dict[s
                 box.get("activity", 0.0)
             )
 
-    mapping = {
-        speaker: max(track_scores, key=track_scores.get)
-        for speaker, track_scores in scores.items()
-        if track_scores
-    }
+    ranked_pairs = sorted(
+        (
+            (score, speaker, track_id)
+            for speaker, track_scores in scores.items()
+            for track_id, score in track_scores.items()
+        ),
+        reverse=True,
+    )
+    mapping: Dict[str, int] = {}
+    assigned_tracks: set[int] = set()
+    for score, speaker, track_id in ranked_pairs:
+        if score <= 0 or speaker in mapping or track_id in assigned_tracks:
+            continue
+        mapping[speaker] = track_id
+        assigned_tracks.add(track_id)
     for sample in samples:
         expected = mapping.get(str(sample.get("speaker") or ""))
         if expected is None:

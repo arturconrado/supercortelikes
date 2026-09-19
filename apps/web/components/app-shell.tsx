@@ -1,6 +1,6 @@
 'use client';
 
-import { BarChart3, Bell, CreditCard, FolderKanban, LayoutDashboard, Library, LogOut, Menu, PlusCircle, Settings, Upload, X } from 'lucide-react';
+import { BarChart3, Bell, CreditCard, FolderKanban, LayoutDashboard, Library, LogOut, Menu, PlusCircle, Radar, Settings, Upload, X } from 'lucide-react';
 import Link from '@/components/safe-link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
@@ -15,13 +15,14 @@ import { cn, initials } from '@/lib/utils';
 const nav = [
   { href: '/dashboard', label: 'Visão geral', icon: LayoutDashboard }, { href: '/upload', label: 'Novo vídeo', icon: Upload },
   { href: '/library', label: 'Biblioteca', icon: Library }, { href: '/projects', label: 'Projetos', icon: FolderKanban },
+  { href: '/opportunities', label: 'Radar', icon: Radar },
   { href: '/exports', label: 'Exportações', icon: CreditCard }, { href: '/analytics', label: 'Analytics', icon: BarChart3 },
 ];
 const mobileNav = [
   { href: '/dashboard', label: 'Início', icon: LayoutDashboard },
   { href: '/library', label: 'Biblioteca', icon: Library },
   { href: '/upload', label: 'Novo', icon: PlusCircle, primary: true },
-  { href: '/exports', label: 'Exports', icon: CreditCard },
+  { href: '/opportunities', label: 'Radar', icon: Radar },
   { href: '/settings', label: 'Conta', icon: Settings },
 ];
 

@@ -18,6 +18,9 @@ import { ObservabilityModule } from './observability/observability.module';
 import { UsageModule } from './usage/usage.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PublicationsModule } from './publications/publications.module';
+import { OpportunitiesModule } from './opportunities/opportunities.module';
+import { BrowserAutomationModule } from './browser-automation/browser-automation.module';
+import { OfferProductionModule } from './offer-production/offer-production.module';
 
 @Module({
   imports: [
@@ -51,6 +54,9 @@ import { PublicationsModule } from './publications/publications.module';
     ObservabilityModule,
     NotificationsModule,
     PublicationsModule,
+    OpportunitiesModule,
+    BrowserAutomationModule,
+    OfferProductionModule,
     UsageModule,
     VideosModule,
   ],

@@ -100,6 +100,99 @@ enum ExportPurpose {
   FINAL
 }
 
+enum OpportunityStatus {
+  OBSERVING
+  TESTING
+  ACTIVE
+  SCALING
+  DECLINING
+  MIGRATING
+  DEAD
+}
+
+enum GateDecision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum DigitalProductStatus {
+  DRAFT
+  QA_REQUIRED
+  READY
+  ARCHIVED
+}
+
+enum OfferType {
+  PRODUCT
+  SERVICE
+  HYBRID
+}
+
+enum BrowserAutomationKind {
+  MARKET_RESEARCH
+  PRODUCT_SUBMISSION
+  CONTENT_SCHEDULING
+  COMPETITOR_REVIEW
+  CUSTOM
+}
+
+enum BrowserAutomationStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  REVIEW_REQUIRED
+  CANCELLED
+}
+
+enum MediaAssetKind {
+  LANDING_PAGE
+  STATIC_IMAGE
+  CAROUSEL
+  SHORT_VIDEO
+  AUDIO_SCRIPT
+  WHATSAPP_COPY
+  EMAIL
+  DIAGNOSTIC_FORM
+  PROPOSAL_PDF
+  SERVICE_ONEPAGER
+  CHECKOUT_COPY
+}
+
+enum MediaAssetStatus {
+  DRAFT
+  READY
+  REVIEW_REQUIRED
+  APPROVED
+  ARCHIVED
+}
+
+enum OfferLaunchStatus {
+  DRAFT
+  READY
+  RUNNING
+  REVIEW_REQUIRED
+  COMPLETED
+  FAILED
+}
+
+enum OfferPublicationStatus {
+  DRAFT
+  READY
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+enum OfferProductionStageName {
+  OFFER
+  MEDIA_ASSETS
+  PUBLICATION_DRAFTS
+  METRICS_SETUP
+}
+
 model User {
   id                      String               @id @default(uuid()) @db.Uuid
   email                   String               @unique
@@ -117,6 +210,8 @@ model User {
   memberships             WorkspaceMember[]
   projects                Project[]
   videos                  Video[]
+  opportunities           MarketOpportunity[]
+  browserAutomationRuns   BrowserAutomationRun[]
   refreshSessions         RefreshSession[]
   passwordResets          PasswordResetToken[]
   emailVerifications      EmailVerificationToken[]
@@ -144,6 +239,13 @@ model Workspace {
   creditTopUps  CreditTopUp[]
   publications  Publication[]
   socialConnections SocialConnection[]
+  opportunities MarketOpportunity[]
+  digitalProducts DigitalProduct[]
+  mediaAssets OfferMediaAsset[]
+  offerLaunchRuns OfferLaunchRun[]
+  offerPublicationDrafts OfferPublicationDraft[]
+  offerMetricSnapshots OfferMetricSnapshot[]
+  browserAutomationRuns BrowserAutomationRun[]
   usageEvents   UsageEvent[]
   auditLogs     AuditLog[]
   productEvents ProductEvent[]
@@ -218,6 +320,245 @@ model Project {
 
   @@index([workspaceId, updatedAt])
   @@map("projects")
+}
+
+model MarketOpportunity {
+  id                String              @id @default(uuid()) @db.Uuid
+  workspaceId       String              @db.Uuid
+  createdById       String              @db.Uuid
+  title             String
+  audience          String
+  pain              String
+  category          String
+  format            String
+  offerType         OfferType           @default(PRODUCT)
+  status            OpportunityStatus   @default(OBSERVING)
+  gateDecision      GateDecision        @default(PENDING)
+  score             Int
+  demandScore       Int
+  saturationScore   Int
+  monetizationScore Int
+  channelFitScore   Int
+  evidenceSummary   String
+  agentRationale    String
+  nextAction        String
+  sourceTags        Json
+  recommendedMedia  Json
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy         User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  signals           OpportunitySignal[]
+  products          DigitalProduct[]
+  launchRuns        OfferLaunchRun[]
+  metricSnapshots   OfferMetricSnapshot[]
+  browserAutomationRuns BrowserAutomationRun[]
+
+  @@index([workspaceId, status, score])
+  @@index([workspaceId, gateDecision, updatedAt])
+  @@map("market_opportunities")
+}
+
+model BrowserAutomationRun {
+  id             String                  @id @default(uuid()) @db.Uuid
+  workspaceId    String                  @db.Uuid
+  createdById    String                  @db.Uuid
+  opportunityId  String?                 @db.Uuid
+  kind           BrowserAutomationKind
+  status         BrowserAutomationStatus @default(QUEUED)
+  provider       String
+  targetUrl      String
+  goal           String
+  allowedActions Json
+  blockedActions Json
+  steps          Json
+  result         Json?
+  errorMessage   String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  workspace      Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy      User                    @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  opportunity    MarketOpportunity?      @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([opportunityId, createdAt])
+  @@map("browser_automation_runs")
+}
+
+model OpportunitySignal {
+  id            String            @id @default(uuid()) @db.Uuid
+  opportunityId String            @db.Uuid
+  source        String
+  label         String
+  strength      Int
+  url           String?
+  capturedAt    DateTime          @default(now())
+  metadata      Json?
+  opportunity   MarketOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([opportunityId, strength])
+  @@map("opportunity_signals")
+}
+
+model DigitalProduct {
+  id            String               @id @default(uuid()) @db.Uuid
+  workspaceId   String               @db.Uuid
+  opportunityId String               @db.Uuid
+  title         String
+  format        String
+  offerType     OfferType            @default(PRODUCT)
+  status        DigitalProductStatus @default(DRAFT)
+  priceCents    Int                  @default(1900)
+  qualityScore  Int                  @default(0)
+  outline       Json
+  serviceBlueprint Json?
+  mediaPlan     Json
+  assets        Json
+  qaFindings    Json
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  workspace     Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  opportunity   MarketOpportunity    @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  mediaAssets   OfferMediaAsset[]
+  launchRuns    OfferLaunchRun[]
+  publicationDrafts OfferPublicationDraft[]
+  metricSnapshots OfferMetricSnapshot[]
+
+  @@index([workspaceId, status, updatedAt])
+  @@index([opportunityId, createdAt])
+  @@map("digital_products")
+}
+
+model OfferLaunchRun {
+  id            String            @id @default(uuid()) @db.Uuid
+  workspaceId   String            @db.Uuid
+  opportunityId String            @db.Uuid
+  productId     String            @db.Uuid
+  status        OfferLaunchStatus @default(DRAFT)
+  mode          String            @default("manual")
+  steps         Json
+  result        Json?
+  errorMessage  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  opportunity   MarketOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  product       DigitalProduct    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stages        OfferProductionStageExecution[]
+  outboxEvents  OfferProductionOutboxEvent[]
+
+  @@index([workspaceId, status, createdAt])
+  @@index([opportunityId, createdAt])
+  @@map("offer_launch_runs")
+}
+
+model OfferProductionOutboxEvent {
+  id          String         @id @default(uuid()) @db.Uuid
+  launchRunId String         @db.Uuid
+  type        String
+  payload     Json
+  attempts    Int            @default(0)
+  availableAt DateTime       @default(now())
+  lockedAt    DateTime?
+  lockedBy    String?
+  publishedAt DateTime?
+  lastError   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  launchRun   OfferLaunchRun @relation(fields: [launchRunId], references: [id], onDelete: Cascade)
+
+  @@index([publishedAt, availableAt, createdAt])
+  @@index([launchRunId, createdAt])
+  @@map("offer_production_outbox_events")
+}
+
+model OfferProductionStageExecution {
+  id           String                   @id @default(uuid()) @db.Uuid
+  launchRunId  String                   @db.Uuid
+  stage        OfferProductionStageName
+  status       StageExecutionStatus     @default(PENDING)
+  attempts     Int                      @default(0)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorCode    String?
+  errorMessage String?
+  output       Json?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  launchRun    OfferLaunchRun           @relation(fields: [launchRunId], references: [id], onDelete: Cascade)
+
+  @@unique([launchRunId, stage])
+  @@index([status, updatedAt])
+  @@map("offer_production_stage_executions")
+}
+
+model OfferPublicationDraft {
+  id          String                 @id @default(uuid()) @db.Uuid
+  workspaceId String                 @db.Uuid
+  productId   String                 @db.Uuid
+  provider    String
+  channel     String
+  status      OfferPublicationStatus @default(DRAFT)
+  title       String
+  body        Json
+  scheduledAt DateTime?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  workspace   Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  product     DigitalProduct         @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([productId, channel])
+  @@map("offer_publication_drafts")
+}
+
+model OfferMetricSnapshot {
+  id            String            @id @default(uuid()) @db.Uuid
+  workspaceId   String            @db.Uuid
+  opportunityId String            @db.Uuid
+  productId     String?           @db.Uuid
+  source        String
+  impressions   Int               @default(0)
+  clicks        Int               @default(0)
+  leads         Int               @default(0)
+  sales         Int               @default(0)
+  revenueCents  Int               @default(0)
+  costCents     Int               @default(0)
+  capturedAt    DateTime          @default(now())
+  metadata      Json?
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  opportunity   MarketOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  product       DigitalProduct?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, capturedAt])
+  @@index([opportunityId, capturedAt])
+  @@map("offer_metric_snapshots")
+}
+
+model OfferMediaAsset {
+  id            String           @id @default(uuid()) @db.Uuid
+  workspaceId   String           @db.Uuid
+  productId     String           @db.Uuid
+  kind          MediaAssetKind
+  status        MediaAssetStatus @default(DRAFT)
+  title         String
+  channel       String
+  objective     String
+  brief         String
+  body          Json
+  qaChecklist   Json
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  product       DigitalProduct   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, kind, status])
+  @@index([productId, kind])
+  @@map("offer_media_assets")
 }
 
 model Video {

@@ -61,6 +61,183 @@ export type Analytics = DashboardSummary & {
   byStatus?: Array<{ status: string; value: number }>;
 };
 
+export type OpportunitySignal = {
+  id: string;
+  source: string;
+  label: string;
+  strength: number;
+  url?: string | null;
+  capturedAt?: string;
+};
+
+export type DigitalProduct = {
+  id: string;
+  opportunityId: string;
+  title: string;
+  format: string;
+  offerType: 'PRODUCT' | 'SERVICE' | 'HYBRID';
+  status: 'DRAFT' | 'QA_REQUIRED' | 'READY' | 'ARCHIVED';
+  priceCents: number;
+  qualityScore: number;
+  outline: {
+    promise?: string;
+    modules?: Array<{ title: string; items: string[] }>;
+    deliverables?: string[];
+  };
+  serviceBlueprint?: {
+    serviceName?: string;
+    deliveryModel?: string;
+    steps?: string[];
+    boundaries?: string[];
+  } | null;
+  mediaPlan: {
+    objective?: string;
+    channels?: Array<{ kind: string; count: number; purpose: string; brief: string }>;
+    humanGate?: string[];
+  };
+  assets: {
+    salesPage?: string;
+    coverBrief?: string;
+    staticImages?: string[];
+    carousels?: string[][];
+    shortVideos?: string[];
+    audioScripts?: string[];
+    emailSequence?: string[];
+    creativeAngles?: string[];
+    submissionChecklist?: string[];
+  };
+  qaFindings: string[];
+  createdAt: string;
+  updatedAt: string;
+  opportunity?: Pick<MarketOpportunity, 'id' | 'title' | 'status' | 'score'>;
+  mediaAssets?: OfferMediaAsset[];
+  publicationDrafts?: OfferPublicationDraft[];
+  launchRuns?: OfferLaunchRun[];
+};
+
+export type OfferLaunchRun = {
+  id: string;
+  status: 'DRAFT' | 'READY' | 'RUNNING' | 'REVIEW_REQUIRED' | 'COMPLETED' | 'FAILED';
+  mode: string;
+  steps: Array<{ name: string; status: string; detail: string }>;
+  stages?: OfferProductionStageExecution[];
+  result?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OfferProductionStageExecution = {
+  id: string;
+  stage: 'OFFER' | 'MEDIA_ASSETS' | 'PUBLICATION_DRAFTS' | 'METRICS_SETUP';
+  status: 'PENDING' | 'QUEUED' | 'PROCESSING' | 'RETRYING' | 'SUCCEEDED' | 'FAILED' | 'DEAD_LETTERED';
+  attempts: number;
+  output?: unknown;
+};
+
+export type OfferPublicationDraft = {
+  id: string;
+  provider: string;
+  channel: string;
+  status: 'DRAFT' | 'READY' | 'APPROVED' | 'SCHEDULED' | 'PUBLISHED' | 'FAILED';
+  title: string;
+  body: Record<string, unknown>;
+  scheduledAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OfferMediaAsset = {
+  id: string;
+  productId: string;
+  kind:
+    | 'LANDING_PAGE'
+    | 'STATIC_IMAGE'
+    | 'CAROUSEL'
+    | 'SHORT_VIDEO'
+    | 'AUDIO_SCRIPT'
+    | 'WHATSAPP_COPY'
+    | 'EMAIL'
+    | 'DIAGNOSTIC_FORM'
+    | 'PROPOSAL_PDF'
+    | 'SERVICE_ONEPAGER'
+    | 'CHECKOUT_COPY';
+  status: 'DRAFT' | 'READY' | 'REVIEW_REQUIRED' | 'APPROVED' | 'ARCHIVED';
+  title: string;
+  channel: string;
+  objective: string;
+  brief: string;
+  body: Record<string, unknown>;
+  qaChecklist: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MarketOpportunity = {
+  id: string;
+  title: string;
+  audience: string;
+  pain: string;
+  category: string;
+  format: string;
+  offerType: 'PRODUCT' | 'SERVICE' | 'HYBRID';
+  status: 'OBSERVING' | 'TESTING' | 'ACTIVE' | 'SCALING' | 'DECLINING' | 'MIGRATING' | 'DEAD';
+  gateDecision: 'PENDING' | 'APPROVED' | 'REJECTED';
+  score: number;
+  demandScore: number;
+  saturationScore: number;
+  monetizationScore: number;
+  channelFitScore: number;
+  evidenceSummary: string;
+  agentRationale: string;
+  nextAction: string;
+  sourceTags: string[];
+  recommendedMedia: {
+    offerType: 'PRODUCT' | 'SERVICE' | 'HYBRID';
+    primaryFormat: string;
+    required: string[];
+    optional: string[];
+  };
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string | null;
+  rejectedAt?: string | null;
+  signals?: OpportunitySignal[];
+  products?: DigitalProduct[];
+};
+
+export type OpportunityCockpit = {
+  limits: { maxTesting: number; maxActive: number };
+  counts: { total: number; testing: number; active: number; approved: number; products: number };
+  byStatus: Record<string, number>;
+  opportunities: MarketOpportunity[];
+  products: DigitalProduct[];
+};
+
+export type BrowserAutomationRun = {
+  id: string;
+  opportunityId?: string | null;
+  kind: 'MARKET_RESEARCH' | 'PRODUCT_SUBMISSION' | 'CONTENT_SCHEDULING' | 'COMPETITOR_REVIEW' | 'CUSTOM';
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REVIEW_REQUIRED' | 'CANCELLED';
+  provider: string;
+  targetUrl: string;
+  goal: string;
+  allowedActions: string[];
+  blockedActions: string[];
+  steps: Array<{ action: string; status: string; detail: string; at: string }>;
+  result?: {
+    title?: string;
+    summary?: string;
+    confidence?: number;
+    finalUrl?: string;
+    headings?: string[];
+    matchedTerms?: string[];
+  } | null;
+  errorMessage?: string | null;
+  createdAt: string;
+  completedAt?: string | null;
+  opportunity?: Pick<MarketOpportunity, 'id' | 'title' | 'status' | 'score'>;
+};
+
 export type PlanLimits = {
   minutesPerMonth: number;
   maxUploadBytes: number;

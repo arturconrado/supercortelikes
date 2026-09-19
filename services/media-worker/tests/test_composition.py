@@ -134,6 +134,64 @@ def test_diarization_speaker_ids_are_associated_with_stable_visual_tracks():
     assert analysis["samples"][2]["boxes"][1]["activity"] >= 0.85
 
 
+def test_overlapping_voice_padding_prefers_the_current_speaker_interval():
+    analysis = {
+        "samples": [
+            {"time": 0.99, "activeSpeakerConfidence": 1, "boxes": [{"activity": 1}]},
+            {"time": 1.03, "activeSpeakerConfidence": 1, "boxes": [{"activity": 1}]},
+        ]
+    }
+
+    _combine_voice_activity(
+        analysis,
+        [
+            {"start": 0.8, "end": 1.0, "speaker": "SPEAKER_00", "kind": "word"},
+            {"start": 1.02, "end": 1.2, "speaker": "SPEAKER_01", "kind": "word"},
+        ],
+    )
+
+    assert analysis["samples"][0]["speaker"] == "SPEAKER_00"
+    assert analysis["samples"][1]["speaker"] == "SPEAKER_01"
+
+
+def test_speaker_track_mapping_never_reuses_one_person_for_multiple_speakers():
+    analysis = {
+        "samples": [
+            {
+                "time": 0.1,
+                "activeSpeakerConfidence": 0.9,
+                "boxes": [_box(100, 0.9), _box(1100, 0.3)],
+            },
+            {
+                "time": 0.6,
+                "activeSpeakerConfidence": 0.9,
+                "boxes": [_box(105, 0.8), _box(1095, 0.4)],
+            },
+            {
+                "time": 1.1,
+                "activeSpeakerConfidence": 0.9,
+                "boxes": [_box(110, 0.7), _box(1090, 0.6)],
+            },
+            {
+                "time": 1.6,
+                "activeSpeakerConfidence": 0.9,
+                "boxes": [_box(115, 0.7), _box(1085, 0.6)],
+            },
+        ]
+    }
+
+    _combine_voice_activity(
+        analysis,
+        [
+            {"start": 0, "end": 0.8, "speaker": "SPEAKER_00"},
+            {"start": 0.9, "end": 1.8, "speaker": "SPEAKER_01"},
+        ],
+    )
+
+    assert analysis["speakerTrackMap"] == {"SPEAKER_00": 1, "SPEAKER_01": 2}
+    assert len(set(analysis["speakerTrackMap"].values())) == 2
+
+
 def test_composition_v2_holds_a_new_track_for_250ms_and_uses_split_during_transition():
     samples = [
         {

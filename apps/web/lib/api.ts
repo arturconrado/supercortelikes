@@ -242,6 +242,8 @@ export const endpoints = {
   dashboard: '/analytics/overview', analytics: '/analytics',
   videos: '/videos', upload: '/videos/presigned-upload', imports: '/videos/import',
   projects: '/projects', clips: '/clips', exports: '/exports',
+  opportunities: '/opportunities',
+  browserAutomations: '/browser-automations',
   plans: '/billing/plans', subscription: '/billing/subscription', checkout: '/billing/checkout', topUps: '/billing/top-ups',
   usage: '/usage/current',
   profile: '/users/me', password: '/auth/password', brandKit: '/brand-kits', publications: '/publications',
