@@ -7,6 +7,7 @@ export type Video = {
   createdAt: string; updatedAt?: string; progress?: number; clipsCount?: number; projectId?: string;
   processingStatus?: string; currentStage?: string | null;
   burnedInSubtitlesDetected?: boolean; burnedInSubtitlesConfidence?: number | null;
+  audioPresent?: boolean | null; speechDetected?: boolean | null; processingMode?: 'speech' | 'visual' | string | null; speakerCount?: number | null;
   processingOptions?: VideoProcessingOptions;
 };
 
@@ -51,7 +52,7 @@ export type ExportJob = {
 
 export type DashboardSummary = {
   videosProcessed?: number; clipsGenerated?: number; downloads?: number; processingMinutes?: number;
-  storageBytes?: number | string; creditsUsed?: number; creditsLimit?: number; recentProjects?: Project[];
+  storageBytes?: number | string; creditsUsed?: number; creditsReserved?: number; creditsLimit?: number; recentProjects?: Project[];
   recentVideos?: Video[]; activity?: AnalyticsPoint[];
 };
 

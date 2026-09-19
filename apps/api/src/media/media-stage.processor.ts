@@ -26,6 +26,8 @@ export class MediaStageProcessor {
   private readonly compositionV1RolloutPercent: number;
   private readonly minimumSpeakerConfidence: number;
   private readonly focusSwitchDelaySeconds: number;
+  private readonly visualOnlyRolloutPercent: number;
+  private readonly deepgramDiarizationRolloutPercent: number;
   private readonly mediaAccelerator: 'cpu' | 'cuda';
   private readonly aiExecutionMode: 'local' | 'hybrid';
   private readonly sttProvider: 'whisperx' | 'deepgram' | 'openrouter';
@@ -51,6 +53,8 @@ export class MediaStageProcessor {
     this.compositionV1RolloutPercent = config.get('COMPOSITION_V1_ROLLOUT_PERCENT', { infer: true }) ?? 100;
     this.minimumSpeakerConfidence = config.get('COMPOSITION_MINIMUM_SPEAKER_CONFIDENCE', { infer: true });
     this.focusSwitchDelaySeconds = config.get('COMPOSITION_FOCUS_SWITCH_DELAY_SECONDS', { infer: true });
+    this.visualOnlyRolloutPercent = config.get('VISUAL_ONLY_ROLLOUT_PERCENT', { infer: true }) ?? 100;
+    this.deepgramDiarizationRolloutPercent = config.get('DEEPGRAM_DIARIZATION_ROLLOUT_PERCENT', { infer: true }) ?? 100;
     this.mediaAccelerator = config.get('MEDIA_ACCELERATOR', { infer: true });
     this.aiExecutionMode = config.get('AI_EXECUTION_MODE', { infer: true });
     this.sttProvider = config.get('STT_PROVIDER', { infer: true });
@@ -115,6 +119,7 @@ export class MediaStageProcessor {
     bucket: string,
     processing: ReturnType<typeof normalizeVideoProcessingOptions>,
     video?: {
+      workspaceId?: string | null;
       checksumSha256?: string | null;
       storageEtag?: string | null;
       workspace?: {
@@ -126,7 +131,13 @@ export class MediaStageProcessor {
     const compositionEnabled = this.compositionEnabledFor(job.videoId);
     const providerBudget = await this.providerBudget(job.videoId);
     if (stage === 'transcription') {
-      return { diarize: this.diarizationEnabled, batchSize: this.transcriptionBatchSize, ...providerBudget };
+      const rolloutKey = video?.workspaceId ?? job.videoId;
+      return {
+        diarize: this.diarizationEnabled && this.rolloutEnabled(rolloutKey, this.deepgramDiarizationRolloutPercent),
+        visualOnlyEnabled: this.rolloutEnabled(rolloutKey, this.visualOnlyRolloutPercent),
+        batchSize: this.transcriptionBatchSize,
+        ...providerBudget,
+      };
     }
     if (stage === 'clips') {
       return {
@@ -425,6 +436,17 @@ export class MediaStageProcessor {
     return (hash >>> 0) % 100 < this.compositionV1RolloutPercent;
   }
 
+  private rolloutEnabled(key: string, percent: number): boolean {
+    if (percent <= 0) return false;
+    if (percent >= 100) return true;
+    let hash = 2_166_136_261;
+    for (const character of key) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16_777_619);
+    }
+    return (hash >>> 0) % 100 < percent;
+  }
+
   private sourceIntegrityOptions(video?: { checksumSha256?: string | null; storageEtag?: string | null }): Record<string, string> {
     if (video?.checksumSha256 && /^[a-f0-9]{64}$/i.test(video.checksumSha256)) {
       return { sourceSha256: video.checksumSha256.toLowerCase() };
@@ -445,7 +467,7 @@ export class MediaStageProcessor {
     if (job.stage === 'transcription') return this.persistTranscription(job.videoId, response);
     if (job.stage === 'segmentation') return this.persistSegments(job.videoId, response);
     if (job.stage === 'scoring') return this.persistScores(job.videoId, response);
-    if (job.stage === 'clips') return this.persistClips(job.videoId, response);
+    if (job.stage === 'clips') return this.persistClips(job.videoId, job.pipelineRunId, response);
     if (job.stage === 'captions') return this.persistCaptions(job.videoId, response);
     if (job.stage === 'composition') return this.persistComposition(job.videoId, response);
     if (job.stage === 'rendering') {
@@ -552,8 +574,12 @@ export class MediaStageProcessor {
   ): Promise<void> {
     const metrics = response.metrics as {
       durationSeconds?: number;
+      sizeBytes?: number;
       video?: { width?: number; height?: number; frameRate?: number; codec?: string };
       audio?: { codec?: string } | null;
+      audioPresent?: boolean;
+      processingMode?: string;
+      speechDetected?: boolean | null;
       source?: { title?: string };
       burnedInSubtitles?: { detected?: boolean; confidence?: number };
     };
@@ -571,11 +597,15 @@ export class MediaStageProcessor {
         burnedInSubtitlesConfidence:
           typeof metrics.burnedInSubtitles?.confidence === 'number' ? metrics.burnedInSubtitles.confidence : undefined,
         durationMs: metrics.durationSeconds ? BigInt(Math.round(metrics.durationSeconds * 1000)) : undefined,
+        sizeBytes: typeof metrics.sizeBytes === 'number' ? BigInt(metrics.sizeBytes) : undefined,
         width: metrics.video?.width,
         height: metrics.video?.height,
         frameRate: metrics.video?.frameRate,
         videoCodec: metrics.video?.codec,
         audioCodec: metrics.audio?.codec,
+        audioPresent: metrics.audioPresent ?? metrics.audio != null,
+        processingMode: metrics.processingMode,
+        speechDetected: metrics.speechDetected ?? undefined,
       },
     });
     try {
@@ -591,6 +621,9 @@ export class MediaStageProcessor {
 
   private async persistTranscription(videoId: string, response: MediaStageResponse): Promise<void> {
     const value = await this.artifactJson<{
+      mode?: string;
+      speechDetected?: boolean;
+      speakerCount?: number;
       language: string;
       confidence: number;
       durationSeconds: number;
@@ -616,6 +649,14 @@ export class MediaStageProcessor {
         fullText: value.segments.map((segment) => segment.text).join(' '),
         words: words as Prisma.InputJsonArray,
         speakers: speakers as Prisma.InputJsonArray,
+      },
+    });
+    await this.prisma.video.update({
+      where: { id: videoId },
+      data: {
+        processingMode: value.mode ?? 'speech',
+        speechDetected: value.speechDetected ?? value.segments.length > 0,
+        speakerCount: value.speakerCount ?? speakers.length,
       },
     });
   }
@@ -664,7 +705,7 @@ export class MediaStageProcessor {
     );
   }
 
-  private async persistClips(videoId: string, response: MediaStageResponse): Promise<void> {
+  private async persistClips(videoId: string, pipelineRunId: string, response: MediaStageResponse): Promise<void> {
     const value = await this.artifactJson<{
       clips: Array<{
         start: number;
@@ -679,6 +720,10 @@ export class MediaStageProcessor {
         thumbnail?: string;
       }>;
     }>(response, 'clip-candidates');
+    if (!value.clips.length) {
+      await this.usage.refundProcessingMinutes(videoId, pipelineRunId, 'NO_USABLE_CLIPS');
+      throw Object.assign(new UnrecoverableError('Nenhum corte utilizável foi encontrado.'), { code: 'NO_USABLE_CLIPS' });
+    }
     const video = await this.prisma.video.findUnique({ where: { id: videoId }, select: { processingOptions: true } });
     const processing = normalizeVideoProcessingOptions(video?.processingOptions as never);
     const segments = await this.prisma.segment.findMany({ where: { videoId }, orderBy: { startMs: 'asc' } });
@@ -721,6 +766,7 @@ export class MediaStageProcessor {
         },
       });
     }
+    await this.usage.commitProcessingMinutes(videoId, pipelineRunId);
   }
 
   private async persistCaptions(videoId: string, response: MediaStageResponse): Promise<void> {
@@ -1142,6 +1188,11 @@ const UNRECOVERABLE_MEDIA_CODES = new Set([
   'SOURCE_SCHEME_UNSUPPORTED',
   'SOURCE_TOO_LARGE',
   'SOURCE_NOT_FOUND',
+  'NO_AUDIO_STREAM',
+  'TRANSCRIPT_EMPTY',
+  'VIDEO_STREAM_MISSING',
+  'INVALID_MEDIA_DURATION',
+  'NO_USABLE_CLIPS',
 ]);
 
 function asUnrecoverableMediaError(error: unknown): UnrecoverableError | undefined {

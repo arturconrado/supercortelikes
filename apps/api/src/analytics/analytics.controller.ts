@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Inject, Optional, Post } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { CurrentUser } from '../auth/auth.decorators';
@@ -8,6 +8,7 @@ import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { OBJECT_STORAGE, type ObjectStorage } from '../storage/storage.port';
 import { ProductEventDto } from './product-event.dto';
+import { UsageService } from '../usage/usage.service';
 
 type PipelineStatusGroup = { status: string; _count: { _all: number } };
 type RecentVideoSummary = {
@@ -40,6 +41,7 @@ export class AnalyticsController {
     private readonly prisma: PrismaService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
     config: ConfigService<Environment, true>,
+    @Optional() private readonly usageService?: UsageService,
   ) {
     this.cache = new TtlCache(config.get('ANALYTICS_CACHE_TTL_SECONDS', { infer: true }) * 1000);
   }
@@ -54,8 +56,8 @@ export class AnalyticsController {
       this.prisma.video.count({ where: { workspaceId } }),
       this.prisma.clip.count({ where: { video: { workspaceId } } }),
       this.prisma.export.count({ where: { purpose: 'FINAL', status: 'READY', clip: { video: { workspaceId } } } }),
-      this.prisma.usageEvent.aggregate({
-        where: { workspaceId },
+      this.usageService?.current(user) ?? this.prisma.usageEvent.aggregate({
+        where: { workspaceId, type: 'processing.minutes' },
         _sum: { quantity: true, costCents: true },
       }),
       this.prisma.pipelineRun.groupBy({
@@ -97,10 +99,12 @@ export class AnalyticsController {
       downloads,
       videosProcessed: videos,
       clipsGenerated: clips,
-      processingMinutes: usage._sum.quantity?.toString() ?? '0',
-      creditsUsed: usage._sum.costCents ?? 0,
-      usageQuantity: usage._sum.quantity?.toString() ?? '0',
-      costCents: usage._sum.costCents ?? 0,
+      processingMinutes: 'usage' in usage ? usage.usage.minutes : usage._sum.quantity?.toString() ?? '0',
+      creditsUsed: 'usage' in usage ? usage.usage.minutes : usage._sum.quantity?.toString() ?? '0',
+      creditsReserved: 'usage' in usage ? usage.usage.reservedMinutes : 0,
+      creditsLimit: 'usage' in usage ? usage.usage.limit : 0,
+      usageQuantity: 'usage' in usage ? usage.usage.minutes : usage._sum.quantity?.toString() ?? '0',
+      costCents: 'usage' in usage ? 0 : usage._sum.costCents ?? 0,
       pipelines: Object.fromEntries((pipelines as PipelineStatusGroup[]).map((item: PipelineStatusGroup) => [item.status.toLowerCase(), item._count._all])),
       recentVideos: await Promise.all((recentVideos as RecentVideoSummary[]).map(async (video: RecentVideoSummary & Record<string, unknown>) => ({
         id: video.id,

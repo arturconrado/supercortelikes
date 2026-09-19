@@ -18,6 +18,10 @@ export interface VideoRecord {
   failureCode: string | null;
   burnedInSubtitlesDetected?: boolean;
   burnedInSubtitlesConfidence?: number | null;
+  audioPresent?: boolean | null;
+  speechDetected?: boolean | null;
+  processingMode?: string | null;
+  speakerCount?: number | null;
   durationMs?: bigint | null;
   processingOptions?: unknown | null;
   projectId?: string | null;

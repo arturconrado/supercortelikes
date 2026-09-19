@@ -95,6 +95,19 @@ CATEGORY_TERMS: Mapping[str, Set[str]] = {
 
 def score_segment(segment: Mapping[str, Any]) -> Dict[str, Any]:
     text = str(segment.get("text", ""))
+    if not text.strip() and segment.get("processingMode") == "visual":
+        visual = max(0.0, min(100.0, float(segment.get("visualScore", 50.0))))
+        return {
+            "segmentId": segment.get("id"),
+            "score": round(visual, 2),
+            "categories": {key: 0.0 for key in CATEGORY_TERMS},
+            "signals": {"visual": round(visual, 2), "pacing": 0.0},
+            "editorial": {
+                "title": "Momento de destaque visual",
+                "hook": "Destaque selecionado por movimento e mudança de cena",
+                "keyword": "destaque visual",
+            },
+        }
     tokens = token_set(text)
     word_count = max(1, len(tokens))
     values: Dict[str, float] = {}

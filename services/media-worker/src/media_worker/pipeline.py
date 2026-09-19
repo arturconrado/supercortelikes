@@ -23,7 +23,7 @@ from .rendering import render_clips
 from .quality import corrected_compositions, merge_rerender_quality, review_renders
 from .runpod import execute_remote_job
 from .scoring import score_all
-from .segmentation import semantic_segments
+from .segmentation import semantic_segments, visual_segments
 from . import speaker_ai
 from .storage import upload_file
 from .transcription import transcribe
@@ -149,6 +149,9 @@ class Pipeline:
             )
         )
         metadata["sourcePath"] = str(source)
+        metadata["audioPresent"] = metadata.get("audio") is not None
+        metadata["processingMode"] = "speech" if metadata["audioPresent"] else "visual"
+        metadata["speechDetected"] = None if metadata["audioPresent"] else False
         metadata_path = workspace.write_json("media/metadata.json", metadata)
         return self._response(
             request,
@@ -164,6 +167,18 @@ class Pipeline:
     def _transcription(
         self, request: PipelineRequest, workspace: Workspace
     ) -> StageResponse:
+        media_metadata = workspace.read_json("media/metadata.json")
+        if media_metadata.get("audio") is None:
+            if not bool(request.options.get("visualOnlyEnabled", True)):
+                raise WorkerError("NO_AUDIO_STREAM", "The source contains no audio stream")
+            value = _visual_transcript(media_metadata, "video_only")
+            path = workspace.write_json("transcription/transcript.json", value)
+            return self._response(
+                request,
+                "transcription",
+                [artifact(path, "whisperx-transcript", "application/json")],
+                _transcription_metrics(value),
+            )
         provider_error = None
         value = None
         if (
@@ -197,7 +212,15 @@ class Pipeline:
                 provider_error = error.code
         if value is None:
             source = self._ensure_source(request, workspace)
-            value = transcribe(source, self.settings, request.options)
+            try:
+                value = transcribe(source, self.settings, request.options)
+            except WorkerError as error:
+                if error.code == "TRANSCRIPT_EMPTY":
+                    if not bool(request.options.get("visualOnlyEnabled", True)):
+                        raise
+                    value = _visual_transcript(media_metadata, "audio_no_speech")
+                else:
+                    raise
             if provider_error:
                 value["fallback"] = {
                     "provider": self.settings.stt_provider,
@@ -209,37 +232,41 @@ class Pipeline:
             request,
             "transcription",
             [artifact(path, "whisperx-transcript", "application/json")],
-            {
-                "language": value["language"],
-                "confidence": value["confidence"],
-                "speakerCount": value["speakerCount"],
-                "segments": len(value["segments"]),
-                "engine": value.get("engine", "whisperx"),
-                "providerUsage": value.get("providerUsage", []),
-                "fallback": value.get("fallback"),
-            },
+            _transcription_metrics(value),
         )
 
     def _segmentation(
         self, request: PipelineRequest, workspace: Workspace
     ) -> StageResponse:
         transcript = workspace.read_json("transcription/transcript.json")
-        segments = semantic_segments(
-            transcript["segments"],
-            silence_threshold=float(request.options.get("silenceThreshold", 1.2)),
-            topic_similarity_threshold=float(
-                request.options.get("topicSimilarityThreshold", 0.12)
-            ),
-            target_duration=float(request.options.get("targetDuration", 28.0)),
-            max_duration=float(request.options.get("maxDuration", 55.0)),
-        )
-        value = {"algorithmVersion": "semantic-rules-v1", "segments": segments}
+        if transcript.get("mode") == "visual":
+            metadata = workspace.read_json("media/metadata.json")
+            source = self._ensure_source(request, workspace)
+            segments = visual_segments(
+                source,
+                float(metadata["durationSeconds"]),
+                target_duration=float(request.options.get("targetDuration", 28.0)),
+                max_duration=float(request.options.get("maxDuration", 55.0)),
+            )
+            algorithm = "visual-highlights-v1"
+        else:
+            segments = semantic_segments(
+                transcript["segments"],
+                silence_threshold=float(request.options.get("silenceThreshold", 1.2)),
+                topic_similarity_threshold=float(
+                    request.options.get("topicSimilarityThreshold", 0.12)
+                ),
+                target_duration=float(request.options.get("targetDuration", 28.0)),
+                max_duration=float(request.options.get("maxDuration", 55.0)),
+            )
+            algorithm = "semantic-rules-v1"
+        value = {"algorithmVersion": algorithm, "mode": transcript.get("mode", "speech"), "segments": segments}
         path = workspace.write_json("segmentation/segments.json", value)
         return self._response(
             request,
             "segmentation",
             [artifact(path, "semantic-segments", "application/json")],
-            {"segments": len(segments)},
+            {"segments": len(segments), "mode": transcript.get("mode", "speech")},
         )
 
     def _scoring(self, request: PipelineRequest, workspace: Workspace) -> StageResponse:
@@ -1100,6 +1127,35 @@ def _ai_speaker_activity(
         if intervals is not None:
             activity[str(clip["id"])] = intervals
     return activity, usage
+
+
+def _visual_transcript(metadata: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    return {
+        "engine": "visual-analysis",
+        "mode": "visual",
+        "reason": reason,
+        "language": "und",
+        "confidence": 1.0,
+        "durationSeconds": float(metadata.get("durationSeconds") or 0),
+        "speakerCount": 0,
+        "speechDetected": False,
+        "segments": [],
+    }
+
+
+def _transcription_metrics(value: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "language": value["language"],
+        "confidence": value["confidence"],
+        "speakerCount": value["speakerCount"],
+        "segments": len(value["segments"]),
+        "engine": value.get("engine", "whisperx"),
+        "mode": value.get("mode", "speech"),
+        "speechDetected": value.get("speechDetected", bool(value.get("segments"))),
+        "reason": value.get("reason"),
+        "providerUsage": value.get("providerUsage", []),
+        "fallback": value.get("fallback"),
+    }
 
 
 def _source_video_dimensions(workspace: Workspace) -> Dict[str, int]:

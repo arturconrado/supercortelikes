@@ -16,6 +16,7 @@ export interface UsageSnapshot {
   graceUntil?: string;
   usage: {
     minutes: number;
+    reservedMinutes: number;
     topUpMinutes: number;
     limit: number;
     remaining: number;
@@ -58,13 +59,25 @@ export class UsageService {
     const limits = limitsFor(effective.plan);
     const periodStart = startOfMonth(now);
     const periodEnd = startOfNextMonth(now);
-    const [usage, topUps] = await Promise.all([
+    const [usage, legacyUsage, reservations, refunds, topUps] = await Promise.all([
       this.prisma.usageEvent.aggregate({
         where: {
           workspaceId,
-          type: 'processing.minutes',
+          type: 'processing.minutes.committed',
           createdAt: { gte: periodStart, lt: periodEnd },
         },
+        _sum: { quantity: true },
+      }),
+      this.prisma.usageEvent.aggregate({
+        where: { workspaceId, type: 'processing.minutes', createdAt: { gte: periodStart, lt: periodEnd } },
+        _sum: { quantity: true },
+      }),
+      this.prisma.usageEvent.aggregate({
+        where: { workspaceId, type: 'processing.minutes.reserved', createdAt: { gte: periodStart, lt: periodEnd } },
+        _sum: { quantity: true },
+      }),
+      this.prisma.usageEvent.aggregate({
+        where: { workspaceId, type: 'processing.minutes.refunded', createdAt: { gte: periodStart, lt: periodEnd } },
         _sum: { quantity: true },
       }),
       this.prisma.usageEvent.aggregate({
@@ -76,7 +89,8 @@ export class UsageService {
         _sum: { quantity: true },
       }),
     ]);
-    const used = decimalToNumber(usage._sum.quantity);
+    const used = decimalToNumber(usage._sum.quantity) + decimalToNumber(legacyUsage._sum.quantity);
+    const reserved = Math.max(0, decimalToNumber(reservations._sum.quantity) - used - decimalToNumber(refunds._sum.quantity));
     const topUpMinutes = decimalToNumber(topUps._sum.quantity);
     const limit = limits.minutesPerMonth + topUpMinutes;
     return {
@@ -88,9 +102,10 @@ export class UsageService {
       ...(effective.graceUntil ? { graceUntil: effective.graceUntil.toISOString() } : {}),
       usage: {
         minutes: roundUsage(used),
+        reservedMinutes: roundUsage(reserved),
         topUpMinutes: roundUsage(topUpMinutes),
         limit,
-        remaining: roundUsage(Math.max(0, limit - used)),
+        remaining: roundUsage(Math.max(0, limit - used - reserved)),
       },
       limits,
     };
@@ -124,7 +139,7 @@ export class UsageService {
       ? await this.prisma.usageEvent.findUnique({ where: { idempotencyKey: processingMinutesIdempotencyKey(videoId, pipelineRunId) }, select: { id: true } })
       : null;
     const requestedMinutes = alreadyReserved ? 0 : durationSeconds / 60;
-    if (snapshot.usage.minutes + requestedMinutes > snapshot.usage.limit) {
+    if (snapshot.usage.minutes + snapshot.usage.reservedMinutes + requestedMinutes > snapshot.usage.limit) {
       throw paymentRequired('Este processamento excede o limite mensal do plano atual.');
     }
     return snapshot;
@@ -147,13 +162,17 @@ export class UsageService {
       throw paymentRequired('Um dos vídeos excede a duração máxima do plano atual.');
     }
     const requestedMinutes = durations.reduce((total, seconds) => total + seconds / 60, 0);
-    if (snapshot.usage.minutes + requestedMinutes > snapshot.usage.limit) {
+    if (snapshot.usage.minutes + snapshot.usage.reservedMinutes + requestedMinutes > snapshot.usage.limit) {
       throw paymentRequired('Este reprocessamento excede o limite mensal do plano atual.');
     }
     return snapshot;
   }
 
   async recordProcessingMinutes(videoId: string, pipelineRunId: string): Promise<void> {
+    await this.reserveProcessingMinutes(videoId, pipelineRunId);
+  }
+
+  async reserveProcessingMinutes(videoId: string, pipelineRunId: string): Promise<void> {
     const video = await this.prisma.video.findUnique({
       where: { id: videoId },
       select: { id: true, workspaceId: true, durationMs: true },
@@ -161,19 +180,54 @@ export class UsageService {
     if (!video?.workspaceId || !video.durationMs) return;
     const quantity = new Prisma.Decimal(Number(video.durationMs) / 60_000);
     await this.prisma.usageEvent.upsert({
-      where: { idempotencyKey: processingMinutesIdempotencyKey(videoId, pipelineRunId) },
+      where: { idempotencyKey: processingMinutesReservationKey(videoId, pipelineRunId) },
       create: {
-        idempotencyKey: processingMinutesIdempotencyKey(videoId, pipelineRunId),
+        idempotencyKey: processingMinutesReservationKey(videoId, pipelineRunId),
         workspaceId: video.workspaceId,
         videoId,
-        type: 'processing.minutes',
+        type: 'processing.minutes.reserved',
         quantity,
         unit: 'minute',
-        metadata: { source: 'pipeline.ingestion', pipelineRunId },
+        metadata: { source: 'pipeline.ingestion', pipelineRunId, state: 'reserved' },
       },
       update: { quantity },
     });
     this.currentCache.delete(video.workspaceId);
+  }
+
+  async commitProcessingMinutes(videoId: string, pipelineRunId: string): Promise<void> {
+    await this.transitionProcessingMinutes(videoId, pipelineRunId, 'committed');
+  }
+
+  async refundProcessingMinutes(videoId: string, pipelineRunId: string, reason: string): Promise<void> {
+    await this.transitionProcessingMinutes(videoId, pipelineRunId, 'refunded', reason);
+  }
+
+  private async transitionProcessingMinutes(videoId: string, pipelineRunId: string, state: 'committed' | 'refunded', reason?: string): Promise<void> {
+    const opposite = state === 'committed' ? 'refunded' : 'committed';
+    const alreadyOpposite = await this.prisma.usageEvent.findUnique({
+      where: { idempotencyKey: `processing.minutes.${opposite}:${videoId}:${pipelineRunId}` },
+      select: { id: true },
+    });
+    if (alreadyOpposite) return;
+    const reservation = await this.prisma.usageEvent.findUnique({
+      where: { idempotencyKey: processingMinutesReservationKey(videoId, pipelineRunId) },
+    });
+    if (!reservation) return;
+    await this.prisma.usageEvent.upsert({
+      where: { idempotencyKey: `processing.minutes.${state}:${videoId}:${pipelineRunId}` },
+      create: {
+        idempotencyKey: `processing.minutes.${state}:${videoId}:${pipelineRunId}`,
+        workspaceId: reservation.workspaceId,
+        videoId,
+        type: `processing.minutes.${state}`,
+        quantity: reservation.quantity,
+        unit: 'minute',
+        metadata: { pipelineRunId, reservationId: reservation.id, ...(reason ? { reason } : {}) },
+      },
+      update: {},
+    });
+    this.currentCache.delete(reservation.workspaceId);
   }
 
   async queuePriorityForVideo(videoId: string): Promise<number> {
@@ -203,7 +257,11 @@ export class UsageService {
 }
 
 export function processingMinutesIdempotencyKey(videoId: string, pipelineRunId: string): string {
-  return `processing.minutes:${videoId}:${pipelineRunId}`;
+  return processingMinutesReservationKey(videoId, pipelineRunId);
+}
+
+export function processingMinutesReservationKey(videoId: string, pipelineRunId: string): string {
+  return `processing.minutes.reserved:${videoId}:${pipelineRunId}`;
 }
 
 function startOfMonth(value: Date): Date {

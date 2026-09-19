@@ -583,6 +583,10 @@ model Video {
   frameRate        Float?
   videoCodec       String?
   audioCodec       String?
+  audioPresent     Boolean?
+  speechDetected   Boolean?
+  processingMode   String?
+  speakerCount     Int?
   status           VideoStatus     @default(UPLOADING)
   failureCode      String?
   failureMessage   String?

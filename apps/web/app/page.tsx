@@ -16,7 +16,7 @@ const steps = [
 
 const plans = [
   ['FREE', 'Comece grátis e exporte sem marca d’água', 'R$ 0'],
-  ['PRO', 'Mais minutos e prioridade de processamento', 'BRL/mês'],
+  ['PRO', 'Mais minutos e prioridade de processamento', 'R$ 59/mês'],
   ['BUSINESS', 'Prioridade maior para equipes e volume', 'Sob consulta'],
 ];
 

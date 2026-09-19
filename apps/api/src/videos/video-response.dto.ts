@@ -18,6 +18,10 @@ export class VideoResponseDto {
   thumbnailUrl?: string;
   burnedInSubtitlesDetected?: boolean;
   burnedInSubtitlesConfidence?: number | null;
+  audioPresent?: boolean | null;
+  speechDetected?: boolean | null;
+  processingMode?: string | null;
+  speakerCount?: number | null;
   processingStatus?: string;
   currentStage?: string | null;
   clipsCount?: number;
@@ -41,6 +45,10 @@ export class VideoResponseDto {
       failureCode: record.failureCode,
       burnedInSubtitlesDetected: record.burnedInSubtitlesDetected,
       burnedInSubtitlesConfidence: record.burnedInSubtitlesConfidence,
+      audioPresent: record.audioPresent,
+      speechDetected: record.speechDetected,
+      processingMode: record.processingMode,
+      speakerCount: record.speakerCount,
       durationSeconds: record.durationMs ? Number(record.durationMs) / 1000 : undefined,
       projectId: record.projectId,
       processingStatus: latestRun?.status ?? (record.status === 'FAILED' ? 'FAILED' : record.status === 'UPLOADED' ? 'PENDING' : record.status),

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma, type PipelineStage } from '@prisma/client';
 import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
+import { UsageService } from '../usage/usage.service';
 import {
   completedEventType,
   nextStage,
@@ -19,6 +20,7 @@ export class PipelineOrchestratorService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() config?: ConfigService<Environment, true>,
+    @Optional() private readonly usage?: UsageService,
   ) {
     this.autoRenderMode = config?.get('AUTO_RENDER_MODE', { infer: true }) ?? 'off';
   }
@@ -164,6 +166,7 @@ export class PipelineOrchestratorService {
       );
     }
     await this.prisma.$transaction(operations);
+    await this.usage?.refundProcessingMinutes(job.videoId, job.pipelineRunId, errorCode(error));
   }
 }
 
