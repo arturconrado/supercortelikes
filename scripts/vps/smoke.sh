@@ -8,6 +8,7 @@ PROJECT_NAME="${COMPOSE_PROJECT_NAME:-clipbr-vps}"
 RUN_PRODUCT_E2E="${RUN_PRODUCT_E2E:-true}"
 RUN_5G="${RUN_5G:-false}"
 OBSERVE_SECONDS="${OBSERVE_SECONDS:-600}"
+PRODUCT_E2E_FIXTURE_DURATION_SECONDS="${PRODUCT_E2E_FIXTURE_DURATION_SECONDS:-75}"
 
 set -a
 # shellcheck disable=SC1090
@@ -99,7 +100,7 @@ if [[ "${RUN_PRODUCT_E2E}" == "true" ]]; then
     -i testsrc2=size=1280x720:rate=25 \
     -f lavfi \
     -i "flite=text='A tecnologia muda rapidamente. Este teste valida um produto completo de ponta a ponta.'" \
-    -t 16 \
+    -t "${PRODUCT_E2E_FIXTURE_DURATION_SECONDS}" \
     -c:v libx264 \
     -pix_fmt yuv420p \
     -c:a aac \
