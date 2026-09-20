@@ -2,12 +2,24 @@
 
 Todas as alterações relevantes do produto são registradas neste arquivo.
 
+## [0.2.2] - 2026-09-20
+
+### CI/CD
+
+- Gate rápido para pushes e gate completo sob execução manual de release.
+- Validação pesada preservada para uma única rodada antes da promoção final.
+
 ## [0.2.1] - 2026-09-20
 
 ### Corrigido
 
 - Compatibilidade de tipo da configuração Playwright visível (`slowMo` em `launchOptions`).
 - Gate de qualidade para permitir a promoção do deploy de produção.
+
+### Operação do CI
+
+- Pushes usam o gate rápido; a integração longa, o upload de 5 GiB e o soak de 10 minutos ficam reservados para uma execução manual de release.
+- A validação completa deve ser executada uma vez antes da promoção final da versão.
 
 ## [0.2.0] - 2026-09-20
 

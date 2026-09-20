@@ -59,6 +59,10 @@ jobs:
     name: Release gate
     if: github.event_name != 'workflow_dispatch' || inputs.release_gate == 'true'
     uses: ./.github/workflows/release-gate.yml
+    with:
+      # Pushes use the fast gate. The complete integration/5 GiB/soak suite
+      # runs once from workflow_dispatch before a release promotion.
+      full_validation: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate == 'true' }}
 
   build-images:
     name: Build and publish VPS images

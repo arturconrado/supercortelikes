@@ -2,6 +2,12 @@ name: Release gate
 
 on:
   workflow_call:
+    inputs:
+      full_validation:
+        description: Run the long integration, large-upload and soak scenarios
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -115,6 +121,7 @@ jobs:
 
   integration:
     name: Real PostgreSQL, Redis, MinIO and AI pipeline
+    if: inputs.full_validation
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
