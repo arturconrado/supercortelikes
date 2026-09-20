@@ -2,6 +2,12 @@
 
 Todas as alterações relevantes do produto são registradas neste arquivo.
 
+## [0.2.6] - 2026-09-20
+
+### Corrigido
+
+- Inicialização Redis/BullMQ idempotente para impedir que a API caia com `Redis is already connecting/connected` durante reinícios do deploy.
+
 ## [0.2.5] - 2026-09-20
 
 ### Segurança e release
