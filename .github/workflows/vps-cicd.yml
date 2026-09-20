@@ -92,6 +92,7 @@ concurrency:
   group: vps-cicd-${{ github.ref }}
   cancel-in-progress: true
 
+jobs:
   gate:
     name: Release gate
     if: github.event_name != 'workflow_dispatch' || inputs.release_gate == 'true'
