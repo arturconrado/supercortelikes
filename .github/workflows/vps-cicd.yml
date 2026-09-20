@@ -56,6 +56,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: vps-cicd-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   debug-api:
     name: Debug VPS API health
@@ -88,11 +92,6 @@ jobs:
           ssh -i ~/.ssh/id_vps -p "${VPS_SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
             "cd '${VPS_APP_DIR}' && docker compose -f docker-compose.vps.yml -f docker-compose.vps.images.yml ps -a && docker inspect --format='{{json .State.Health}}' clipbr-vps-api-1 || true && docker logs --tail=250 clipbr-vps-api-1 2>&1 || true"
 
-concurrency:
-  group: vps-cicd-${{ github.ref }}
-  cancel-in-progress: true
-
-jobs:
   gate:
     name: Release gate
     if: github.event_name != 'workflow_dispatch' || inputs.release_gate == 'true'
