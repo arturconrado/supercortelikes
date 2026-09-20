@@ -22,7 +22,10 @@ export class OfferProductionQueueService implements OnModuleInit, OnModuleDestro
   }
 
   async onModuleInit(): Promise<void> {
-    await this.redis.connect();
+    // BullMQ may start the shared ioredis connection while constructing the
+    // Queue. Only call connect when the client is still idle; calling it while
+    // ioredis is connecting/connected throws and prevents the API from booting.
+    if (this.redis.status === 'wait') await this.redis.connect();
     await this.queue.waitUntilReady();
   }
 

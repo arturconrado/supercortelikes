@@ -36,7 +36,7 @@ export class QueueRegistryService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit(): Promise<void> {
-    await this.redis.connect();
+    if (this.redis.status === 'wait') await this.redis.connect();
     for (const name of ALL_QUEUE_NAMES) {
       this.queues.set(name, new Queue(name, { connection: this.redis, prefix: this.prefix }));
     }
