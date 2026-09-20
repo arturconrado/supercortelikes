@@ -49,6 +49,15 @@ def build_compositions(
             float(options.get("analysisBudgetRatio", default_budget_ratio)),
         ),
     )
+    # Bound each clip's visual analysis.  A long source can contain many
+    # overlapping clips; without a hard ceiling the CPU detector may rescan
+    # the same frames for minutes per clip and leave the composition job
+    # apparently stuck.  When the ceiling is reached analyze_focus returns a
+    # safe fallback plan for that clip, allowing the pipeline to continue.
+    analysis_max_seconds = max(
+        2.0,
+        min(30.0, float(options.get("analysisMaxSeconds", 8.0))),
+    )
     plans: List[Dict[str, Any]] = []
     # Decided once per composition run, not per clip: whenever the AI speaker
     # signal is authoritative, the extra lip-region detector pass in
@@ -70,7 +79,10 @@ def build_compositions(
                 sample_seconds=sample_seconds,
                 start_seconds=start,
                 end_seconds=end,
-                time_budget_seconds=max(2.0, (end - start) * budget_ratio),
+                time_budget_seconds=min(
+                    analysis_max_seconds,
+                    max(2.0, (end - start) * budget_ratio),
+                ),
                 skip_lip_region_refinement=skip_lip_region_refinement,
             )
             _combine_voice_activity(analysis, options.get("voiceActivity"))

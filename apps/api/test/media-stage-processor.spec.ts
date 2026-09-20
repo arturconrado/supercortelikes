@@ -173,7 +173,8 @@ describe('MediaStageProcessor persistence', () => {
       expect.anything(),
       expect.objectContaining({
         detector: 'auto',
-        analysisBudgetRatio: 4,
+        analysisBudgetRatio: 0.75,
+        analysisMaxSeconds: 8,
         minimumSpeakerConfidence: 0.7,
         focusSwitchDelaySeconds: 0.3,
       }),
