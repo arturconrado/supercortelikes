@@ -2,6 +2,13 @@
 
 Todas as alterações relevantes do produto são registradas neste arquivo.
 
+## [0.2.1] - 2026-09-20
+
+### Corrigido
+
+- Compatibilidade de tipo da configuração Playwright visível (`slowMo` em `launchOptions`).
+- Gate de qualidade para permitir a promoção do deploy de produção.
+
 ## [0.2.0] - 2026-09-20
 
 ### Adicionado

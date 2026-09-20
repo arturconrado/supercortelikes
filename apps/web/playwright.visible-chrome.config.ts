@@ -10,7 +10,7 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_WEB_URL ?? 'http://localhost:3100',
     headless: false,
-    slowMo: Number(process.env.E2E_SLOW_MO_MS ?? 250),
+    launchOptions: { slowMo: Number(process.env.E2E_SLOW_MO_MS ?? 250) },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
