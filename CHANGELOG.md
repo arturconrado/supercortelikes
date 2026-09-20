@@ -2,6 +2,13 @@
 
 Todas as alterações relevantes do produto são registradas neste arquivo.
 
+## [0.2.5] - 2026-09-20
+
+### Segurança e release
+
+- Atualizado o Next.js para 16.3.5 e o `sharp` para a versão segura transitiva.
+- Mantida a versão de Fastify compatível com o Nest/multipart atual; as vulnerabilidades restantes são moderadas e não bloqueiam o gate configurado.
+
 ## [0.2.4] - 2026-09-20
 
 ### Corrigido
