@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { UnrecoverableError } from 'bullmq';
-import { type OfferProductionStageName, Prisma } from '@prisma/client';
+import { type OfferProductionStageName } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { buildMediaAssets, buildPublicationDrafts, toJson } from '../opportunities/opportunities.service';
 import { safeErrorMessage } from '../queues/pipeline-orchestrator.service';
