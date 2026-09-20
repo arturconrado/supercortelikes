@@ -306,9 +306,14 @@ def test_pipeline_routes_hybrid_transcription_to_openrouter(tmp_path, monkeypatc
         "stageExecutionId": "stage-openrouter",
         "videoId": "video-openrouter",
     })
+    workspace = Workspace(tmp_path, "pipeline-openrouter")
+    workspace.write_json(
+        "media/metadata.json",
+        {"durationSeconds": 2, "audio": {"codec": "aac"}},
+    )
 
     response = pipeline._transcription(
-        request, Workspace(tmp_path, "pipeline-openrouter")
+        request, workspace
     )
 
     assert response.metrics["engine"] == "openrouter"

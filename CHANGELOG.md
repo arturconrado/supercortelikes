@@ -2,6 +2,12 @@
 
 Todas as alterações relevantes do produto são registradas neste arquivo.
 
+## [0.2.3] - 2026-09-20
+
+### Corrigido
+
+- Fixture do teste de transcrição híbrida atualizado para persistir metadados de mídia antes da etapa de transcrição.
+
 ## [0.2.2] - 2026-09-20
 
 ### CI/CD
