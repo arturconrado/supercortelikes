@@ -128,6 +128,7 @@ const environmentSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
   OTEL_SERVICE_NAME: z.string().default('picashorts-api'),
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(5_368_709_120),
+  MIN_SOURCE_DURATION_SECONDS: z.coerce.number().int().min(1).max(86_400).default(60),
   UPLOAD_ALLOWED_MIME_TYPES: z
     .string()
     .default('video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo')

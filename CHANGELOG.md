@@ -2,6 +2,15 @@
 
 Todas as alterações relevantes do produto são registradas neste arquivo.
 
+## [0.2.4] - 2026-09-20
+
+### Corrigido
+
+- Bloqueio de vídeos-fonte com menos de 60 segundos antes do upload quando a duração é legível no navegador.
+- Validação server-side por `ffprobe` com erro terminal `SOURCE_TOO_SHORT`, sem retries ou reserva de minutos.
+- Métricas de espera na fila e duração total do pipeline para medir a otimização de performance.
+- Painel Grafana com p95 de fila e pipeline total.
+
 ## [0.2.3] - 2026-09-20
 
 ### Corrigido

@@ -5,6 +5,7 @@ import { Prisma, type PipelineStage } from '@prisma/client';
 import type { Environment } from '../config/env';
 import { PrismaService } from '../database/prisma.service';
 import { UsageService } from '../usage/usage.service';
+import { MetricsService } from '../observability/metrics.service';
 import {
   completedEventType,
   nextStage,
@@ -21,6 +22,7 @@ export class PipelineOrchestratorService {
     private readonly prisma: PrismaService,
     @Optional() config?: ConfigService<Environment, true>,
     @Optional() private readonly usage?: UsageService,
+    @Optional() private readonly metrics?: MetricsService,
   ) {
     this.autoRenderMode = config?.get('AUTO_RENDER_MODE', { infer: true }) ?? 'off';
   }
@@ -29,6 +31,7 @@ export class PipelineOrchestratorService {
     const job = pipelineJobSchema.parse(jobInput);
     const stage = await this.prisma.stageExecution.findUnique({ where: { id: job.stageExecutionId } });
     if (!stage) throw new NotFoundException('Pipeline stage execution not found');
+    this.metrics?.pipelineStageQueueWait.observe({ stage: job.stage }, Math.max(0, (Date.now() - stage.createdAt.getTime()) / 1000));
     if (stage.status === 'SUCCEEDED') return 'already-completed';
     const claimed = await this.prisma.stageExecution.updateMany({
       where: {
@@ -47,6 +50,9 @@ export class PipelineOrchestratorService {
 
   async complete(jobInput: PipelineJob): Promise<PipelineJob | null> {
     const job = pipelineJobSchema.parse(jobInput);
+    const pipeline = this.metrics && typeof this.prisma.pipelineRun.findUnique === 'function'
+      ? await this.prisma.pipelineRun.findUnique({ where: { id: job.pipelineRunId }, select: { startedAt: true } })
+      : null;
     const following = job.stage === 'composition' && this.autoRenderMode === 'off' ? null : nextStage(job.stage);
     return this.prisma.$transaction(async (tx) => {
       const completed = await tx.stageExecution.updateMany({
@@ -59,6 +65,9 @@ export class PipelineOrchestratorService {
         throw new ConflictException('Only a processing stage can be completed');
       }
       if (!following) {
+        if (pipeline?.startedAt) {
+          this.metrics?.pipelineTotalDuration.observe({ result: 'succeeded' }, Math.max(0, (Date.now() - pipeline.startedAt.getTime()) / 1000));
+        }
         await tx.pipelineRun.update({
           where: { id: job.pipelineRunId },
           data: { status: 'SUCCEEDED', currentStage: null, completedAt: new Date() },

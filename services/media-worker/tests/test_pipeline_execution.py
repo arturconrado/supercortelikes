@@ -10,13 +10,14 @@ from media_worker.models import PipelineRequest, ReframeRequest
 from media_worker.pipeline import Pipeline
 
 
-def request(stage_id="stage-123"):
+def request(stage_id="stage-123", options=None):
     return PipelineRequest.model_validate(
         {
             "pipelineRunId": "pipeline-123",
             "stageExecutionId": stage_id,
             "videoId": "video-123",
             "sourceUri": "file:///source.mp4",
+            "options": options or {},
         }
     )
 
@@ -97,7 +98,7 @@ def test_pipeline_executes_every_stage_and_reframe(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "upload_file", lambda path, bucket, key, _settings: {"bucket": bucket, "key": key, "bytes": path.stat().st_size, "mediaType": "video/mp4"})
 
     for stage in module.STAGES:
-        response = pipeline.execute(stage, request("stage-" + stage))
+        response = pipeline.execute(stage, request("stage-" + stage, {"minimumSourceDurationSeconds": 1}))
         assert response.status == "succeeded"
         assert response.stage == stage
 
@@ -118,6 +119,26 @@ def test_pipeline_executes_every_stage_and_reframe(tmp_path, monkeypatch):
     assert pipeline.reframe(reframe_request).cached is True
     with pytest.raises(Exception, match="Unsupported pipeline"):
         pipeline.execute("unknown", request())
+
+
+def test_ingestion_rejects_source_shorter_than_minimum(tmp_path, monkeypatch):
+    import media_worker.pipeline as module
+
+    settings = replace(Settings.from_env(), data_dir=tmp_path)
+    pipeline = Pipeline(settings)
+
+    def materialize(_uri, target, _settings):
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / "source.mp4"
+        path.write_bytes(b"video")
+        return path
+
+    monkeypatch.setattr(module, "materialize_source", materialize)
+    monkeypatch.setattr(module, "probe_media", lambda *_: {"durationSeconds": 59.9, "video": {"width": 640, "height": 360}})
+
+    with pytest.raises(WorkerError, match="pelo menos 60 segundos") as failure:
+        pipeline.execute("ingestion", request("stage-short"))
+    assert failure.value.code == "SOURCE_TOO_SHORT"
 
 
 def test_visual_segments_keep_video_only_sources_processable(tmp_path):

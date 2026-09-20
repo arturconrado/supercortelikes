@@ -8,7 +8,7 @@ import { api, endpoints } from '@/lib/api';
 import { useResource } from '@/hooks/use-resource';
 import type { UsageSnapshot, Video, VideoProcessingOptions } from '@/lib/types';
 import { cn, formatBytes } from '@/lib/utils';
-import { uploadVideo, validateVideo } from '@/lib/upload';
+import { uploadVideo, validateVideo, validateVideoDuration } from '@/lib/upload';
 
 type QueueItem = {
   file: File;
@@ -98,6 +98,11 @@ export default function UploadPage() {
       const item = items[index];
       if (item.status !== 'waiting' && item.status !== 'error') continue;
       if (validateVideo(item.file, limits)) continue;
+      const durationError = await validateVideoDuration(item.file);
+      if (durationError) {
+        update(index, { status: 'error', error: durationError });
+        continue;
+      }
       const controller = new AbortController();
       update(index, { status: 'uploading', error: undefined, controller });
       try {
@@ -207,7 +212,7 @@ export default function UploadPage() {
                   </div>
                   <h2 className="mt-5 font-semibold text-white">Arraste seus vídeos aqui</h2>
                   <p className="mt-2 text-sm text-zinc-500">ou clique para escolher no computador</p>
-                  <p className="mt-5 text-xs text-zinc-700">MP4, MOV, WEBM, MKV ou AVI · máximo 5 GB por arquivo</p>
+                  <p className="mt-5 text-xs text-zinc-700">MP4, MOV, WEBM, MKV ou AVI · mínimo 1 minuto · máximo 5 GB por arquivo</p>
                 </div>
               </button>
               <input
@@ -266,7 +271,7 @@ export default function UploadPage() {
                   <Link2 className="size-5 text-red-300"/>
                 </div>
                 <h2 className="mt-5 text-xl font-bold text-white">Importar por URL</h2>
-                <p className="mt-2 text-sm leading-6 text-zinc-500">Cole YouTube, Loom, Google Drive público ou link direto de vídeo que você tem direito de processar.</p>
+                <p className="mt-2 text-sm leading-6 text-zinc-500">Cole YouTube, Loom, Google Drive público ou link direto de vídeo que você tem direito de processar. O vídeo-fonte precisa ter pelo menos 1 minuto.</p>
                 <form onSubmit={importUrl} className="mt-6">
                   {urlError && <div className="mb-4"><Alert>{urlError}</Alert></div>}
                   {urlSuccess && <div className="mb-4 rounded-xl border border-emerald-500/15 bg-emerald-500/[.08] p-3.5 text-sm text-emerald-200">{urlSuccess}</div>}

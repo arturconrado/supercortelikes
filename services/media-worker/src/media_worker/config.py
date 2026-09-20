@@ -94,6 +94,7 @@ class Settings:
     remote_max_concurrency: int
     auto_render_mode: str
     final_max_short_side: int
+    minimum_source_duration_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -253,6 +254,7 @@ class Settings:
             final_max_short_side=max(
                 360, min(1080, int(os.getenv("FINAL_MAX_SHORT_SIDE", "1080")))
             ),
+            minimum_source_duration_seconds=max(1, int(os.getenv("MIN_SOURCE_DURATION_SECONDS", "60"))),
         )
         settings.validate()
         return settings

@@ -9,6 +9,36 @@ const mimeByExtension: Record<string, string> = {
   mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
 };
 
+export const MIN_SOURCE_DURATION_SECONDS = 60;
+
+export function validateVideoDuration(file: File, minimumSeconds = MIN_SOURCE_DURATION_SECONDS): Promise<string | null> {
+  if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const element = document.createElement('video');
+    const objectUrl = URL.createObjectURL(file);
+    let settled = false;
+    const finish = (message: string | null) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(objectUrl);
+      element.removeAttribute('src');
+      element.load();
+      resolve(message);
+    };
+    element.preload = 'metadata';
+    element.onloadedmetadata = () => {
+      const duration = Number(element.duration);
+      finish(Number.isFinite(duration) && duration < minimumSeconds
+        ? 'O vídeo precisa ter pelo menos 1 minuto.'
+        : null);
+    };
+    element.onerror = () => finish(null);
+    element.src = objectUrl;
+  });
+}
+
 type MultipartSession = {
   videoId: string;
   uploadId: string;

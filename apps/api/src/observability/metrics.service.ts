@@ -63,6 +63,20 @@ export class MetricsService {
     buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
     registers: [this.registry],
   });
+  readonly pipelineStageQueueWait = new Histogram({
+    name: 'clipbr_pipeline_stage_queue_wait_seconds',
+    help: 'Time a pipeline stage waits in the queue before being claimed',
+    labelNames: ['stage'] as const,
+    buckets: [0.1, 1, 5, 15, 30, 60, 300, 900, 3600],
+    registers: [this.registry],
+  });
+  readonly pipelineTotalDuration = new Histogram({
+    name: 'clipbr_pipeline_total_duration_seconds',
+    help: 'End-to-end pipeline duration from first claim to completion/failure',
+    labelNames: ['result'] as const,
+    buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200],
+    registers: [this.registry],
+  });
 
   constructor() {
     collectDefaultMetrics({ register: this.registry, prefix: 'clipbr_' });

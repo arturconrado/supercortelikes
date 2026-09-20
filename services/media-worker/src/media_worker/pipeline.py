@@ -130,6 +130,14 @@ class Pipeline:
     ) -> StageResponse:
         source = self._ensure_source(request, workspace)
         metadata = probe_media(source, self.settings)
+        minimum_duration = float(request.options.get("minimumSourceDurationSeconds", 60))
+        duration = float(metadata.get("durationSeconds") or 0)
+        if duration < minimum_duration:
+            raise WorkerError(
+                "SOURCE_TOO_SHORT",
+                "O vídeo-fonte precisa ter pelo menos %.0f segundos (1 minuto)" % minimum_duration,
+                detail={"durationSeconds": duration, "minimumDurationSeconds": minimum_duration},
+            )
         source_metadata = _read_source_metadata(source)
         if source_metadata:
             metadata["source"] = source_metadata

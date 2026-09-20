@@ -120,8 +120,24 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "id": 14,
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(clipbr_pipeline_stage_queue_wait_seconds_bucket[15m])))", "legendFormat": "{{stage}} p95 fila", "refId": "A" }],
+      "title": "Tempo de espera na fila p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "id": 15,
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le,result) (rate(clipbr_pipeline_total_duration_seconds_bucket[15m])))", "legendFormat": "{{result}} p95 total", "refId": "A" }],
+      "title": "Duração total do pipeline p95",
+      "type": "timeseries"
+    },
+    {
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 37 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 45 },
       "id": 11,
       "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
       "targets": [{ "expr": "{service=~\"api|worker|media-worker\"} |= \"error\"", "refId": "A" }],

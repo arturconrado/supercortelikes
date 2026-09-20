@@ -35,6 +35,7 @@ export class MediaStageProcessor {
   private readonly aiCostLimitUsdPerSourceHour: number;
   private readonly finalMaxShortSide: number;
   private readonly llmProvider: 'none' | 'openai' | 'openrouter';
+  private readonly minimumSourceDurationSeconds: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -62,6 +63,7 @@ export class MediaStageProcessor {
     this.aiCostLimitUsdPerSourceHour = config.get('AI_COST_LIMIT_USD_PER_SOURCE_HOUR', { infer: true });
     this.finalMaxShortSide = config.get('FINAL_MAX_SHORT_SIDE', { infer: true });
     this.llmProvider = config.get('LLM_PROVIDER', { infer: true });
+    this.minimumSourceDurationSeconds = config.get('MIN_SOURCE_DURATION_SECONDS', { infer: true });
   }
 
   async process(job: PipelineJob): Promise<void> {
@@ -138,6 +140,9 @@ export class MediaStageProcessor {
         batchSize: this.transcriptionBatchSize,
         ...providerBudget,
       };
+    }
+    if (stage === 'ingestion') {
+      return { minimumSourceDurationSeconds: this.minimumSourceDurationSeconds };
     }
     if (stage === 'clips') {
       return {
