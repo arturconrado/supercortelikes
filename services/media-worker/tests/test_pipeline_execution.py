@@ -120,6 +120,19 @@ def test_pipeline_executes_every_stage_and_reframe(tmp_path, monkeypatch):
         pipeline.execute("unknown", request())
 
 
+def test_visual_segments_keep_video_only_sources_processable(tmp_path):
+    from media_worker.segmentation import visual_segments
+
+    source = tmp_path / "silent.mp4"
+    source.write_bytes(b"not-decoded-in-fallback")
+    segments = visual_segments(source, 75, target_duration=28, max_duration=55)
+
+    assert segments
+    assert segments[0]["processingMode"] == "visual"
+    assert segments[-1]["end"] == 75
+    assert all(item["end"] > item["start"] for item in segments)
+
+
 def test_rendering_rejects_invalid_aspect_ratio(tmp_path, monkeypatch):
     pipeline = Pipeline(replace(Settings.from_env(), data_dir=tmp_path))
     workspace = tmp_path / "pipeline-123" / "media"

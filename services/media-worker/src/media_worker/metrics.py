@@ -52,6 +52,15 @@ worker_errors = Counter(
     "Media-worker errors by stage and code",
     ["stage", "code"],
 )
+processing_modes = Counter(
+    "media_worker_processing_modes_total",
+    "Processed media by multimodal processing mode",
+    ["mode"],
+)
+
+
+def observe_processing_mode(mode: str) -> None:
+    processing_modes.labels(mode=mode or "unknown").inc()
 
 
 @contextmanager

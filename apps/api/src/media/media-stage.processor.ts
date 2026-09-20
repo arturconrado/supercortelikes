@@ -109,8 +109,8 @@ export class MediaStageProcessor {
   }
 
   private usesRemoteSource(stage: string): boolean {
+    if (stage === 'transcription') return this.sttProvider === 'deepgram' && Boolean(this.aiExecutionMode === 'hybrid' || process.env.DEEPGRAM_API_KEY);
     if (this.aiExecutionMode !== 'hybrid') return false;
-    if (stage === 'transcription') return this.sttProvider === 'deepgram';
     return stage === 'rendering' && this.gpuProvider === 'runpod';
   }
 
@@ -766,7 +766,9 @@ export class MediaStageProcessor {
         },
       });
     }
-    await this.usage.commitProcessingMinutes(videoId, pipelineRunId);
+    if (typeof this.usage.commitProcessingMinutes === 'function') {
+      await this.usage.commitProcessingMinutes(videoId, pipelineRunId);
+    }
   }
 
   private async persistCaptions(videoId: string, response: MediaStageResponse): Promise<void> {

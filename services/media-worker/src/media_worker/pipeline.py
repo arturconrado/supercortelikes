@@ -17,6 +17,7 @@ from .media import (
     materialize_storage,
     probe_media,
 )
+from .metrics import observe_processing_mode
 from .models import ArtifactDescriptor, ArtifactLocation, PipelineRequest, ReframeRequest, StageResponse
 from .openrouter_stt import transcribe_file as transcribe_with_openrouter
 from .rendering import render_clips
@@ -199,7 +200,6 @@ class Pipeline:
                 provider_error = "OPENROUTER_STT_BUDGET_EXCEEDED"
         if (
             value is None
-            and self.settings.ai_execution_mode == "hybrid"
             and self.settings.stt_provider == "deepgram"
             and request.source_uri
             and _external_budget_available(request.options, self.settings.deepgram_cost_usd_per_hour)
@@ -213,7 +213,10 @@ class Pipeline:
         if value is None:
             source = self._ensure_source(request, workspace)
             try:
-                value = transcribe(source, self.settings, request.options)
+                local_options = dict(request.options)
+                if provider_error:
+                    local_options["diarize"] = False
+                value = transcribe(source, self.settings, local_options)
             except WorkerError as error:
                 if error.code == "TRANSCRIPT_EMPTY":
                     if not bool(request.options.get("visualOnlyEnabled", True)):
@@ -969,6 +972,9 @@ class Pipeline:
         artifacts: List[ArtifactDescriptor],
         metrics: Dict[str, Any],
     ) -> StageResponse:
+        mode = metrics.get("processingMode") or metrics.get("mode")
+        if isinstance(mode, str):
+            observe_processing_mode(mode)
         return StageResponse(
             schemaVersion=(
                 2

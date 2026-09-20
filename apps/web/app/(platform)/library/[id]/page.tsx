@@ -48,7 +48,8 @@ function effectiveStatus(video: Video): string {
 
 function isProcessing(video: Video, clips: Clip[]): boolean {
   const status = effectiveStatus(video).toUpperCase();
-  return !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(status) || clips.length === 0;
+  if (['FAILED', 'CANCELLED'].includes(status)) return false;
+  return status !== 'SUCCEEDED' || clips.length === 0;
 }
 
 function pipelineProgress(video: Video, clips: Clip[]): number {
@@ -240,6 +241,13 @@ export default function VideoPage() {
             </div>
           </div>
 
+          {video.processingMode === 'visual' && (
+            <div className="mt-4 rounded-xl border border-sky-400/20 bg-sky-400/[.08] p-3 text-xs leading-5 text-sky-100">
+              <p className="font-semibold">Análise visual</p>
+              <p className="mt-1 text-sky-100/80">Este vídeo não contém fala utilizável. Os cortes são escolhidos por movimento, mudanças de cena e enquadramento; legendas automáticas ficam desativadas.</p>
+            </div>
+          )}
+
           {openErrors.length > 0 && (
             <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/[.08] p-3 text-sm text-red-100">
               <p className="font-semibold">O processamento encontrou um erro.</p>
@@ -306,6 +314,9 @@ export default function VideoPage() {
               ['Formato', video.container?.toUpperCase() ?? video.mimeType],
               ['Tamanho', formatBytes(video.sizeBytes)],
               ['Duração', formatDuration(video.durationSeconds)],
+              ['Modo', video.processingMode === 'visual' ? 'Análise visual' : 'Análise de fala'],
+              ['Áudio', video.audioPresent === false ? 'Sem faixa de áudio' : video.speechDetected === false ? 'Sem fala detectada' : 'Detectado'],
+              ['Falantes', video.speakerCount != null ? String(video.speakerCount) : '—'],
               ['Cortes', String(video.clipsCount ?? rawClips.length ?? 0)],
             ].map(([key, value]) => (
               <div key={key} className="flex justify-between gap-4">

@@ -114,3 +114,47 @@ Método: navegação automatizada visível no Chrome, conta nova de auditoria e 
 - Repetir o E2E com mídia falada após a correção (ou declarar claramente esse requisito na seleção/importação).
 - Validar editor, formatos, legendas, renderização, exportação e download, atualmente bloqueados pela falha anterior.
 - Inspecionar o MP4 exportado e correlacionar com logs/filas quando houver render concluído.
+
+## Implementação da correção multimodal — 2026-09-20
+
+O código agora cobre os achados A-001 a A-011 nas áreas que podem ser validadas no repositório:
+
+- ingestão persiste tamanho real, codecs, áudio, resolução, `processingMode`, fala detectada e contagem de falantes;
+- mídia sem áudio ou sem fala segue para análise visual determinística, com cortes por cena/movimento/nitidez e sem legendas inventadas;
+- Deepgram com diarização permanece como caminho principal configurável, com fallback local sem diarização quando o provedor falha;
+- vídeos longos são segmentados em janelas limitadas e os stages continuam retomáveis por `pipelineRunId`;
+- minutos passam por eventos idempotentes `reserved`, `committed` e `refunded`; falha terminal ou zero cortes estorna a reserva;
+- Analytics usa o mesmo snapshot de uso do Billing e exibe usados, reservados e disponíveis;
+- UI mostra modo de processamento, presença de áudio, fala e falantes; falhas permanentes deixam de parecer processamento infinito;
+- preço Pro, documentos legais e orientação para mídia sem fala foram corrigidos;
+- Grafana recebeu painéis de modos multimodais e ciclo de créditos; Prometheus recebeu gates de canário para 5xx >2%, sucesso <95%, jobs presos, ausência de fala e estornos;
+- backup já existente foi documentado e ganhou procedimento de restore controlado em `docs/runbooks/backup-restore.md`.
+
+### Validação automatizada do código
+
+| Suíte | Resultado |
+| --- | --- |
+| API typecheck | PASS |
+| API Vitest | PASS — 32 arquivos, 145 testes |
+| Media-worker pytest | PASS — cenários de pipeline/recovery, incluindo vídeo-only |
+| Web typecheck | PASS |
+| JSON do dashboard Grafana | PASS |
+
+Ainda é necessário executar o deploy/migration no VPS e repetir a matriz E2E com MP4s exportados. O endpoint público do Grafana depende de DNS `grafana.<APP_DOMAIN>` e das credenciais do ambiente; o `scripts/vps/deploy.sh` continua tratando DNS ausente como aviso, salvo quando `REQUIRE_GRAFANA_PUBLIC_ENDPOINT=true`.
+
+### Checagem pública após a implementação
+
+- `https://picashorts.com` respondeu HTTP 200 no Chrome.
+- `https://api.picashorts.com` respondeu HTTP 404 na raiz, compatível com API sem rota pública nessa URL.
+- `https://storage.picashorts.com/minio/health/live` respondeu HTTP 403, indicando endpoint protegido pelo gateway.
+- `https://grafana.picashorts.com` não resolveu DNS durante a checagem; por isso não foi possível abrir o dashboard de produção no Chrome. O código do Caddy e o compose já possuem o host; falta publicar o registro DNS e executar o deploy.
+- A landing pública ainda mostra `BRL/mês`, confirmando que as correções locais ainda não estão implantadas em produção.
+
+## E2E real em produção — conta e upload direto — 2026-09-20
+
+- Conta de auditoria criada no Chrome: `arturconrado+picashorts-e2e-20260920@gmail.com`.
+- Login e dashboard: PASS.
+- Importação por URL do YouTube: FALHA esperada do ambiente atual; a própria interface informou que o YouTube bloqueou a importação automática. O cenário foi encerrado sem insistir.
+- Upload direto de `pet-cat-bench-75s.mp4` (29,4 MB): upload PASS, tamanho persistido corretamente; duração apareceu como `0:00` inicialmente e depois `1:15`.
+- Pipeline do upload direto: FALHA/RETRYING em `TRANSCRIPTION`, com `WhisperX transcription failed: Failed to load audio`; nenhum corte foi produzido.
+- A execução confirma que a versão implantada ainda não contém o fallback visual para mídia sem fala/sem áudio. Os cenários adicionais de upload foram pausados para evitar consumir créditos em uma versão conhecida como bloqueada.

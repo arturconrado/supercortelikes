@@ -1,0 +1,19 @@
+{
+  "version": "2026-09-20",
+  "purpose": "PicaShorts multimodal production E2E",
+  "execution": "Chrome visible + API/storage/worker telemetry",
+  "scenarios": [
+    {"id":"podcast-1h-single-speaker","source":"MP4","durationSeconds":3600,"audio":"speech","speakers":1,"orientation":"16:9","expectedMode":"speech","captions":true,"export":"MP4/H.264/1080p"},
+    {"id":"podcast-45m-two-speakers","source":"MP4","durationSeconds":2700,"audio":"speech","speakers":2,"orientation":"16:9","expectedMode":"speech","captions":true,"diarization":true,"export":"MP4/H.264/1080p"},
+    {"id":"podcast-30m-overlap","source":"MP4","durationSeconds":1800,"audio":"speech-overlap","speakers":3,"orientation":"16:9","expectedMode":"speech","captions":true,"diarization":true,"overlap":"preserve-speaker-timestamps"},
+    {"id":"music-video-12m","source":"MP4","durationSeconds":720,"audio":"music","speakers":0,"orientation":"16:9","expectedMode":"visual","captions":false,"visualSignals":["scene","motion","sharpness","faces"]},
+    {"id":"silent-vertical-8m","source":"MP4","durationSeconds":480,"audio":"none","speakers":0,"orientation":"9:16","expectedMode":"visual","captions":false,"visualSignals":["scene","motion","faces"]},
+    {"id":"low-resolution-portrait-90s","source":"MOV","durationSeconds":90,"audio":"speech","speakers":1,"orientation":"9:16","expectedMode":"speech","captions":true,"quality":"low-resolution"},
+    {"id":"near-plan-limit-59m","source":"WEBM","durationSeconds":3540,"audio":"speech","speakers":1,"orientation":"16:9","expectedMode":"speech","captions":true,"planGate":"must-accept-within-plan"},
+    {"id":"invalid-corrupt","source":"corrupt","durationSeconds":null,"audio":"unknown","expectedError":"INVALID_MEDIA"},
+    {"id":"inaccessible-url","source":"URL","durationSeconds":null,"audio":"unknown","expectedError":"SOURCE_UNAVAILABLE","execution":"negative-only; excluded from upload-only production run"},
+    {"id":"deepgram-outage","source":"MP4","durationSeconds":900,"audio":"speech","speakers":2,"expectedMode":"speech","fallback":"whisperx-local","expectedError":null},
+    {"id":"terminal-zero-clips","source":"MP4","durationSeconds":120,"audio":"none","speakers":0,"expectedMode":"visual","expectedError":"NO_USABLE_CLIPS","credits":"refund"},
+    {"id":"idempotent-reprocess","source":"MP4","durationSeconds":600,"audio":"speech","speakers":1,"expectedMode":"speech","reprocess":"same-pipelineRunId-no-double-charge"}
+  ]
+}

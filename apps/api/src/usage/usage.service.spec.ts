@@ -66,7 +66,7 @@ describe('UsageService', () => {
     const service = new UsageService(db, config());
     await service.recordProcessingMinutes('video', 'run');
     expect(db.usageEvent.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      where: { idempotencyKey: 'processing.minutes:video:run' },
+      where: { idempotencyKey: 'processing.minutes.reserved:video:run' },
     }));
   });
 

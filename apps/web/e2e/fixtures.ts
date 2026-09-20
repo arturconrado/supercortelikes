@@ -158,11 +158,28 @@ export async function loginInBrowser(page: Page, user = defaultUser) {
   await page.addInitScript((currentUser) => {
     localStorage.setItem('clipbr.access-token', 'test-token');
     localStorage.setItem('clipbr.user', JSON.stringify(currentUser));
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const requestUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (requestUrl.endsWith('/auth/me')) {
+        return new Response(JSON.stringify(currentUser), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return nativeFetch(input, init);
+    };
   }, user);
+  // Keep the browser-only matrix independent from a running API while still
+  // exercising the real auth provider and route guards.
+  await page.route('**/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' },
+      json: user,
+    });
+  });
 }
 
 export async function mockClipbrApi(page: Page, state: ClipbrMockState = createMockState()) {
-  await page.route(/http:\/\/(127\.0\.0\.1|localhost):4010\/.*/, async (route) => {
+  await page.route(/http:\/\/(127\.0\.0\.1|localhost):(3001|4010)\/.*/, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;

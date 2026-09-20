@@ -97,8 +97,31 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "id": 12,
+      "targets": [
+        { "expr": "sum by (mode) (rate(media_worker_processing_modes_total[15m]))", "legendFormat": "{{mode}}", "refId": "A" },
+        { "expr": "sum(rate(media_worker_errors_total{code=~\"TRANSCRIPT_EMPTY|NO_AUDIO_STREAM\"}[15m]))", "legendFormat": "sem fala/áudio", "refId": "B" }
+      ],
+      "title": "Modos multimodais e ausência de fala",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "id": 13,
+      "targets": [
+        { "expr": "sum(rate(clipbr_usage_events_total{event_type=\"processing.minutes.reserved\"}[15m]))", "legendFormat": "reservados", "refId": "A" },
+        { "expr": "sum(rate(clipbr_usage_events_total{event_type=\"processing.minutes.committed\"}[15m]))", "legendFormat": "confirmados", "refId": "B" },
+        { "expr": "sum(rate(clipbr_usage_events_total{event_type=\"processing.minutes.refunded\"}[15m]))", "legendFormat": "estornados", "refId": "C" }
+      ],
+      "title": "Ciclo de créditos de processamento",
+      "type": "timeseries"
+    },
+    {
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 21 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 37 },
       "id": 11,
       "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
       "targets": [{ "expr": "{service=~\"api|worker|media-worker\"} |= \"error\"", "refId": "A" }],

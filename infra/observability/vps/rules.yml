@@ -72,3 +72,61 @@ groups:
           severity: warning
         annotations:
           summary: Disco acima de 80%
+
+      - alert: PicashortsCanaryServerErrors
+        expr: |
+          (
+            sum(rate(clipbr_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(clipbr_http_requests_total[5m])), 0.001)
+          ) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          rollout_gate: canary
+        annotations:
+          summary: Erros 5xx acima do limite de canário
+          description: O canário deve ser interrompido quando a taxa de 5xx ficar acima de 2% por cinco minutos.
+
+      - alert: PicashortsPipelineSuccessBelowSLO
+        expr: |
+          (
+            sum(rate(media_worker_stage_requests_total{result="succeeded"}[15m]))
+            /
+            clamp_min(sum(rate(media_worker_stage_requests_total[15m])), 0.001)
+          ) < 0.95
+        for: 10m
+        labels:
+          severity: critical
+          rollout_gate: canary
+        annotations:
+          summary: Sucesso do pipeline abaixo de 95%
+          description: Interromper o rollout e revisar falhas por estágio antes de avançar.
+
+      - alert: PicashortsTranscriptEmpty
+        expr: sum(rate(media_worker_errors_total{code=~"TRANSCRIPT_EMPTY|NO_AUDIO_STREAM"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mídia sem fala ou sem áudio detectada
+          description: Verificar se o modo visual está habilitado e se os cortes foram exportados sem legendas.
+
+      - alert: PicashortsJobsStuck
+        expr: clipbr_oldest_processing_export_age_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+          rollout_gate: canary
+        annotations:
+          summary: Job preso por mais de dez minutos
+          description: O rollout deve ser pausado até o job ser retomado ou encerrado com estorno.
+
+      - alert: PicashortsMinuteRefundSpike
+        expr: sum(rate(clipbr_usage_events_total{event_type="processing.minutes.refunded"}[15m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Estornos de minutos acima do esperado
+          description: Inspecionar pipelineRunId, videoId e motivo terminal no Loki antes de continuar o canário.
