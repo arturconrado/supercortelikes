@@ -233,7 +233,7 @@ async function inspectExportedMp4(localPath) {
 
     if (selectedClip) {
       await page.goto(`${BASE_URL}/clips/${selectedClip.id}`);
-      const exportButton = page.getByRole('button', { name: /Gerar e baixar|Gerar novamente/i });
+      const exportButton = page.getByRole('button', { name: /Gerar e baixar|Gerar novamente/i }).first();
       await exportButton.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {});
       await shot(page, '07-clip-editor');
       editorScreenshot = path.join(SCREENSHOT_DIR, '07-clip-editor.png');

@@ -569,3 +569,22 @@ Nenhuma chamada ao WhisperX, nenhum erro `Failed to load audio`, nenhum `RETRYIN
 **Ação recomendada:** não tratar S-VO-01 como regressão até nova evidência via fluxo real. Descontinuar o harness de bypass para verificação de comportamento de pipeline; usar automação de navegador real (Playwright headed, como acima) para qualquer novo teste de upload em produção.
 
 **Pendência:** S-NS-01 (áudio presente sem fala → `TRANSCRIPT_EMPTY` → fallback visual) não foi reverificado pelo navegador real nesta rodada. A única fixture com duração elegível (≥60s) disponível no repositório para esse caso é `hi-de-ho-public-domain-music.webm` (~63 min, 229 MB), que excede a cota do plano FREE (60 min) e acionaria `PLAN_LIMIT_EXCEEDED` em vez de exercitar o fallback pretendido. Recomenda-se gerar uma fixture curta (60–120s) de áudio musical/sem fala antes da próxima verificação.
+
+---
+
+# Medição pós-deploy `b1c0cdb` — 2026-09-27
+
+Upload real pelo navegador (`browser-production-diagnostic.mjs`) de `low-resolution-portrait-90s.mov`, `videoId=f563f35f-9a7f-4334-927d-1e4ec30e1ab6`. Pipeline `SUCCEEDED` em ~1m30s. **Objetivo: medir, não aprovar CEN-006** (fixture sem rotação e não realista, ver `audit-media/README.md`).
+
+| Clip | Trecho | Resultado | `analysisSeconds` | Detalhe |
+| --- | --- | --- | --- | --- |
+| `a1fe1d5a` | 13,8–34,3 s | **reframe ativo** (`ready`), 154 amostras, `detectionRate` 1, `trackingConfidence` 0,96 | 15,18 | — |
+| `b175847b` | termina após 73 s | fallback `VISION_TIME_BUDGET_EXCEEDED` | 25,65 (orçamento 25) | 283 amostras coletadas e descartadas, análise chegou a 73,26 s |
+
+**Conclusões:**
+
+- A hipótese do orçamento foi **confirmada**: 20 s de vídeo 360x202 levaram 15 s de CPU no droplet `s-4vcpu-8gb` — nunca caberia nos 8 s antigos.
+- Causa adicional encontrada: com `LLM_PROVIDER=openrouter`/modo híbrido, `providerBudget.analysisFps` (6–10, pensado para GPU) sobrescrevia o padrão de CPU (2 fps). O worker limitava a 0,25 s → 8 amostras/s em CPU, o dobro do planejado. Correção: CPU limitado a 2 fps; GPU/RunPod mantêm o valor do orçamento.
+- **Risco para vídeos reais:** esta fixture tem 360x202. Uploads reais (1080p/4K) custam mais para decodificar; o tempo por clip precisa ser remedido com gravações realistas.
+- `EXPORT_BUTTON_NOT_FOUND` era bug do script (dois botões "Gerar e baixar" na página → modo estrito do Playwright); corrigido com `.first()`.
+- Deploy: a etapa "Configure Cloudflare DNS" falhou com HTTP 403 da API da Cloudflare (não bloqueante; DNS e site OK). Token da Cloudflare provavelmente expirado ou sem permissão.

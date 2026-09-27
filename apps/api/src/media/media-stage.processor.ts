@@ -154,13 +154,15 @@ export class MediaStageProcessor {
     if (stage === 'captions') return { template: 'podcast', wordsPerCue: 6 };
     if (stage === 'scoring') return providerBudget;
     if (stage === 'composition') {
-      const analysisFps = Number(providerBudget.analysisFps ?? (this.mediaAccelerator === 'cuda' ? 10 : 2));
+      const gpuAnalysis = this.mediaAccelerator === 'cuda' || this.gpuProvider === 'runpod';
+      // `providerBudget.analysisFps` (6-10) is sized for GPU analysis. On CPU it
+      // doubled the YOLO work per clip and pushed clips past their budget.
+      const requestedFps = Number(providerBudget.analysisFps ?? (gpuAnalysis ? 10 : 2));
+      const analysisFps = gpuAnalysis ? requestedFps : Math.min(2, requestedFps);
       return {
         enabled: compositionEnabled,
         aspectRatio: processing.aspectRatio,
         detector: 'auto',
-        sampleSeconds: 1 / Math.max(1, analysisFps),
-        analysisFps,
         minimumSpeakerConfidence: this.minimumSpeakerConfidence,
         focusSwitchDelaySeconds: this.focusSwitchDelaySeconds,
         analysisBudgetRatio:
@@ -173,6 +175,8 @@ export class MediaStageProcessor {
         remote: this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod',
         ...this.sourceIntegrityOptions(video),
         ...providerBudget,
+        sampleSeconds: 1 / Math.max(1, analysisFps),
+        analysisFps,
       };
     }
     if (stage === 'rendering') {

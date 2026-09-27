@@ -196,6 +196,28 @@ describe('MediaStageProcessor persistence', () => {
     );
   });
 
+  it('keeps CPU composition at 2 analysis fps even when the provider budget asks for more', async () => {
+    prisma.usageEvent = { aggregate: vi.fn().mockResolvedValue({ _sum: { costCents: 0 } }) };
+    (processor as any).llmProvider = 'openrouter';
+    await processor.process(job('composition'));
+    expect(media.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'composition' }),
+      expect.anything(),
+      expect.objectContaining({ analysisFps: 2, sampleSeconds: 0.5, visualQaEnabled: true }),
+      undefined,
+    );
+
+    media.execute.mockClear();
+    (processor as any).mediaAccelerator = 'cuda';
+    await processor.process(job('composition'));
+    expect(media.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: 'composition' }),
+      expect.anything(),
+      expect.not.objectContaining({ analysisFps: 2 }),
+      undefined,
+    );
+  });
+
   it('uses source URLs and rejects missing videos or unsafe artifacts', async () => {
     prisma.video.findUnique.mockResolvedValueOnce({ id: 'video', storageBucket: 'bucket', storageKey: 'key', sourceUrl: 'https://example.test/video' });
     await processor.process(job('ingestion'));
