@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import media_worker.composition as composition
 from media_worker.composition import (
     COMPOSITION_VERSION,
     _combine_ai_speaker_activity,
@@ -9,6 +11,7 @@ from media_worker.composition import (
     _subject_focus,
     _usable_subject_box,
     _windowed_usable_rates,
+    build_compositions,
     composition_plan,
     detect_cross_talk,
     enforce_safe_layouts,
@@ -63,6 +66,102 @@ def test_composition_uses_fill_split_and_safe_fallbacks():
     }
     assert composition_plan(clip, low_confidence, aspect="9:16")["scenes"][0]["layout"] == "fit"
     assert fallback_plan(clip, "9:16", "budget-exceeded")["diagnostics"]["reason"] == "budget-exceeded"
+
+
+def test_build_compositions_resolves_the_detector_once_and_reuses_it_across_clips(monkeypatch):
+    resolve_calls = []
+    sentinel_detector = ("stub-backend", SimpleNamespace(close=lambda: closed.append(True)))
+    closed = []
+
+    def fake_resolve_detector(detector, settings):
+        resolve_calls.append(detector)
+        return sentinel_detector
+
+    analyze_calls = []
+
+    def fake_analyze_focus(source, detector, settings, **kwargs):
+        analyze_calls.append(kwargs.get("resolved_detector"))
+        return {"width": 1920, "height": 1080, "detectionRate": 0, "samples": []}
+
+    monkeypatch.setattr(composition, "resolve_detector", fake_resolve_detector)
+    monkeypatch.setattr(composition, "analyze_focus", fake_analyze_focus)
+
+    clips = [
+        {"id": "clip-001", "start": 0, "end": 3},
+        {"id": "clip-002", "start": 3, "end": 6},
+        {"id": "clip-003", "start": 6, "end": 9},
+    ]
+    settings = SimpleNamespace(media_accelerator="cpu")
+    plans = build_compositions("source.mp4", clips, settings, {"aspectRatio": "9:16"})
+
+    assert len(plans) == 3
+    assert resolve_calls == ["auto"]
+    assert analyze_calls == [sentinel_detector, sentinel_detector, sentinel_detector]
+    assert closed == [True]
+
+
+def test_build_compositions_falls_back_per_clip_without_failing_the_whole_run(monkeypatch):
+    def fake_resolve_detector(detector, settings):
+        return ("stub-backend", SimpleNamespace())
+
+    def fake_analyze_focus(source, detector, settings, **kwargs):
+        if kwargs["start_seconds"] == 0:
+            raise RuntimeError("boom")
+        return {
+            "width": 1920,
+            "height": 1080,
+            "detectionRate": 1,
+            "samples": [
+                {"time": 3, "boxes": [_box(200, 1)], "activeSpeakerConfidence": 1},
+                {"time": 3.75, "boxes": [_box(240, 1)], "activeSpeakerConfidence": 1},
+            ],
+        }
+
+    monkeypatch.setattr(composition, "resolve_detector", fake_resolve_detector)
+    monkeypatch.setattr(composition, "analyze_focus", fake_analyze_focus)
+
+    clips = [
+        {"id": "clip-001", "start": 0, "end": 3},
+        {"id": "clip-002", "start": 3, "end": 6},
+    ]
+    settings = SimpleNamespace(media_accelerator="cpu")
+    plans = build_compositions("source.mp4", clips, settings, {"aspectRatio": "9:16"})
+
+    assert plans[0]["diagnostics"]["reason"] == "analysis-failed"
+    assert plans[0]["diagnostics"]["error"] == "RuntimeError"
+    assert plans[1]["diagnostics"]["status"] != "fallback"
+    assert "errorCode" not in plans[0]["diagnostics"]
+    assert plans[1]["diagnostics"]["analysisBudgetSeconds"] == 8.0
+
+
+def test_build_compositions_reports_worker_error_code_and_detail(monkeypatch):
+    from media_worker.errors import WorkerError
+
+    def fake_analyze_focus(source, detector, settings, **kwargs):
+        raise WorkerError(
+            "VISION_TIME_BUDGET_EXCEEDED",
+            "Composition analysis exceeded its CPU time budget",
+            detail={"budgetSeconds": 8.0, "samplesCollected": 11},
+        )
+
+    monkeypatch.setattr(composition, "resolve_detector", lambda detector, settings: None)
+    monkeypatch.setattr(composition, "analyze_focus", fake_analyze_focus)
+
+    settings = SimpleNamespace(media_accelerator="cpu")
+    plans = build_compositions(
+        "source.mp4",
+        [{"id": "clip-001", "start": 0, "end": 30}],
+        settings,
+        {"aspectRatio": "9:16", "analysisBudgetRatio": 0.75, "analysisMaxSeconds": 8},
+    )
+
+    diagnostics = plans[0]["diagnostics"]
+    assert diagnostics["reason"] == "analysis-failed"
+    assert diagnostics["error"] == "WorkerError"
+    assert diagnostics["errorCode"] == "VISION_TIME_BUDGET_EXCEEDED"
+    assert diagnostics["errorDetail"] == {"budgetSeconds": 8.0, "samplesCollected": 11}
+    assert diagnostics["analysisBudgetSeconds"] == 8.0
+    assert diagnostics["analysisSeconds"] >= 0
 
 
 def test_voice_activity_gates_lip_motion_and_keyframes_never_jump_over_eight_percent():

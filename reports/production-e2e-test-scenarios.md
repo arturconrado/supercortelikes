@@ -402,13 +402,13 @@ Para cada export:
 | CEN-003 |  |  |  | Não iniciado |  |  |  |  |  |
 | CEN-004 |  |  |  | Não iniciado |  |  |  |  |  |
 | CEN-005 |  |  |  | Não iniciado |  |  |  |  |  |
-| CEN-006 |  |  |  | Não iniciado |  |  |  |  |  |
+| CEN-006 | 2026-09-27 |  | PicaShorts Browser Diagnostic (2026-09-27T18-11-36) | **REPROVADO** — reframe nunca ativou (ver sessão 2026-09-27 abaixo) | `74a5052b-9afc-47e1-8b6c-1dafd6e1ea17` |  | não chegou a exportar | não estornado (sucesso do pipeline) | `run-cen006/07-clip-editor.png`, log completo na sessão abaixo |
 | CEN-007 |  |  |  | Não iniciado |  |  |  |  |  |
 | CEN-008 |  |  |  | Não iniciado |  |  |  |  |  |
 | CEN-009 |  |  |  | Não iniciado |  |  |  |  |  |
 | CEN-010 |  |  |  | Não iniciado |  |  |  |  |  |
 | CEN-011 |  |  |  | Não iniciado |  |  |  |  |  |
-| CEN-012 |  |  |  | Não iniciado |  |  |  |  |  |
+| CEN-012 | 2026-09-27 |  | PicaShorts Browser Diagnostic (2026-09-27T18-11-43) | **REPROVADO** — reframe nunca ativou (ver sessão 2026-09-27 abaixo) | `1aaaf485-a422-48ff-b7da-008e4081b2a1` |  | não chegou a exportar | não estornado (sucesso do pipeline) | log completo na sessão abaixo |
 
 ## Critério de liberação
 
@@ -467,6 +467,45 @@ Não foram usados links públicos como substituto, porque esta sessão está res
 
 ---
 
+# Relatório de execução — CEN-006 e CEN-012 — 2026-09-27
+
+**Ambiente:** `https://picashorts.com`
+**Automação:** `apps/web/scripts/browser-production-diagnostic.mjs` (Playwright, Chrome visível, `setInputFiles` — supera o bloqueio do seletor nativo registrado na sessão de 2026-09-20).
+**Fixtures:** `reports/audit-media/low-resolution-portrait-90s.mov` (CEN-006) e `reports/audit-media/multiple-people-reframe.mp4` (CEN-012); proveniência, licença e checksum em [`reports/audit-media/README.md`](./audit-media/README.md).
+
+## Resultado
+
+**Upload → pipeline → composição concluíram normalmente em ambos os cenários** (sem bloqueio de automação desta vez), mas **o reframe automático (composition-v2) não ativou em nenhum corte gerado** — nem nos dois vídeos novos, nem em um terceiro vídeo de controle (`pet-cat-bench-75s.mp4`, fixture já usada com sucesso em sessões anteriores). Todos os 7 cortes gerados nas 3 execuções vieram com:
+
+```json
+"diagnostics": {"error": "WorkerError", "reason": "analysis-failed", "status": "fallback", "accelerator": "cpu", "sampleCount": 0, "detectionRate": 0, "layoutSwitches": 0}
+```
+
+Ou seja: o layout de todo corte caiu para `fit` (letterbox estático), sem rastrear rosto/falante — o oposto do que o CEN-006 e o CEN-012 pedem para aprovar (`safeSubjectRate` alto, "sujeito principal permanece enquadrado", "pessoas entram e saem do quadro" com reframe ativo). Como o teste de controle com uma fixture historicamente boa reproduziu o mesmo erro, isto **não é um problema das fixtures novas — é uma regressão de produção que afeta todo upload atual**, não só os dois cenários planejados.
+
+### Causa raiz identificada
+
+O commit `a7ece0a` ("fix: bound composition analysis time per clip", 2026-09-20) apertou o orçamento de tempo de análise por corte no modo CPU (`analysisBudgetRatio` 4→0.75, `analysisMaxSeconds` sem teto→8s hard cap) para evitar jobs presos. Combinado com um problema pré-existente e independente — `services/media-worker/src/media_worker/composition.py` recarregava o modelo de detecção (YOLO + MediaPipe) do zero a cada corte, em vez de uma vez por vídeo — o orçamento de 8s por corte deixou de ser suficiente, e todo corte no modo CPU (o modo padrão em produção, `MEDIA_ACCELERATOR=cpu`) passou a estourar o prazo e cair no fallback seguro.
+
+> **⚠️ Revisão posterior (2026-09-27) — causa raiz não comprovada.** Em `vision.py`, o `deadline` do orçamento é calculado *depois* de `_detector(...)` carregar o modelo, então o recarregamento por corte **não** consumia o orçamento de análise. Reaproveitar o detector reduz custo total, mas não explica o fallback. A hipótese restante é que a inferência YOLO em CPU simplesmente não cabe em 8 s por corte (análise a 2 fps + tracking a 4 fps sobre todo o corte) — plausível, mas **não medida**. O diagnóstico de produção só registrava o nome da classe (`WorkerError`), sem o código: não é possível distinguir `VISION_TIME_BUDGET_EXCEEDED` de `VISION_NO_FRAMES` ou `VIDEO_OPEN_FAILED`. Correção: `build_compositions()` passou a gravar `errorCode`, `errorDetail` (orçamento, amostras coletadas, até onde a análise chegou), `analysisSeconds` e `analysisBudgetSeconds` em cada corte. Após o deploy, esses campos confirmam ou refutam a hipótese.
+>
+> **Fixtures:** `low-resolution-portrait-90s.mov` não possui metadado de rotação (é paisagem 360x202) e `multiple-people-reframe.mp4` quase não mostra rostos frontais. Nenhuma das duas valida o reframe como um usuário real o usaria — ver `reports/audit-media/README.md`, seção "Fixtures realistas pendentes". CEN-006 e CEN-012 só podem ser aprovados com essas gravações realistas.
+
+### Correção aplicada neste repositório (ainda não implantada em produção)
+
+- `services/media_worker/src/media_worker/vision.py`: nova função `resolve_detector()`; `analyze_focus()` aceita um detector já resolvido (`resolved_detector`) e só fecha o modelo se foi ele quem o carregou.
+- `services/media-worker/src/media_worker/composition.py`: `build_compositions()` resolve o detector uma única vez por vídeo e reaproveita entre todos os cortes, fechando-o apenas ao final.
+- `apps/api/src/media/media-stage.processor.ts`: `analysisBudgetRatio` (CPU) 0.75→2, `analysisMaxSeconds` (CPU) 8→25 — ainda limitado (bem abaixo do comportamento antigo sem teto), mas compatível com o custo real de inferência YOLO+MediaPipe em CPU.
+- Testes atualizados/adicionados: `apps/api/test/media-stage-processor.spec.ts` (novas constantes), `services/media-worker/tests/test_composition.py` (dois testes novos: detector resolvido uma vez e reaproveitado entre cortes; fallback por corte não derruba o restante do run). Suítes completas rodadas localmente: media-worker (`pytest`, ~120 testes) e API (`vitest`, 145 testes) — todas passando.
+
+### Pendências
+
+- **Este fix está no working tree, não em produção.** É necessário revisar, commitar e implantar antes que CEN-006/CEN-012 possam ser reexecutados com expectativa de aprovação.
+- Após o deploy, reexecutar CEN-006 e CEN-012 (e idealmente mais um vídeo com múltiplos falantes reais) para confirmar `sampleCount > 0`, `detectionRate > 0` e layout `fill`/`split` real antes de marcar os cenários como aprovados.
+- Exportação (`ffprobe` do MP4 final) não chegou a ser exercitada nestas 3 execuções porque o botão de export só aparece após o carregamento assíncrono do editor; o script tirou o screenshot antes da hidratação terminar (`EXPORT_BUTTON_NOT_FOUND`). Pequeno ajuste de espera (`waitForLoadState`/aguardar o botão ficar visível) é necessário no script antes da próxima rodada — não é um problema de produto.
+
+---
+
 # Execução adicional com upload multipart oficial e Chrome visível — 2026-09-20
 
 Esta retomada manteve a janela do Chrome aberta e usou somente o endpoint oficial de upload multipart para contornar o seletor nativo bloqueado. O navegador foi navegado para cada página de detalhe e os estados foram lidos visualmente por acessibilidade/polling.
@@ -489,3 +528,44 @@ O helper [scripts/acceptance/upload-one-production.mjs](../scripts/acceptance/up
 ## Conclusão da sessão
 
 Os dois cenários executados até o fim observável falharam no caminho atual de transcrição para conteúdo sem fala/sem áudio. Isso confirma que o fallback visual e o tratamento não-retentável de `TRANSCRIPT_EMPTY`/ausência de áudio ainda não estão ativos no build observado em produção. Nenhum cenário foi aprovado até download de MP4; não houve base para validar editor, legendas opcionais, reframe, render ou integridade do export.
+
+**Nota de correção (ver seção seguinte):** a reexecução de S-VO-01 pelo navegador real (não pelo script de bypass) não reproduziu essa falha. O diagnóstico aponta o harness de upload multipart usado nesta sessão, não o pipeline de produção, como causa provável.
+
+---
+
+# Correção via upload real pelo navegador — 2026-09-20
+
+Investigação de causa raiz do FAIL/REGRESSION relatado acima para S-VO-01 e S-NS-01. Verificação de código confirmou que o build implantado em produção (`api.picashorts.com/health/live` → `build=b98b7a3`) já inclui o commit `2e4d5828` ("add multimodal processing capabilities with visual-only and deepgram diarization rollout percentages"), que adiciona exatamente o fallback ausente: pular WhisperX quando não há stream de áudio ([pipeline.py:180-190](../services/media-worker/src/media_worker/pipeline.py#L180-L190)) e capturar `TRANSCRIPT_EMPTY` para cair em transcript visual ([pipeline.py:229-232](../services/media-worker/src/media_worker/pipeline.py#L229-L232)). O gate de rollout (`VISUAL_ONLY_ROLLOUT_PERCENT`) tem default 100 tanto no schema (`env.ts`) quanto no processor, então nenhum código commitado explicaria o comportamento relatado.
+
+Como o build já continha a correção, a hipótese de "deploy desatualizado" foi descartada. A hipótese seguinte — falha no harness de bypass (`scripts/acceptance/upload-one-production.mjs`, script ad-hoc não versionado neste repositório) — foi testada reproduzindo S-VO-01 através do fluxo real do produto.
+
+## Metodologia
+
+Diferente da sessão anterior (upload via chamada direta ao endpoint multipart, contornando o seletor de arquivo bloqueado), esta rodada usou automação de navegador real:
+
+- Playwright (`@playwright/test`, já presente em `apps/web`) controlando Chromium **visível** (`headless: false`), sem mocks de API.
+- Cadastro real via `/register` (verificado ausência de Cloudflare Turnstile antes de prosseguir — não houve tentativa de contornar CAPTCHA).
+- Seleção de arquivo via `input[type="file"].setInputFiles(...)` — contorna apenas o diálogo nativo do SO, não o código do produto; o clique em "Iniciar upload" e todo o caminho de upload multipart pré-assinado são exercitados normalmente, como um usuário real.
+- Leitura do estado via as mesmas respostas `GET /videos/:id` que a UI consome, capturadas por `page.on('response')`.
+- Script: [`apps/web/scripts/browser-production-diagnostic.mjs`](../apps/web/scripts/browser-production-diagnostic.mjs) (novo; substitui o harness de bypass anterior para este tipo de verificação).
+
+## Resultado — S-VO-01 (repetição)
+
+Conta nova: `arturconrado+picashorts-browser-2026-09-20T22-31-23-720Z@gmail.com`. Fixture idêntica: `pet-cat-bench-75s.mp4` (75,36 s, sem stream de áudio). `videoId=2b9ec63c-1690-48d6-9ce2-f739b0617b9b`.
+
+| Hora (UTC) | Estágio | `audioPresent` | `speechDetected` | `processingMode` |
+| --- | --- | --- | --- | --- |
+| 22:31:40 | INGESTION | — | — | — |
+| 22:31:44 | SEGMENTATION | `false` | `false` | `visual` |
+| 22:33:11–22:33:16 | SCORING → CLIPS → COMPOSITION | `false` | `false` | `visual` |
+| 22:34:00 | **SUCCEEDED** | `false` | `false` | `visual` |
+
+Nenhuma chamada ao WhisperX, nenhum erro `Failed to load audio`, nenhum `RETRYING`. Pipeline completo em ~2m20s, modo visual corretamente detectado desde a ingestão.
+
+## Conclusão
+
+**O FAIL/REGRESSION original de S-VO-01 não reproduz pelo caminho real do produto.** O build em produção já contém o fallback visual e ele funciona corretamente quando o upload passa pelo fluxo real do navegador. A causa mais provável da falha relatada na sessão anterior é o próprio harness de bypass (`upload-one-production.mjs`), não um defeito do pipeline — por exemplo, envio malformado do arquivo por trás do contorno do `Content-Type`/multipart que mascarou o teste como se fosse o produto falhando.
+
+**Ação recomendada:** não tratar S-VO-01 como regressão até nova evidência via fluxo real. Descontinuar o harness de bypass para verificação de comportamento de pipeline; usar automação de navegador real (Playwright headed, como acima) para qualquer novo teste de upload em produção.
+
+**Pendência:** S-NS-01 (áudio presente sem fala → `TRANSCRIPT_EMPTY` → fallback visual) não foi reverificado pelo navegador real nesta rodada. A única fixture com duração elegível (≥60s) disponível no repositório para esse caso é `hi-de-ho-public-domain-music.webm` (~63 min, 229 MB), que excede a cota do plano FREE (60 min) e acionaria `PLAN_LIMIT_EXCEEDED` em vez de exercitar o fallback pretendido. Recomenda-se gerar uma fixture curta (60–120s) de áudio musical/sem fala antes da próxima verificação.

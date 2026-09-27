@@ -12,6 +12,19 @@ from .process import run_command
 ASPECTS = {"9:16": (9, 16), "1:1": (1, 1), "4:5": (4, 5), "16:9": (16, 9)}
 
 
+def resolve_detector(detector: str, settings: Settings) -> Tuple[str, Any]:
+    """Load a detector backend once so callers can reuse it across clips.
+
+    `_detector` imports and initializes YOLO/MediaPipe from scratch on every
+    call; reusing the returned (backend, detect) pair avoids paying that cost
+    -- and the wall-clock time it eats out of each clip's analysis budget --
+    once per clip in a multi-clip composition run.
+    """
+    import cv2
+
+    return _detector(detector, cv2, settings)
+
+
 def analyze_focus(
     path: Path,
     detector: str,
@@ -21,6 +34,7 @@ def analyze_focus(
     end_seconds: Optional[float] = None,
     time_budget_seconds: Optional[float] = None,
     skip_lip_region_refinement: bool = False,
+    resolved_detector: Optional[Tuple[str, Any]] = None,
 ) -> Dict[str, Any]:
     try:
         import cv2
@@ -38,7 +52,8 @@ def analyze_focus(
     tracking_interval = max(0.04, detection_interval / 2)
     if start_seconds > 0:
         capture.set(cv2.CAP_PROP_POS_MSEC, start_seconds * 1000)
-    backend, detect = _detector(detector, cv2, settings)
+    owns_detector = resolved_detector is None
+    backend, detect = resolved_detector if resolved_detector is not None else _detector(detector, cv2, settings)
     subject_kind = "person" if backend.startswith("ultralytics-yolo") else "face"
     focus_y_ratio = 0.2 if subject_kind == "person" else 0.45
     samples: List[Dict[str, Any]] = []
@@ -52,7 +67,15 @@ def analyze_focus(
     try:
         while True:
             if deadline is not None and time.monotonic() > deadline:
-                raise WorkerError("VISION_TIME_BUDGET_EXCEEDED", "Composition analysis exceeded its CPU time budget")
+                raise WorkerError(
+                    "VISION_TIME_BUDGET_EXCEEDED",
+                    "Composition analysis exceeded its CPU time budget",
+                    detail={
+                        "budgetSeconds": round(float(time_budget_seconds), 2),
+                        "samplesCollected": len(samples),
+                        "analyzedUntilSeconds": round(last_timestamp, 3),
+                    },
+                )
             ok, frame = capture.read()
             if not ok:
                 break
@@ -128,9 +151,10 @@ def analyze_focus(
             frame_index += 1
     finally:
         capture.release()
-        cleanup = getattr(detect, "close", None)
-        if callable(cleanup):
-            cleanup()
+        if owns_detector:
+            cleanup = getattr(detect, "close", None)
+            if callable(cleanup):
+                cleanup()
         release_runtime_memory()
     if not samples:
         raise WorkerError(

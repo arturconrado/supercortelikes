@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Mapping, Sequence
 
 from .config import Settings
 from . import speaker_ai
-from .vision import analyze_focus, crop_dimensions
+from .vision import analyze_focus, crop_dimensions, resolve_detector
 
 
 COMPOSITION_VERSION = "composition-v2"
@@ -66,48 +67,79 @@ def build_compositions(
     # call ends up not covering (see `speaker_ai`/item 9).
     skip_lip_region_refinement = speaker_ai.enabled(settings)
     ai_speaker_activity = options.get("aiSpeakerActivity") or {}
-    for clip in clips:
-        start, end = float(clip["start"]), float(clip["end"])
-        if not enabled:
-            plans.append(fallback_plan(clip, aspect, "disabled"))
-            continue
+    # Resolve the detector (YOLO/MediaPipe) once per source instead of once per
+    # clip. Loading these models is not free, and re-loading them inside each
+    # clip's bounded `time_budget_seconds` window left little to no time for
+    # the actual frame analysis -- every clip fell back to "analysis-failed".
+    resolved_detector = None
+    if enabled:
         try:
-            analysis = analyze_focus(
-                source,
-                detector,
-                settings,
-                sample_seconds=sample_seconds,
-                start_seconds=start,
-                end_seconds=end,
-                time_budget_seconds=min(
-                    analysis_max_seconds,
-                    max(2.0, (end - start) * budget_ratio),
-                ),
-                skip_lip_region_refinement=skip_lip_region_refinement,
+            resolved_detector = resolve_detector(detector, settings)
+        except Exception:
+            resolved_detector = None
+    try:
+        for clip in clips:
+            start, end = float(clip["start"]), float(clip["end"])
+            if not enabled:
+                plans.append(fallback_plan(clip, aspect, "disabled"))
+                continue
+            budget_seconds = min(
+                analysis_max_seconds,
+                max(2.0, (end - start) * budget_ratio),
             )
-            _combine_voice_activity(analysis, options.get("voiceActivity"))
-            _combine_ai_speaker_activity(
-                analysis, ai_speaker_activity.get(str(clip["id"]))
-            )
-            plans.append(
-                composition_plan(
-                    clip,
-                    analysis,
-                    aspect=aspect,
-                    minimum_confidence=minimum_confidence,
-                    focus_switch_delay_seconds=max(
-                        0.0,
-                        min(
-                            0.4,
-                            float(options.get("focusSwitchDelaySeconds", 0.25)),
-                        ),
-                    ),
+            started = time.monotonic()
+            try:
+                analysis = analyze_focus(
+                    source,
+                    detector,
+                    settings,
+                    sample_seconds=sample_seconds,
+                    start_seconds=start,
+                    end_seconds=end,
+                    time_budget_seconds=budget_seconds,
+                    skip_lip_region_refinement=skip_lip_region_refinement,
+                    resolved_detector=resolved_detector,
                 )
+                _combine_voice_activity(analysis, options.get("voiceActivity"))
+                _combine_ai_speaker_activity(
+                    analysis, ai_speaker_activity.get(str(clip["id"]))
+                )
+                plans.append(
+                    composition_plan(
+                        clip,
+                        analysis,
+                        aspect=aspect,
+                        minimum_confidence=minimum_confidence,
+                        focus_switch_delay_seconds=max(
+                            0.0,
+                            min(
+                                0.4,
+                                float(options.get("focusSwitchDelaySeconds", 0.25)),
+                            ),
+                        ),
+                    )
+                )
+            except Exception as error:
+                plan = fallback_plan(clip, aspect, "analysis-failed")
+                plan["diagnostics"]["error"] = type(error).__name__
+                # The exception class alone ("WorkerError") cannot tell a CPU
+                # budget overrun from an unreadable source or a missing model.
+                error_code = getattr(error, "code", None)
+                if error_code:
+                    plan["diagnostics"]["errorCode"] = error_code
+                error_detail = getattr(error, "detail", None)
+                if error_detail:
+                    plan["diagnostics"]["errorDetail"] = dict(error_detail)
+                plans.append(plan)
+            plans[-1]["diagnostics"]["analysisSeconds"] = round(
+                time.monotonic() - started, 2
             )
-        except Exception as error:
-            plan = fallback_plan(clip, aspect, "analysis-failed")
-            plan["diagnostics"]["error"] = type(error).__name__
-            plans.append(plan)
+            plans[-1]["diagnostics"]["analysisBudgetSeconds"] = round(budget_seconds, 2)
+    finally:
+        if resolved_detector is not None:
+            cleanup = getattr(resolved_detector[1], "close", None)
+            if callable(cleanup):
+                cleanup()
     for plan in plans:
         if int(plan.get("source", {}).get("width", 0)) <= 0:
             plan["source"] = {

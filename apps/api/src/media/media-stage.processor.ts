@@ -164,11 +164,12 @@ export class MediaStageProcessor {
         minimumSpeakerConfidence: this.minimumSpeakerConfidence,
         focusSwitchDelaySeconds: this.focusSwitchDelaySeconds,
         analysisBudgetRatio:
-          this.mediaAccelerator === 'cuda' || this.gpuProvider === 'runpod' ? 1 : 0.75,
+          this.mediaAccelerator === 'cuda' || this.gpuProvider === 'runpod' ? 1 : 2,
         // Keep CPU composition bounded when a source produces many overlapping
         // clips. The worker falls back safely for a clip that exceeds this
-        // budget instead of holding the queue indefinitely.
-        analysisMaxSeconds: this.mediaAccelerator === 'cuda' || this.gpuProvider === 'runpod' ? 20 : 8,
+        // budget instead of holding the queue indefinitely. 8s was too tight
+        // for real CPU YOLO+MediaPipe inference and made every clip fall back.
+        analysisMaxSeconds: this.mediaAccelerator === 'cuda' || this.gpuProvider === 'runpod' ? 20 : 25,
         remote: this.aiExecutionMode === 'hybrid' && this.gpuProvider === 'runpod',
         ...this.sourceIntegrityOptions(video),
         ...providerBudget,
