@@ -227,7 +227,10 @@ async function inspectExportedMp4(localPath) {
     await page.waitForTimeout(3000);
 
     const latestClips = clipsSnapshots[clipsSnapshots.length - 1]?.clips ?? [];
-    const selectedClip = latestClips.find((clip) => clip.id) ?? null;
+    // Export the clip whose framing changes most: the worst case to inspect visually.
+    const selectedClip = [...latestClips]
+      .filter((clip) => clip.id)
+      .sort((a, b) => (b.composition?.diagnostics?.layoutSwitches ?? 0) - (a.composition?.diagnostics?.layoutSwitches ?? 0))[0] ?? null;
     let editorScreenshot = null;
     let exportCheck = null;
 

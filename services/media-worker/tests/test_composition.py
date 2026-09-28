@@ -842,3 +842,59 @@ def test_ffmpeg_composition_hstack_filter_graph_shape():
     assert "hstack=inputs=2" in graph
     assert "vstack=inputs=2" not in graph
     assert graph.count("crop=") == 2
+
+
+def test_nested_duplicate_person_box_does_not_flash_split_on_single_speaker():
+    # Production regression (CEN-006, 2026-09-27): a 360x202 close-up where YOLO
+    # sometimes returned an upper-body box nested inside the full-body box.
+    # Counted as two people, those samples flashed a 0.27s `split`.
+    full = {"x": 3, "y": 2, "width": 354, "height": 198, "confidence": 0.9,
+            "activity": 1.0, "subjectKind": "person", "trackId": 1}
+    nested = {"x": 90, "y": 10, "width": 170, "height": 185, "confidence": 0.6,
+              "activity": 1.0, "subjectKind": "person", "trackId": 2}
+    duplicated = {6, 20, 21, 22, 23, 50}
+    samples = []
+    for index in range(80):
+        boxes = (
+            [{**full, "activity": 0.2}, nested] if index in duplicated else [full]
+        )
+        samples.append({
+            "time": round(index * 0.267, 3),
+            "boxes": boxes,
+            "activeSpeakerConfidence": 1.0,
+        })
+    plan = composition_plan(
+        {"id": "clip-001", "start": 0, "end": 21.5},
+        {"width": 360, "height": 202, "detectionRate": 1.0, "samples": samples},
+        aspect="9:16",
+    )
+
+    assert {scene["layout"] for scene in plan["scenes"]} == {"fit"}
+    assert plan["diagnostics"]["layoutSwitches"] == 0
+
+
+def test_two_separate_people_still_split():
+    left = {"x": 100, "y": 200, "width": 500, "height": 800, "confidence": 0.9,
+            "activity": 0.3, "subjectKind": "person"}
+    right = {"x": 1300, "y": 200, "width": 500, "height": 800, "confidence": 0.9,
+             "activity": 0.3, "subjectKind": "person"}
+    samples = [
+        {"time": round(index * 0.25, 3), "boxes": [left, right], "activeSpeakerConfidence": 0.3}
+        for index in range(20)
+    ]
+    plan = composition_plan(
+        {"id": "clip-001", "start": 0, "end": 5},
+        {"width": 1920, "height": 1080, "detectionRate": 1.0, "samples": samples},
+        aspect="9:16",
+    )
+
+    assert "split" in {scene["layout"] for scene in plan["scenes"]}
+
+
+def test_settle_short_unsafe_runs_turns_sub_threshold_flashes_into_fit():
+    layouts = ["fit"] * 6 + ["split"] * 2 + ["fit"] * 6 + ["fill"] * 8
+    samples = [{"time": index * 0.25, "layout": layout} for index, layout in enumerate(layouts)]
+
+    settled = composition.settle_short_unsafe_runs(samples, minimum_seconds=0.6)
+
+    assert [value["layout"] for value in settled] == ["fit"] * 14 + ["fill"] * 8

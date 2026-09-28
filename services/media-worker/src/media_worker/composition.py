@@ -306,6 +306,53 @@ def _box_iou(left: Mapping[str, Any], right: Mapping[str, Any]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+NESTED_BOX_CONTAINMENT = 0.85
+
+
+def _box_containment(inner: Mapping[str, Any], outer: Mapping[str, Any]) -> float:
+    """Fraction of `inner`'s area that lies inside `outer`."""
+    inner_x, inner_y = float(inner.get("x", 0)), float(inner.get("y", 0))
+    outer_x, outer_y = float(outer.get("x", 0)), float(outer.get("y", 0))
+    inner_w, inner_h = float(inner.get("width", 0)), float(inner.get("height", 0))
+    intersection = max(
+        0.0,
+        min(inner_x + inner_w, outer_x + float(outer.get("width", 0))) - max(inner_x, outer_x),
+    ) * max(
+        0.0,
+        min(inner_y + inner_h, outer_y + float(outer.get("height", 0))) - max(inner_y, outer_y),
+    )
+    area = max(0.0, inner_w) * max(0.0, inner_h)
+    return intersection / area if area > 0 else 0.0
+
+
+def _merge_nested_boxes(boxes: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
+    """Merge boxes where one lies inside the other into the outer box.
+
+    The person detector can return a second, partial box for the same person
+    (e.g. upper body inside full body). Counted as two people it flipped
+    single-speaker clips into `split`; framing on the partial box cut the
+    head off. The outer box is kept -- it is the whole person -- carrying the
+    higher activity of the pair so speaker ranking is preserved."""
+    kept: List[Dict[str, Any]] = []
+    for box in boxes:
+        for index, other in enumerate(kept):
+            if (
+                _box_containment(box, other) >= NESTED_BOX_CONTAINMENT
+                or _box_containment(other, box) >= NESTED_BOX_CONTAINMENT
+            ):
+                box_area = float(box.get("width", 0)) * float(box.get("height", 0))
+                other_area = float(other.get("width", 0)) * float(other.get("height", 0))
+                outer = dict(box if box_area > other_area else other)
+                outer["activity"] = max(
+                    float(box.get("activity", 0.0)), float(other.get("activity", 0.0))
+                )
+                kept[index] = outer
+                break
+        else:
+            kept.append(dict(box))
+    return kept
+
+
 def _combine_ai_speaker_activity(analysis: Dict[str, Any], intervals: Any) -> None:
     """Fold the proactive AI speaker signal (`speaker_ai`) into `analysis`
     samples, mirroring how `_combine_voice_activity`/`_associate_speakers_with_tracks`
@@ -480,6 +527,7 @@ def composition_plan(
             ),
             reverse=True,
         )
+        boxes = _merge_nested_boxes(boxes)
         activity = float(sample.get("activeSpeakerConfidence", 0.0))
         window_unreliable = window_rates[index] < MINIMUM_DETECTION_RATE
         if sample.get("aiCrossTalk") and len(boxes) >= 2:
@@ -540,6 +588,7 @@ def composition_plan(
     )
     labeled = stabilize_layouts(labeled, minimum_seconds=0.6)
     labeled = enforce_safe_layouts(labeled)
+    labeled = settle_short_unsafe_runs(labeled, minimum_seconds=0.6)
     labeled = stabilize_active_tracks(
         labeled, focus_switch_delay_seconds=focus_switch_delay_seconds
     )
@@ -910,6 +959,34 @@ def stabilize_layouts(
             )
             for item in range(index, end):
                 values[item]["layout"] = replacement
+        index = end
+    return values
+
+
+def settle_short_unsafe_runs(
+    samples: Sequence[Mapping[str, Any]], *, minimum_seconds: float
+) -> List[Dict[str, Any]]:
+    """Turn interior `fill`/`split` runs shorter than `minimum_seconds` into `fit`.
+
+    `enforce_safe_layouts` runs after `stabilize_layouts` and can rewrite
+    single samples, which reintroduced sub-second layout flashes. `fit` is
+    always safe, so a short run is settled to it rather than to a neighbour
+    that may not be safe for these samples."""
+    values = [dict(sample) for sample in samples]
+    index = 0
+    while index < len(values):
+        end = index + 1
+        while end < len(values) and values[end]["layout"] == values[index]["layout"]:
+            end += 1
+        next_time = (
+            float(values[end]["time"]) if end < len(values) else float(values[end - 1]["time"])
+        )
+        duration = next_time - float(values[index]["time"])
+        interior = index > 0 and end < len(values)
+        if interior and values[index]["layout"] != "fit" and duration < minimum_seconds:
+            for item in range(index, end):
+                values[item]["layout"] = "fit"
+                values[item]["framingSafe"] = True
         index = end
     return values
 
